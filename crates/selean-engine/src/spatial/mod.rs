@@ -8,4 +8,4 @@
 
 mod index;
 
-pub use index::SpatialIndex;
+pub use index::{SpatialEntry, SpatialIndex};

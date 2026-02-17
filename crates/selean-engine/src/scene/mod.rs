@@ -6,6 +6,8 @@
 
 mod dirty;
 mod node;
+mod store;
 
 pub use dirty::DirtyFlags;
 pub use node::{BoundingBox, Color, SceneNode, SceneNodeKind};
+pub use store::SceneGraph;
