@@ -8,4 +8,4 @@ mod dirty;
 mod node;
 
 pub use dirty::DirtyFlags;
-pub use node::{SceneNode, SceneNodeKind};
+pub use node::{BoundingBox, Color, SceneNode, SceneNodeKind};
