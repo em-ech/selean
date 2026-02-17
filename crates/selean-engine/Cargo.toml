@@ -20,6 +20,12 @@ serde.workspace = true
 proptest.workspace = true
 tracing-subscriber.workspace = true
 pollster = "0.4"
+criterion.workspace = true
+rand.workspace = true
+
+[[bench]]
+name = "engine_benchmarks"
+harness = false
 
 [lints]
 workspace = true

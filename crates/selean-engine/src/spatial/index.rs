@@ -108,6 +108,7 @@ impl SelectionFunction<SpatialEntry> for SelectById {
 ///
 /// Supports both incremental updates (single node insert/remove/update) and
 /// bulk rebuild (for file import or large structural changes).
+#[derive(Clone)]
 pub struct SpatialIndex {
     /// The R-tree holding all spatial entries.
     tree: RTree<SpatialEntry>,

@@ -24,8 +24,10 @@ bytemuck = { version = "1", features = ["derive"] }
 # Spatial indexing
 rstar = "0.12"
 
-# Testing
+# Testing & Benchmarking
 proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

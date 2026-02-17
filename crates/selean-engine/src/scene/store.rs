@@ -21,6 +21,7 @@ use crate::spatial::SpatialIndex;
 /// index for viewport culling and hit testing. All mutations go through
 /// methods on this struct to ensure consistency between the node map,
 /// parent-child links, spatial index, and dirty flags.
+#[derive(Clone)]
 pub struct SceneGraph {
     /// All nodes indexed by their unique ID.
     nodes: HashMap<NodeId, SceneNode>,
