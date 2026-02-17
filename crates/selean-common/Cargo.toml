@@ -1,0 +1,20 @@
+[package]
+name = "selean-common"
+version = "0.1.0"
+description = "Shared types, error types, and utilities for the Selean design platform"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+uuid.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

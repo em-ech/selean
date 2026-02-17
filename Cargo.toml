@@ -1,0 +1,43 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/em-ech/selean"
+
+[workspace.dependencies]
+# Shared across crates
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Rendering
+wgpu = "24"
+bytemuck = { version = "1", features = ["derive"] }
+
+# Spatial indexing
+rstar = "0.12"
+
+# Testing
+proptest = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+# Allow common pedantic false positives
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
