@@ -9,3 +9,4 @@
 pub mod renderer;
 pub mod scene;
 pub mod spatial;
+pub mod text;

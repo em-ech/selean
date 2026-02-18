@@ -24,6 +24,11 @@ bytemuck = { version = "1", features = ["derive"] }
 # Spatial indexing
 rstar = "0.12"
 
+# Text rendering
+rustybuzz = "0.20"
+ttf-parser = "0.25"
+ab_glyph_rasterizer = "0.1"
+
 # Testing & Benchmarking
 proptest = "1"
 criterion = { version = "0.5", features = ["html_reports"] }

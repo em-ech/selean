@@ -76,6 +76,13 @@ pub enum EngineError {
         /// Name of the unsupported feature.
         feature: String,
     },
+
+    /// Failed to load or parse a font file.
+    #[error("font error: {reason}")]
+    Font {
+        /// Human-readable explanation of the font error.
+        reason: String,
+    },
 }
 
 /// A type alias for `Result` using `SeleanError`.
@@ -145,6 +152,9 @@ mod tests {
             },
             EngineError::UnsupportedFeature {
                 feature: "TEXTURE_COMPRESSION_BC".to_string(),
+            },
+            EngineError::Font {
+                reason: "invalid format".to_string(),
             },
         ];
 

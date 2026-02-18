@@ -16,6 +16,10 @@ use rand::rngs::StdRng;
 
 use selean_common::types::NodeId;
 use selean_engine::scene::{BoundingBox, Color, SceneNode, SceneNodeKind};
+use selean_engine::text::{
+    FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, generate_glyph_sdf, layout_text,
+    shape_text,
+};
 
 use bench_utils::{SceneConfig, generate_scene};
 
@@ -357,11 +361,263 @@ fn bench_full_frame(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Group 5: Text shaping
+// ---------------------------------------------------------------------------
+
+fn bench_text_shaping(c: &mut Criterion) {
+    let mut group = c.benchmark_group("text_shaping");
+    let font = FontData::default_font().expect("default font");
+
+    let inputs: &[(&str, &str)] = &[
+        ("short_5", "Hello"),
+        (
+            "medium_50",
+            "The quick brown fox jumps over the lazy dog nearby",
+        ),
+        (
+            "long_200",
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut.",
+        ),
+    ];
+
+    for &(label, text) in inputs {
+        group.bench_with_input(BenchmarkId::new("shape", label), &text, |b, &text| {
+            b.iter(|| {
+                black_box(shape_text(&font, text));
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Group 6: SDF generation
+// ---------------------------------------------------------------------------
+
+fn bench_sdf_generation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sdf_generation");
+    let font = FontData::default_font().expect("default font");
+    let face = font.face().expect("font face");
+
+    let glyphs: &[(&str, char)] = &[
+        ("letter_A", 'A'),
+        ("letter_g", 'g'),
+        ("letter_W", 'W'),
+        ("digit_0", '0'),
+        ("ampersand", '&'),
+    ];
+
+    let params = SdfParams::default();
+
+    for &(label, ch) in glyphs {
+        let glyph_id = face.glyph_index(ch).expect("glyph index");
+        group.bench_with_input(BenchmarkId::new("generate", label), &glyph_id, |b, &gid| {
+            b.iter(|| {
+                black_box(generate_glyph_sdf(&face, gid, &params));
+            });
+        });
+    }
+
+    // Bench different SDF sizes.
+    let glyph_a = face.glyph_index('A').expect("glyph index");
+    for &size in &[32u32, 48, 64, 96] {
+        let p = SdfParams {
+            render_size: size,
+            spread: 6,
+        };
+        group.bench_with_input(BenchmarkId::new("size", size), &size, |b, _| {
+            b.iter(|| {
+                black_box(generate_glyph_sdf(&face, glyph_a, &p));
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Group 7: Text layout
+// ---------------------------------------------------------------------------
+
+fn bench_text_layout(c: &mut Criterion) {
+    let mut group = c.benchmark_group("text_layout");
+    let font = FontData::default_font().expect("default font");
+
+    // Pre-shape some text and populate a cache.
+    let short = "Hello";
+    let medium = "The quick brown fox jumps over the lazy dog nearby";
+    let long: String = "Pack my box with five dozen liquor jugs. ".repeat(5);
+
+    let shaped_short = shape_text(&font, short).expect("shape short");
+    let shaped_medium = shape_text(&font, medium).expect("shape medium");
+    let shaped_long = shape_text(&font, &long).expect("shape long");
+
+    // Build a cache containing all glyphs we'll need.
+    let cache = build_bench_cache(&font, &[&shaped_short, &shaped_medium, &shaped_long]);
+
+    let ascender = font.ascender();
+
+    let cases: &[(&str, &ShapedRun)] = &[
+        ("short_5", &shaped_short),
+        ("medium_50", &shaped_medium),
+        ("long_200", &shaped_long),
+    ];
+
+    for &(label, run) in cases {
+        group.bench_with_input(BenchmarkId::new("layout", label), &label, |b, _| {
+            b.iter(|| {
+                black_box(layout_text(run, &cache, ascender, 100.0, 200.0, 16.0, 48));
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Group 8: Combined text processing (shape + SDF + layout)
+// ---------------------------------------------------------------------------
+
+fn bench_text_full_pipeline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("text_full_pipeline");
+    group.sample_size(50);
+
+    let font = FontData::default_font().expect("default font");
+    let params = SdfParams::default();
+
+    let texts: &[(&str, &str)] = &[
+        ("short", "Hello"),
+        ("sentence", "The quick brown fox jumps over the lazy dog"),
+    ];
+
+    for &(label, text) in texts {
+        group.bench_with_input(
+            BenchmarkId::new("shape_sdf_layout", label),
+            &text,
+            |b, &text| {
+                b.iter(|| {
+                    // Shape.
+                    let shaped = shape_text(&font, text).expect("shape");
+
+                    // Generate SDFs (cold cache — worst case).
+                    let face = font.face().expect("face");
+                    let mut cache = GlyphCache::new();
+                    for sg in &shaped.glyphs {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let key = GlyphCacheKey {
+                            glyph_id: sg.glyph_id,
+                            sdf_size: params.render_size as u16,
+                        };
+                        if !cache.contains(&key) {
+                            let glyph_id = ttf_parser::GlyphId(sg.glyph_id);
+                            if let Some(sdf) = generate_glyph_sdf(&face, glyph_id, &params) {
+                                cache.insert(
+                                    key,
+                                    selean_engine::text::CachedGlyph {
+                                        atlas_region: selean_engine::text::AtlasRegion {
+                                            x: 0,
+                                            y: 0,
+                                            width: sdf.width,
+                                            height: sdf.height,
+                                        },
+                                        bearing_x: sdf.bearing_x,
+                                        bearing_y: sdf.bearing_y,
+                                        glyph_width_funits: sdf.glyph_width_funits,
+                                        glyph_height_funits: sdf.glyph_height_funits,
+                                    },
+                                );
+                            }
+                        }
+                    }
+
+                    // Layout.
+                    let layout =
+                        layout_text(&shaped, &cache, font.ascender(), 100.0, 200.0, 16.0, 48);
+
+                    black_box(layout);
+                });
+            },
+        );
+    }
+
+    // Warm-cache benchmark: SDF generation only happens once, layout is repeated.
+    group.bench_function("layout_warm_cache_sentence", |b| {
+        let text = "The quick brown fox jumps over the lazy dog";
+        let shaped = shape_text(&font, text).expect("shape");
+        let cache = build_bench_cache(&font, &[&shaped]);
+
+        b.iter(|| {
+            black_box(layout_text(
+                &shaped,
+                &cache,
+                font.ascender(),
+                100.0,
+                200.0,
+                16.0,
+                48,
+            ));
+        });
+    });
+
+    group.finish();
+}
+
+/// Helper: builds a `GlyphCache` with SDF metadata for all unique glyphs in the given runs.
+///
+/// Uses fake atlas regions (all at origin) — sufficient for layout benchmarking.
+fn build_bench_cache(font: &FontData, runs: &[&ShapedRun]) -> GlyphCache {
+    let face = font.face().expect("font face");
+    let params = SdfParams::default();
+    let mut cache = GlyphCache::new();
+
+    #[allow(clippy::cast_possible_truncation)]
+    let sdf_size = params.render_size as u16;
+
+    for run in runs {
+        for sg in &run.glyphs {
+            let key = GlyphCacheKey {
+                glyph_id: sg.glyph_id,
+                sdf_size,
+            };
+            if cache.contains(&key) {
+                continue;
+            }
+
+            let glyph_id = ttf_parser::GlyphId(sg.glyph_id);
+            if let Some(sdf) = generate_glyph_sdf(&face, glyph_id, &params) {
+                cache.insert(
+                    key,
+                    selean_engine::text::CachedGlyph {
+                        atlas_region: selean_engine::text::AtlasRegion {
+                            x: 0,
+                            y: 0,
+                            width: sdf.width,
+                            height: sdf.height,
+                        },
+                        bearing_x: sdf.bearing_x,
+                        bearing_y: sdf.bearing_y,
+                        glyph_width_funits: sdf.glyph_width_funits,
+                        glyph_height_funits: sdf.glyph_height_funits,
+                    },
+                );
+            }
+        }
+    }
+
+    cache
+}
+
 criterion_group!(
     benches,
     bench_scene_mutation,
     bench_spatial_queries,
     bench_render_prep,
     bench_full_frame,
+    bench_text_shaping,
+    bench_sdf_generation,
+    bench_text_layout,
+    bench_text_full_pipeline,
 );
 criterion_main!(benches);

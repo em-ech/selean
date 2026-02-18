@@ -8,6 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::camera::CameraUniform;
+use super::quad::{QUAD_INDICES, QUAD_VERTICES, QuadVertex};
 use crate::scene::{Color, SceneNode, SceneNodeKind};
 
 /// Maximum number of rectangle instances per draw call.
@@ -15,71 +16,6 @@ use crate::scene::{Color, SceneNode, SceneNodeKind};
 /// 16,384 instances * 80 bytes = ~1.3 MB, well within GPU buffer limits.
 /// If more instances are needed, they're split into multiple draw calls.
 const MAX_INSTANCES_PER_BATCH: usize = 16_384;
-
-// --- Vertex data for the unit quad ---
-
-/// A vertex of the unit quad (position + UV).
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub struct QuadVertex {
-    /// Position on the unit quad: (0,0), (1,0), (0,1), or (1,1).
-    pub position: [f32; 2],
-    /// UV coordinates (same as position for rectangles).
-    pub uv: [f32; 2],
-}
-
-impl QuadVertex {
-    /// Returns the vertex buffer layout descriptor for `QuadVertex`.
-    #[must_use]
-    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRS: &[wgpu::VertexAttribute] = &[
-            // location(0): quad_pos
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 0,
-                shader_location: 0,
-            },
-            // location(1): quad_uv
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 8,
-                shader_location: 1,
-            },
-        ];
-
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: ATTRS,
-        }
-    }
-}
-
-/// The four vertices of the unit quad.
-pub const QUAD_VERTICES: &[QuadVertex] = &[
-    QuadVertex {
-        position: [0.0, 0.0],
-        uv: [0.0, 0.0],
-    }, // top-left
-    QuadVertex {
-        position: [1.0, 0.0],
-        uv: [1.0, 0.0],
-    }, // top-right
-    QuadVertex {
-        position: [0.0, 1.0],
-        uv: [0.0, 1.0],
-    }, // bottom-left
-    QuadVertex {
-        position: [1.0, 1.0],
-        uv: [1.0, 1.0],
-    }, // bottom-right
-];
-
-/// The six indices forming two triangles for the unit quad.
-pub const QUAD_INDICES: &[u16] = &[
-    0, 1, 2, // top-left triangle
-    1, 3, 2, // bottom-right triangle
-];
 
 // --- Per-instance data ---
 

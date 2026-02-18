@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use selean_common::types::NodeId;
 
 use super::dirty::DirtyFlags;
-use super::node::{BoundingBox, Color, SceneNode};
+use super::node::{BoundingBox, Color, SceneNode, SceneNodeKind};
 use crate::spatial::SpatialIndex;
 
 /// The central scene graph store.
@@ -396,6 +396,45 @@ impl SceneGraph {
         } else {
             false
         }
+    }
+
+    /// Updates the text content of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_text_content(&mut self, id: NodeId, content: String) -> bool {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            if let SceneNodeKind::Text {
+                content: ref mut c, ..
+            } = node.kind
+            {
+                *c = content;
+                node.dirty |= DirtyFlags::TEXT;
+                self.propagate_dirty_up_from_child(id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Updates the font size of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_font_size(&mut self, id: NodeId, font_size: f32) -> bool {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            if let SceneNodeKind::Text {
+                font_size: ref mut fs,
+                ..
+            } = node.kind
+            {
+                *fs = font_size;
+                node.dirty |= DirtyFlags::TEXT;
+                self.propagate_dirty_up_from_child(id);
+                return true;
+            }
+        }
+        false
     }
 
     // --- Render order ---

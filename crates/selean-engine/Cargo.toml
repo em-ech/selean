@@ -15,6 +15,9 @@ rstar.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 serde.workspace = true
+rustybuzz.workspace = true
+ttf-parser.workspace = true
+ab_glyph_rasterizer.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
@@ -22,6 +25,7 @@ tracing-subscriber.workspace = true
 pollster = "0.4"
 criterion.workspace = true
 rand.workspace = true
+ttf-parser.workspace = true
 
 [[bench]]
 name = "engine_benchmarks"

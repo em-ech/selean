@@ -5,12 +5,13 @@
 //! and executing render passes.
 
 use selean_common::error::EngineError;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::camera::Camera;
 use super::gpu::{GpuContext, GpuContextDescriptor};
 use super::rect_pipeline::{RectBatch, RectPipeline};
-use crate::scene::SceneNode;
+use crate::scene::{SceneNode, SceneNodeKind};
+use crate::text::{TextBatch, TextPipeline, TextSystem};
 
 /// Configuration for renderer initialization.
 #[derive(Debug, Clone)]
@@ -54,6 +55,12 @@ pub struct Renderer {
     rect_pipeline: RectPipeline,
     /// Per-frame rectangle batch (reused across frames to avoid allocation).
     rect_batch: RectBatch,
+    /// Text rendering pipeline.
+    text_pipeline: TextPipeline,
+    /// Per-frame text glyph batch (reused across frames).
+    text_batch: TextBatch,
+    /// Text subsystem (font, cache, atlas).
+    text_system: TextSystem,
     /// Background clear color.
     clear_color: wgpu::Color,
     /// The texture format used for the render target.
@@ -73,8 +80,8 @@ impl Renderer {
     ///
     /// # Errors
     ///
-    /// Returns `EngineError::NoAdapter` or `EngineError::DeviceCreation` if
-    /// GPU initialization fails.
+    /// Returns `EngineError::NoAdapter`, `EngineError::DeviceCreation`, or
+    /// `EngineError::Font` if initialization fails.
     pub async fn new(
         descriptor: &RendererDescriptor,
         target_format: wgpu::TextureFormat,
@@ -83,11 +90,19 @@ impl Renderer {
         let camera = Camera::new(descriptor.viewport_width, descriptor.viewport_height);
         let rect_pipeline = RectPipeline::new(&gpu.device, target_format);
 
+        // Initialize text subsystem.
+        let text_system = TextSystem::new(&gpu.device)?;
+        let text_pipeline = TextPipeline::new(
+            &gpu.device,
+            target_format,
+            text_system.atlas().bind_group_layout(),
+        );
+
         info!(
             viewport_w = descriptor.viewport_width,
             viewport_h = descriptor.viewport_height,
             format = ?target_format,
-            "Renderer initialized"
+            "Renderer initialized (with text support)"
         );
 
         Ok(Self {
@@ -95,6 +110,9 @@ impl Renderer {
             camera,
             rect_pipeline,
             rect_batch: RectBatch::new(),
+            text_pipeline,
+            text_batch: TextBatch::new(),
+            text_system,
             clear_color: descriptor.clear_color,
             target_format,
         })
@@ -137,31 +155,58 @@ impl Renderer {
 
     /// Prepares a frame for rendering by collecting visible scene nodes.
     ///
-    /// Clears the previous frame's batch and repopulates it from the given
-    /// node iterator. In a full implementation, this would use the R-tree
-    /// spatial index to cull nodes outside the viewport.
+    /// Processes each node into the appropriate batch: rectangles go to
+    /// `RectBatch`, text nodes are shaped, SDF-cached, and laid out into
+    /// `TextBatch`.
     ///
     /// # Arguments
     /// * `visible_nodes` — Iterator of scene nodes within the viewport.
     ///   Nodes should be in back-to-front render order.
     pub fn prepare<'a>(&mut self, visible_nodes: impl Iterator<Item = &'a SceneNode>) {
         self.rect_batch.clear();
+        self.text_batch.clear();
 
         let mut node_count = 0u32;
         for node in visible_nodes {
-            self.rect_batch.push_node(node);
-            node_count += 1;
+            // Try rect pipeline first.
+            if self.rect_batch.push_node(node) {
+                node_count += 1;
+                continue;
+            }
+
+            // Try text pipeline.
+            if let SceneNodeKind::Text {
+                ref content,
+                font_size,
+            } = node.kind
+            {
+                if let Err(e) = self.text_system.prepare_text_node(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    node,
+                    content,
+                    font_size,
+                    &mut self.text_batch,
+                ) {
+                    warn!(?e, node_id = %node.id, "Failed to prepare text node");
+                }
+                node_count += 1;
+            }
         }
 
-        // Upload the camera uniform.
+        // Upload the camera uniform to both pipelines.
         let camera_uniform = self.camera.build_uniform();
         self.rect_pipeline
+            .update_camera(&self.gpu.queue, &camera_uniform);
+        self.text_pipeline
             .update_camera(&self.gpu.queue, &camera_uniform);
 
         debug!(
             rects = self.rect_batch.len(),
+            glyphs = self.text_batch.len(),
             total_nodes = node_count,
-            draw_calls = self.rect_batch.draw_call_count(),
+            rect_draws = self.rect_batch.draw_call_count(),
+            text_draws = self.text_batch.draw_call_count(),
             "Frame prepared"
         );
     }
@@ -197,8 +242,17 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
+            // Draw rectangles first (typically behind text).
             self.rect_pipeline
                 .draw(&self.gpu.device, &mut pass, &self.rect_batch);
+
+            // Draw text on top.
+            self.text_pipeline.draw(
+                &self.gpu.device,
+                &mut pass,
+                &self.text_batch,
+                self.text_system.atlas(),
+            );
         }
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -224,9 +278,11 @@ impl Renderer {
 pub struct FrameStats {
     /// Number of rectangle instances submitted to the GPU.
     pub rect_count: usize,
+    /// Number of glyph instances submitted to the GPU.
+    pub glyph_count: usize,
     /// Number of draw calls issued.
     pub draw_calls: usize,
-    /// Total nodes processed (including non-rect types that were skipped).
+    /// Total nodes processed (including non-renderable types).
     pub total_nodes_processed: usize,
 }
 
@@ -236,8 +292,9 @@ impl Renderer {
     pub fn frame_stats(&self) -> FrameStats {
         FrameStats {
             rect_count: self.rect_batch.len(),
-            draw_calls: self.rect_batch.draw_call_count(),
-            total_nodes_processed: 0, // Will be tracked when we add the spatial index.
+            glyph_count: self.text_batch.len(),
+            draw_calls: self.rect_batch.draw_call_count() + self.text_batch.draw_call_count(),
+            total_nodes_processed: 0,
         }
     }
 }
@@ -257,6 +314,7 @@ mod tests {
     fn frame_stats_default() {
         let stats = FrameStats::default();
         assert_eq!(stats.rect_count, 0);
+        assert_eq!(stats.glyph_count, 0);
         assert_eq!(stats.draw_calls, 0);
         assert_eq!(stats.total_nodes_processed, 0);
     }
