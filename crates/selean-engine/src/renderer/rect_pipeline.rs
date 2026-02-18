@@ -5,10 +5,9 @@
 //! instances ready for drawing).
 
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 
-use super::camera::CameraUniform;
-use super::quad::{QUAD_INDICES, QUAD_VERTICES, QuadVertex};
+use super::quad::{QUAD_INDICES, QuadVertex};
+use super::shared::{PersistentInstanceBuffer, SharedPipelineResources};
 use crate::scene::{Color, SceneNode, SceneNodeKind};
 
 /// Maximum number of rectangle instances per draw call.
@@ -207,19 +206,12 @@ impl Default for RectBatch {
 
 /// The compiled rectangle rendering pipeline.
 ///
-/// Owns the GPU resources needed to render rectangles: shader module,
-/// render pipeline, shared vertex/index buffers, and camera uniform buffer.
+/// Owns only the pipeline-specific GPU render pipeline. Shared resources
+/// (vertex/index buffers, camera uniform) are provided by
+/// [`SharedPipelineResources`] during creation and draw calls.
 pub struct RectPipeline {
     /// The compiled render pipeline.
     pipeline: wgpu::RenderPipeline,
-    /// Vertex buffer for the unit quad (shared by all instances).
-    vertex_buffer: wgpu::Buffer,
-    /// Index buffer for the unit quad.
-    index_buffer: wgpu::Buffer,
-    /// Camera uniform buffer.
-    camera_buffer: wgpu::Buffer,
-    /// Bind group containing the camera uniform.
-    camera_bind_group: wgpu::BindGroup,
 }
 
 impl RectPipeline {
@@ -228,53 +220,25 @@ impl RectPipeline {
     /// # Arguments
     /// * `device` — The GPU device.
     /// * `target_format` — The texture format of the render target (surface).
+    /// * `shared` — Shared resources providing the camera bind group layout.
     #[must_use]
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        // Load and compile the rectangle shader.
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        shared: &SharedPipelineResources,
+    ) -> Self {
         let shader_source = include_str!("shaders/rect.wgsl");
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rect_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        // Camera uniform buffer and bind group layout.
-        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("camera_uniform_buffer"),
-            size: CameraUniform::size(),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera_bind_group_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("camera_bind_group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
-
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("rect_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[shared.camera_bind_group_layout()],
             push_constant_ranges: &[],
         });
 
-        // Create the render pipeline.
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("rect_pipeline"),
             layout: Some(&pipeline_layout),
@@ -288,7 +252,7 @@ impl RectPipeline {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, // 2D — no backface culling.
+                cull_mode: None,
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -309,67 +273,32 @@ impl RectPipeline {
             cache: None,
         });
 
-        // Create shared vertex and index buffers for the unit quad.
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad_vertex_buffer"),
-            contents: bytemuck::cast_slice(QUAD_VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad_index_buffer"),
-            contents: bytemuck::cast_slice(QUAD_INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        Self {
-            pipeline,
-            vertex_buffer,
-            index_buffer,
-            camera_buffer,
-            camera_bind_group,
-        }
-    }
-
-    /// Updates the camera uniform buffer with new data.
-    pub fn update_camera(&self, queue: &wgpu::Queue, uniform: &CameraUniform) {
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(uniform));
+        Self { pipeline }
     }
 
     /// Records draw commands for a batch of rectangle instances.
     ///
-    /// Creates a temporary instance buffer from the batch data and records
-    /// instanced draw calls into the given render pass.
+    /// Instance data must already be uploaded to `instance_buf` via
+    /// [`PersistentInstanceBuffer::upload`] before calling this method.
     ///
     /// Does nothing if the batch is empty.
     pub fn draw<'a>(
         &'a self,
-        device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'a>,
         batch: &RectBatch,
+        instance_buf: &'a PersistentInstanceBuffer,
+        shared: &'a SharedPipelineResources,
     ) {
         if batch.is_empty() {
             return;
         }
 
-        // Create instance buffer from batch data.
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("rect_instance_buffer"),
-            contents: batch.as_bytes(),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.set_bind_group(0, shared.camera_bind_group(), &[]);
+        pass.set_vertex_buffer(0, shared.vertex_buffer().slice(..));
+        pass.set_vertex_buffer(1, instance_buf.buffer().slice(..));
+        pass.set_index_buffer(shared.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
 
-        // Draw all instances. If over the batch limit, this still works because
-        // the GPU handles the full instance count; MAX_INSTANCES_PER_BATCH is
-        // an advisory limit for buffer sizing, not a hard GPU limit.
-        // QUAD_INDICES.len() is always 6, and batch.len() is bounded by
-        // MAX_INSTANCES_PER_BATCH (16384) — both fit in u32.
         #[allow(clippy::cast_possible_truncation)]
         let instance_count = batch.len() as u32;
         #[allow(clippy::cast_possible_truncation)]
@@ -383,6 +312,7 @@ mod tests {
     #![allow(clippy::float_cmp)]
 
     use super::*;
+    use crate::renderer::QUAD_VERTICES;
     use crate::scene::{BoundingBox, SceneNodeKind};
     use selean_common::types::NodeId;
 
@@ -621,6 +551,65 @@ mod tests {
         // One more pushes it to 2 draw calls.
         batch.push(bytemuck::Zeroable::zeroed());
         assert_eq!(batch.draw_call_count(), 2);
+    }
+
+    #[test]
+    fn batch_push_node_skips_text() {
+        let mut batch = RectBatch::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Hello".to_string(),
+                font_size: 16.0,
+            },
+            BoundingBox::new(0.0, 0.0, 200.0, 30.0),
+        );
+        assert!(!batch.push_node(&node));
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn batch_push_node_skips_image() {
+        let mut batch = RectBatch::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Photo".to_string(),
+            SceneNodeKind::Image {
+                asset_ref: "img.png".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        assert!(!batch.push_node(&node));
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn batch_push_node_skips_vector() {
+        let mut batch = RectBatch::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Icon".to_string(),
+            SceneNodeKind::Vector {
+                path_data: "M0 0 L10 10".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 24.0, 24.0),
+        );
+        assert!(!batch.push_node(&node));
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn batch_push_node_accepts_group() {
+        let mut batch = RectBatch::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Group".to_string(),
+            SceneNodeKind::Group,
+            BoundingBox::new(0.0, 0.0, 200.0, 200.0),
+        );
+        assert!(batch.push_node(&node));
+        assert_eq!(batch.len(), 1);
     }
 
     #[test]

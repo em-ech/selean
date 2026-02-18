@@ -34,6 +34,8 @@ pub struct SceneGraph {
     z_indices: HashMap<NodeId, u32>,
     /// Whether the z-index map needs recomputation.
     z_dirty: bool,
+    /// Reusable buffer for viewport query results, avoiding per-frame allocation.
+    visible_ids_buf: Vec<NodeId>,
 }
 
 impl SceneGraph {
@@ -46,6 +48,7 @@ impl SceneGraph {
             roots: Vec::new(),
             z_indices: HashMap::new(),
             z_dirty: false,
+            visible_ids_buf: Vec::new(),
         }
     }
 
@@ -299,15 +302,14 @@ impl SceneGraph {
     /// Syncs the spatial index and marks the node with `DIRTY_GEOMETRY`.
     /// Returns `false` if the node doesn't exist.
     pub fn set_bounds(&mut self, id: NodeId, bounds: BoundingBox) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        let found = self.mutate_node(id, DirtyFlags::GEOMETRY, |node| {
             node.bounds = bounds;
-            node.dirty |= DirtyFlags::GEOMETRY;
-            self.spatial.update_node(id, &bounds);
-            self.propagate_dirty_up_from_child(id);
             true
-        } else {
-            false
+        });
+        if found {
+            self.spatial.update_node(id, &bounds);
         }
+        found
     }
 
     /// Updates a node's fill color.
@@ -315,14 +317,10 @@ impl SceneGraph {
     /// Marks the node with `DIRTY_STYLE`.
     /// Returns `false` if the node doesn't exist.
     pub fn set_fill(&mut self, id: NodeId, fill: Option<Color>) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
             node.fill = fill;
-            node.dirty |= DirtyFlags::STYLE;
-            self.propagate_dirty_up_from_child(id);
             true
-        } else {
-            false
-        }
+        })
     }
 
     /// Updates a node's stroke color.
@@ -330,14 +328,10 @@ impl SceneGraph {
     /// Marks the node with `DIRTY_STYLE`.
     /// Returns `false` if the node doesn't exist.
     pub fn set_stroke(&mut self, id: NodeId, stroke: Option<Color>) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
             node.stroke = stroke;
-            node.dirty |= DirtyFlags::STYLE;
-            self.propagate_dirty_up_from_child(id);
             true
-        } else {
-            false
-        }
+        })
     }
 
     /// Updates a node's stroke width.
@@ -345,14 +339,10 @@ impl SceneGraph {
     /// Marks the node with `DIRTY_STYLE`.
     /// Returns `false` if the node doesn't exist.
     pub fn set_stroke_width(&mut self, id: NodeId, width: f32) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
             node.stroke_width = width;
-            node.dirty |= DirtyFlags::STYLE;
-            self.propagate_dirty_up_from_child(id);
             true
-        } else {
-            false
-        }
+        })
     }
 
     /// Updates a node's opacity.
@@ -360,14 +350,10 @@ impl SceneGraph {
     /// Marks the node with `DIRTY_STYLE`.
     /// Returns `false` if the node doesn't exist.
     pub fn set_opacity(&mut self, id: NodeId, opacity: f32) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
             node.opacity = opacity.clamp(0.0, 1.0);
-            node.dirty |= DirtyFlags::STYLE;
-            self.propagate_dirty_up_from_child(id);
             true
-        } else {
-            false
-        }
+        })
     }
 
     /// Updates a node's visibility.
@@ -375,14 +361,10 @@ impl SceneGraph {
     /// Marks the node with `DIRTY_STYLE`.
     /// Returns `false` if the node doesn't exist.
     pub fn set_visible(&mut self, id: NodeId, visible: bool) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
             node.visible = visible;
-            node.dirty |= DirtyFlags::STYLE;
-            self.propagate_dirty_up_from_child(id);
             true
-        } else {
-            false
-        }
+        })
     }
 
     /// Updates a node's name.
@@ -403,18 +385,17 @@ impl SceneGraph {
     /// Marks the node with `DIRTY_TEXT`.
     /// Returns `false` if the node doesn't exist or is not a Text node.
     pub fn set_text_content(&mut self, id: NodeId, content: String) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
             if let SceneNodeKind::Text {
                 content: ref mut c, ..
             } = node.kind
             {
                 *c = content;
-                node.dirty |= DirtyFlags::TEXT;
-                self.propagate_dirty_up_from_child(id);
-                return true;
+                true
+            } else {
+                false
             }
-        }
-        false
+        })
     }
 
     /// Updates the font size of a Text node.
@@ -422,19 +403,18 @@ impl SceneGraph {
     /// Marks the node with `DIRTY_TEXT`.
     /// Returns `false` if the node doesn't exist or is not a Text node.
     pub fn set_font_size(&mut self, id: NodeId, font_size: f32) -> bool {
-        if let Some(node) = self.nodes.get_mut(&id) {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
             if let SceneNodeKind::Text {
                 font_size: ref mut fs,
                 ..
             } = node.kind
             {
                 *fs = font_size;
-                node.dirty |= DirtyFlags::TEXT;
-                self.propagate_dirty_up_from_child(id);
-                return true;
+                true
+            } else {
+                false
             }
-        }
-        false
+        })
     }
 
     // --- Render order ---
@@ -458,16 +438,19 @@ impl SceneGraph {
             self.recompute_z_indices();
         }
 
-        let mut visible_ids = self.spatial.query_viewport(left, top, right, bottom);
+        // Reuse the internal buffer to avoid allocating a new Vec<NodeId> each frame.
+        self.spatial
+            .query_viewport_into(left, top, right, bottom, &mut self.visible_ids_buf);
 
         // Sort by z-index (lower = further back = rendered first).
-        visible_ids.sort_by_key(|id| self.z_indices.get(id).copied().unwrap_or(u32::MAX));
+        self.visible_ids_buf
+            .sort_by_key(|id| self.z_indices.get(id).copied().unwrap_or(u32::MAX));
 
         // Filter to only visible nodes and collect references.
-        visible_ids
-            .into_iter()
+        self.visible_ids_buf
+            .iter()
             .filter_map(|id| {
-                let node = self.nodes.get(&id)?;
+                let node = self.nodes.get(id)?;
                 if node.visible { Some(node) } else { None }
             })
             .collect()
@@ -563,6 +546,37 @@ impl SceneGraph {
     }
 
     // --- Internal helpers ---
+
+    /// Mutates a node's property via the closure, sets dirty flags, and propagates
+    /// `DIRTY_CHILDREN` up to ancestors.
+    ///
+    /// The closure receives the node and returns `true` if the mutation was applied
+    /// (e.g., returns `false` if a text-specific setter is called on a non-text node).
+    /// Dirty flags and propagation only happen when the closure returns `true`.
+    ///
+    /// Returns `true` if the node was found and the closure returned `true`.
+    fn mutate_node(
+        &mut self,
+        id: NodeId,
+        flags: DirtyFlags,
+        f: impl FnOnce(&mut SceneNode) -> bool,
+    ) -> bool {
+        let mutated = if let Some(node) = self.nodes.get_mut(&id) {
+            if f(node) {
+                node.dirty |= flags;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if mutated {
+            self.propagate_dirty_up_from_child(id);
+        }
+        mutated
+    }
 
     /// Propagates `DIRTY_CHILDREN` from a node up to its ancestors.
     fn propagate_dirty_up(&mut self, start_id: NodeId, flags: DirtyFlags) {
@@ -1009,6 +1023,152 @@ mod tests {
         assert!(!graph.set_opacity(fake, 1.0));
         assert!(!graph.set_visible(fake, true));
         assert!(!graph.set_name(fake, "x".to_string()));
+        assert!(!graph.set_text_content(fake, "hello".to_string()));
+        assert!(!graph.set_font_size(fake, 16.0));
+    }
+
+    // --- Text node mutations ---
+
+    #[test]
+    fn set_text_content_updates_text_node() {
+        let mut graph = SceneGraph::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Hello".to_string(),
+                font_size: 16.0,
+            },
+            BoundingBox::new(0.0, 0.0, 200.0, 30.0),
+        );
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_text_content(id, "World".to_string()));
+
+        let node = graph.get(id).expect("node should exist");
+        if let SceneNodeKind::Text { content, .. } = &node.kind {
+            assert_eq!(content, "World");
+        } else {
+            panic!("expected Text node");
+        }
+        assert!(node.dirty.contains(DirtyFlags::TEXT));
+    }
+
+    #[test]
+    fn set_text_content_on_frame_returns_false() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Rect", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(!graph.set_text_content(id, "nope".to_string()));
+        assert!(
+            graph.get(id).expect("exists").dirty.is_clean(),
+            "non-text node should not be dirtied"
+        );
+    }
+
+    #[test]
+    fn set_text_content_propagates_dirty() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 400.0, 400.0);
+        let parent_id = graph.add_root(parent);
+
+        let text_node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Old".to_string(),
+                font_size: 14.0,
+            },
+            BoundingBox::new(10.0, 10.0, 100.0, 20.0),
+        );
+        let text_id = text_node.id;
+        graph.add_child(parent_id, text_node);
+        graph.clear_all_dirty();
+
+        graph.set_text_content(text_id, "New".to_string());
+
+        assert!(
+            graph
+                .get(parent_id)
+                .expect("parent")
+                .dirty
+                .contains(DirtyFlags::CHILDREN),
+            "parent should have CHILDREN dirty after child text mutation"
+        );
+    }
+
+    #[test]
+    fn set_font_size_updates_text_node() {
+        let mut graph = SceneGraph::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Hello".to_string(),
+                font_size: 16.0,
+            },
+            BoundingBox::new(0.0, 0.0, 200.0, 30.0),
+        );
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_font_size(id, 24.0));
+
+        let node = graph.get(id).expect("node should exist");
+        if let SceneNodeKind::Text { font_size, .. } = &node.kind {
+            assert!((*font_size - 24.0).abs() < f32::EPSILON);
+        } else {
+            panic!("expected Text node");
+        }
+        assert!(node.dirty.contains(DirtyFlags::TEXT));
+    }
+
+    #[test]
+    fn set_font_size_on_frame_returns_false() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Rect", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(!graph.set_font_size(id, 24.0));
+        assert!(
+            graph.get(id).expect("exists").dirty.is_clean(),
+            "non-text node should not be dirtied"
+        );
+    }
+
+    #[test]
+    fn set_font_size_propagates_dirty() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 400.0, 400.0);
+        let parent_id = graph.add_root(parent);
+
+        let text_node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Hello".to_string(),
+                font_size: 14.0,
+            },
+            BoundingBox::new(10.0, 10.0, 100.0, 20.0),
+        );
+        let text_id = text_node.id;
+        graph.add_child(parent_id, text_node);
+        graph.clear_all_dirty();
+
+        graph.set_font_size(text_id, 32.0);
+
+        assert!(
+            graph
+                .get(parent_id)
+                .expect("parent")
+                .dirty
+                .contains(DirtyFlags::CHILDREN),
+            "parent should have CHILDREN dirty after child font_size mutation"
+        );
     }
 
     // --- Dirty propagation ---
@@ -1334,6 +1494,88 @@ mod tests {
         let debug = format!("{graph:?}");
         assert!(debug.contains("SceneGraph"));
         assert!(debug.contains("nodes"));
+    }
+
+    // --- Proptest: SceneGraph + SpatialIndex consistency ---
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_bounds() -> impl Strategy<Value = BoundingBox> {
+            (0.0_f32..1000.0, 0.0_f32..1000.0, 1.0_f32..200.0, 1.0_f32..200.0)
+                .prop_map(|(x, y, w, h)| BoundingBox::new(x, y, w, h))
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(50))]
+
+            #[test]
+            fn spatial_index_matches_node_count(count in 1_usize..200) {
+                let mut graph = SceneGraph::new();
+                for i in 0..count {
+                    #[allow(clippy::cast_precision_loss)]
+                    let x = (i as f32) * 10.0;
+                    let node = frame_node(&format!("N{i}"), x, 0.0, 8.0, 8.0);
+                    graph.add_root(node);
+                }
+                prop_assert_eq!(graph.spatial().len(), count);
+            }
+
+            #[test]
+            fn node_always_findable_at_its_own_center(bounds in arb_bounds()) {
+                let mut graph = SceneGraph::new();
+                let node = SceneNode::new(
+                    NodeId::new(),
+                    "N".to_string(),
+                    SceneNodeKind::Frame { corner_radius: [0.0; 4] },
+                    bounds,
+                );
+                let id = graph.add_root(node);
+
+                let cx = bounds.x + bounds.width / 2.0;
+                let cy = bounds.y + bounds.height / 2.0;
+                let hits = graph.spatial().query_point(cx, cy);
+                prop_assert!(hits.contains(&id), "node not found at its own center");
+            }
+
+            #[test]
+            fn set_bounds_keeps_spatial_index_consistent(
+                initial in arb_bounds(),
+                updated in arb_bounds(),
+            ) {
+                let mut graph = SceneGraph::new();
+                let node = SceneNode::new(
+                    NodeId::new(),
+                    "N".to_string(),
+                    SceneNodeKind::Frame { corner_radius: [0.0; 4] },
+                    initial,
+                );
+                let id = graph.add_root(node);
+
+                graph.set_bounds(id, updated);
+
+                let cx = updated.x + updated.width / 2.0;
+                let cy = updated.y + updated.height / 2.0;
+                let hits = graph.spatial().query_point(cx, cy);
+                prop_assert!(hits.contains(&id), "node not found after set_bounds");
+            }
+
+            #[test]
+            fn remove_removes_from_spatial_index(bounds in arb_bounds()) {
+                let mut graph = SceneGraph::new();
+                let node = SceneNode::new(
+                    NodeId::new(),
+                    "N".to_string(),
+                    SceneNodeKind::Frame { corner_radius: [0.0; 4] },
+                    bounds,
+                );
+                let id = graph.add_root(node);
+                graph.remove(id);
+
+                prop_assert_eq!(graph.spatial().len(), 0);
+            }
+        }
     }
 
     // --- Edge case: duplicate add_root replaces ---

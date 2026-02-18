@@ -96,7 +96,6 @@ pub fn layout_text(
 }
 
 /// Positions a single glyph quad in world space using cached metrics.
-#[allow(clippy::similar_names)]
 fn position_glyph(
     shaped: &super::shaper::ShapedGlyph,
     cached: &CachedGlyph,
@@ -104,26 +103,25 @@ fn position_glyph(
     baseline_y: f32,
     scale: f32,
 ) -> PositionedGlyph {
-    // The glyph's world-space dimensions.
-    let glyph_w = f32::from(cached.glyph_width_funits) * scale;
-    let glyph_h = f32::from(cached.glyph_height_funits) * scale;
+    // Precompute glyph font-unit dimensions as f32, clamped to avoid division by zero.
+    let funits_w = f32::from(cached.glyph_width_funits).max(1.0);
+    let funits_h = f32::from(cached.glyph_height_funits).max(1.0);
 
-    // Expand the quad to include the SDF spread.
-    // The SDF bitmap is larger than the glyph by `spread` on each side.
-    // The ratio of SDF bitmap to glyph is: sdf_bitmap_size / glyph_size_in_sdf_pixels.
+    // The glyph's world-space dimensions (font units → pixels).
+    let glyph_w = funits_w * scale;
+    let glyph_h = funits_h * scale;
+
+    // SDF bitmap dimensions (includes spread padding on each side).
     #[allow(clippy::cast_precision_loss)]
     let sdf_w = cached.atlas_region.width as f32;
     #[allow(clippy::cast_precision_loss)]
     let sdf_h = cached.atlas_region.height as f32;
-    let glyph_w_sdf = f32::from(cached.glyph_width_funits)
-        * (sdf_w / f32::from(cached.glyph_width_funits).max(1.0));
-    let glyph_h_sdf = f32::from(cached.glyph_height_funits)
-        * (sdf_h / f32::from(cached.glyph_height_funits).max(1.0));
 
-    // Scale the SDF bitmap dimensions to world space.
-    let _ = (glyph_w_sdf, glyph_h_sdf); // used below
-    let quad_w = sdf_w * (glyph_w / f32::from(cached.glyph_width_funits).max(1.0));
-    let quad_h = sdf_h * (glyph_h / f32::from(cached.glyph_height_funits).max(1.0));
+    // Scale SDF bitmap to world space: sdf_pixels * (world_size / font_units).
+    let scale_w = glyph_w / funits_w;
+    let scale_h = glyph_h / funits_h;
+    let quad_w = sdf_w * scale_w;
+    let quad_h = sdf_h * scale_h;
 
     // Position: pen position + shaping offsets + bearing adjustments.
     #[allow(clippy::cast_precision_loss)]
@@ -131,11 +129,10 @@ fn position_glyph(
     #[allow(clippy::cast_precision_loss)]
     let y_offset = shaped.y_offset as f32 * scale;
 
-    // bearing_x is in SDF pixel space; scale to world space.
-    let bearing_scale = glyph_w / f32::from(cached.glyph_width_funits).max(1.0);
-    let quad_x = pen_x + x_offset + cached.bearing_x * bearing_scale;
+    // bearing_x/bearing_y are in SDF pixel space; scale to world space.
+    let quad_x = pen_x + x_offset + cached.bearing_x * scale_w;
     // bearing_y is from baseline to top of SDF bitmap.
-    let quad_y = baseline_y - y_offset - cached.bearing_y * bearing_scale;
+    let quad_y = baseline_y - y_offset - cached.bearing_y * scale_w;
 
     PositionedGlyph {
         glyph_id: shaped.glyph_id,

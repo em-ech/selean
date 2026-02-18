@@ -8,6 +8,8 @@
 use selean_common::error::EngineError;
 use tracing::{debug, info};
 
+use super::packer::{PackResult, ShelfPacker};
+
 /// Default initial atlas dimensions (1024x1024 = 1 MB).
 const DEFAULT_ATLAS_SIZE: u32 = 1024;
 
@@ -60,16 +62,8 @@ pub struct GlyphAtlas {
     bind_group_layout: wgpu::BindGroupLayout,
     /// Bind group for the atlas texture + sampler.
     bind_group: wgpu::BindGroup,
-    /// Current atlas width in texels.
-    width: u32,
-    /// Current atlas height in texels.
-    height: u32,
-    /// Current packing cursor: x position in the current row.
-    cursor_x: u32,
-    /// Current packing cursor: y position of the current row's top.
-    cursor_y: u32,
-    /// Height of the current row (max glyph height in this row).
-    row_height: u32,
+    /// Shelf-packing allocator for rectangle placement.
+    packer: ShelfPacker,
     /// Maximum texture dimension (from GPU limits).
     max_dimension: u32,
 }
@@ -102,11 +96,7 @@ impl GlyphAtlas {
             sampler,
             bind_group_layout,
             bind_group,
-            width: initial_size,
-            height: initial_size,
-            cursor_x: 0,
-            cursor_y: 0,
-            row_height: 0,
+            packer: ShelfPacker::new(initial_size, initial_size, GLYPH_PADDING),
             max_dimension,
         }
     }
@@ -126,7 +116,30 @@ impl GlyphAtlas {
     /// Returns the atlas dimensions.
     #[must_use]
     pub fn dimensions(&self) -> (u32, u32) {
-        (self.width, self.height)
+        self.packer.dimensions()
+    }
+
+    /// Resets the atlas to its initial empty state.
+    ///
+    /// Creates a fresh texture at the default size and resets all packing state.
+    /// The glyph cache should also be cleared since all atlas regions become invalid.
+    pub fn reset(&mut self, device: &wgpu::Device) {
+        let initial_size = DEFAULT_ATLAS_SIZE.min(self.max_dimension);
+
+        let (texture, texture_view) = Self::create_texture(device, initial_size, initial_size);
+        let bind_group =
+            Self::create_bind_group(device, &self.bind_group_layout, &texture_view, &self.sampler);
+
+        self.texture = texture;
+        self.texture_view = texture_view;
+        self.bind_group = bind_group;
+        self.packer.reset(initial_size, initial_size);
+
+        info!(
+            width = initial_size,
+            height = initial_size,
+            "Glyph atlas reset"
+        );
     }
 
     /// Allocates a region in the atlas for a glyph of the given dimensions.
@@ -145,44 +158,20 @@ impl GlyphAtlas {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<AtlasRegion, EngineError> {
-        let padded_w = width + GLYPH_PADDING;
-        let padded_h = height + GLYPH_PADDING;
-
-        // Try to fit in the current row.
-        if self.cursor_x + padded_w <= self.width && self.cursor_y + padded_h <= self.height {
-            let region = AtlasRegion {
-                x: self.cursor_x,
-                y: self.cursor_y,
+        match self.packer.allocate(width, height) {
+            PackResult::Placed { x, y } => Ok(AtlasRegion {
+                x,
+                y,
                 width,
                 height,
-            };
-            self.cursor_x += padded_w;
-            if padded_h > self.row_height {
-                self.row_height = padded_h;
+            }),
+            PackResult::Full => {
+                // Atlas is full — try to grow, then retry.
+                self.grow(device, queue)?;
+                // Retry allocation after growth (recursive, bounded by max_dimension).
+                self.allocate(width, height, device, queue)
             }
-            return Ok(region);
         }
-
-        // Try starting a new row.
-        let new_row_y = self.cursor_y + self.row_height;
-        if padded_w <= self.width && new_row_y + padded_h <= self.height {
-            self.cursor_x = padded_w;
-            self.cursor_y = new_row_y;
-            self.row_height = padded_h;
-
-            return Ok(AtlasRegion {
-                x: 0,
-                y: new_row_y,
-                width,
-                height,
-            });
-        }
-
-        // Atlas is full — try to grow.
-        self.grow(device, queue)?;
-
-        // Retry allocation after growth (recursive, bounded by max_dimension).
-        self.allocate(width, height, device, queue)
     }
 
     /// Uploads SDF data to a region in the atlas texture.
@@ -214,21 +203,21 @@ impl GlyphAtlas {
 
     /// Doubles the atlas size, copying existing data to the new texture.
     fn grow(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), EngineError> {
-        let new_width = (self.width * 2).min(self.max_dimension);
-        let new_height = (self.height * 2).min(self.max_dimension);
+        let (old_w, old_h) = self.packer.dimensions();
+        let new_width = (old_w * 2).min(self.max_dimension);
+        let new_height = (old_h * 2).min(self.max_dimension);
 
-        if new_width == self.width && new_height == self.height {
+        if new_width == old_w && new_height == old_h {
             return Err(EngineError::Font {
                 reason: format!(
-                    "glyph atlas at maximum size {}x{}, cannot grow further",
-                    self.width, self.height
+                    "glyph atlas at maximum size {old_w}x{old_h}, cannot grow further"
                 ),
             });
         }
 
         info!(
-            old_w = self.width,
-            old_h = self.height,
+            old_w,
+            old_h,
             new_w = new_width,
             new_h = new_height,
             "Growing glyph atlas"
@@ -255,8 +244,8 @@ impl GlyphAtlas {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
+                width: old_w,
+                height: old_h,
                 depth_or_array_layers: 1,
             },
         );
@@ -274,8 +263,7 @@ impl GlyphAtlas {
         self.texture = new_texture;
         self.texture_view = new_texture_view;
         self.bind_group = bind_group;
-        self.width = new_width;
-        self.height = new_height;
+        self.packer.grow(new_width, new_height);
 
         debug!(width = new_width, height = new_height, "Atlas grown");
 
@@ -372,11 +360,7 @@ impl GlyphAtlas {
 impl std::fmt::Debug for GlyphAtlas {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlyphAtlas")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("cursor_x", &self.cursor_x)
-            .field("cursor_y", &self.cursor_y)
-            .field("row_height", &self.row_height)
+            .field("packer", &self.packer)
             .field("max_dimension", &self.max_dimension)
             .finish()
     }

@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use super::camera::Camera;
 use super::gpu::{GpuContext, GpuContextDescriptor};
 use super::rect_pipeline::{RectBatch, RectPipeline};
+use super::shared::{PersistentInstanceBuffer, SharedPipelineResources};
 use crate::scene::{SceneNode, SceneNodeKind};
 use crate::text::{TextBatch, TextPipeline, TextSystem};
 
@@ -51,14 +52,20 @@ pub struct Renderer {
     gpu: GpuContext,
     /// Camera (view-projection) state.
     camera: Camera,
+    /// Shared GPU resources (vertex/index buffers, camera uniform).
+    shared: SharedPipelineResources,
     /// Rectangle rendering pipeline.
     rect_pipeline: RectPipeline,
     /// Per-frame rectangle batch (reused across frames to avoid allocation).
     rect_batch: RectBatch,
+    /// Persistent GPU buffer for rectangle instance data.
+    rect_instance_buf: PersistentInstanceBuffer,
     /// Text rendering pipeline.
     text_pipeline: TextPipeline,
     /// Per-frame text glyph batch (reused across frames).
     text_batch: TextBatch,
+    /// Persistent GPU buffer for glyph instance data.
+    text_instance_buf: PersistentInstanceBuffer,
     /// Text subsystem (font, cache, atlas).
     text_system: TextSystem,
     /// Background clear color.
@@ -88,7 +95,11 @@ impl Renderer {
     ) -> Result<Self, EngineError> {
         let gpu = GpuContext::new(&descriptor.gpu).await?;
         let camera = Camera::new(descriptor.viewport_width, descriptor.viewport_height);
-        let rect_pipeline = RectPipeline::new(&gpu.device, target_format);
+
+        // Create shared resources first (camera uniform, quad buffers).
+        let shared = SharedPipelineResources::new(&gpu.device);
+
+        let rect_pipeline = RectPipeline::new(&gpu.device, target_format, &shared);
 
         // Initialize text subsystem.
         let text_system = TextSystem::new(&gpu.device)?;
@@ -96,6 +107,7 @@ impl Renderer {
             &gpu.device,
             target_format,
             text_system.atlas().bind_group_layout(),
+            &shared,
         );
 
         info!(
@@ -105,13 +117,22 @@ impl Renderer {
             "Renderer initialized (with text support)"
         );
 
+        // Initial capacity: ~256 instances each (reasonable for typical scenes).
+        let rect_instance_buf =
+            PersistentInstanceBuffer::new(&gpu.device, "rect_instance_buffer", 256 * 72);
+        let text_instance_buf =
+            PersistentInstanceBuffer::new(&gpu.device, "glyph_instance_buffer", 256 * 64);
+
         Ok(Self {
             gpu,
             camera,
+            shared,
             rect_pipeline,
             rect_batch: RectBatch::new(),
+            rect_instance_buf,
             text_pipeline,
             text_batch: TextBatch::new(),
+            text_instance_buf,
             text_system,
             clear_color: descriptor.clear_color,
             target_format,
@@ -168,38 +189,41 @@ impl Renderer {
 
         let mut node_count = 0u32;
         for node in visible_nodes {
-            // Try rect pipeline first.
-            if self.rect_batch.push_node(node) {
-                node_count += 1;
-                continue;
-            }
+            node_count += 1;
 
-            // Try text pipeline.
-            if let SceneNodeKind::Text {
-                ref content,
-                font_size,
-            } = node.kind
-            {
-                if let Err(e) = self.text_system.prepare_text_node(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    node,
+            match &node.kind {
+                SceneNodeKind::Frame { .. } | SceneNodeKind::Group => {
+                    self.rect_batch.push_node(node);
+                }
+                SceneNodeKind::Text {
                     content,
                     font_size,
-                    &mut self.text_batch,
-                ) {
-                    warn!(?e, node_id = %node.id, "Failed to prepare text node");
+                } => {
+                    if let Err(e) = self.text_system.prepare_text_node(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        node,
+                        content,
+                        *font_size,
+                        &mut self.text_batch,
+                    ) {
+                        warn!(?e, node_id = %node.id, "Failed to prepare text node");
+                    }
                 }
-                node_count += 1;
+                // Image and Vector pipelines not yet implemented — skip.
+                SceneNodeKind::Image { .. } | SceneNodeKind::Vector { .. } => {}
             }
         }
 
-        // Upload the camera uniform to both pipelines.
+        // Upload the camera uniform once (shared by both pipelines).
         let camera_uniform = self.camera.build_uniform();
-        self.rect_pipeline
-            .update_camera(&self.gpu.queue, &camera_uniform);
-        self.text_pipeline
-            .update_camera(&self.gpu.queue, &camera_uniform);
+        self.shared.update_camera(&self.gpu.queue, &camera_uniform);
+
+        // Upload instance data to persistent GPU buffers.
+        self.rect_instance_buf
+            .upload(&self.gpu.device, &self.gpu.queue, self.rect_batch.as_bytes());
+        self.text_instance_buf
+            .upload(&self.gpu.device, &self.gpu.queue, self.text_batch.as_bytes());
 
         debug!(
             rects = self.rect_batch.len(),
@@ -243,15 +267,20 @@ impl Renderer {
             });
 
             // Draw rectangles first (typically behind text).
-            self.rect_pipeline
-                .draw(&self.gpu.device, &mut pass, &self.rect_batch);
+            self.rect_pipeline.draw(
+                &mut pass,
+                &self.rect_batch,
+                &self.rect_instance_buf,
+                &self.shared,
+            );
 
             // Draw text on top.
             self.text_pipeline.draw(
-                &self.gpu.device,
                 &mut pass,
                 &self.text_batch,
+                &self.text_instance_buf,
                 self.text_system.atlas(),
+                &self.shared,
             );
         }
 

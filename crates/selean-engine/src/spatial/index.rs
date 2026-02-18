@@ -229,6 +229,24 @@ impl SpatialIndex {
     /// sorting by render order if needed.
     #[must_use]
     pub fn query_viewport(&self, left: f32, top: f32, right: f32, bottom: f32) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        self.query_viewport_into(left, top, right, bottom, &mut out);
+        out
+    }
+
+    /// Like [`query_viewport`](Self::query_viewport) but appends results into the
+    /// provided buffer, which is cleared first. Reusing the buffer across frames
+    /// avoids repeated heap allocations.
+    pub fn query_viewport_into(
+        &self,
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        out: &mut Vec<NodeId>,
+    ) {
+        out.clear();
+
         let width = right - left;
         let height = bottom - top;
         let margin_x = width * self.overscan;
@@ -239,10 +257,11 @@ impl SpatialIndex {
             [right + margin_x, bottom + margin_y],
         );
 
-        self.tree
-            .locate_in_envelope_intersecting(&expanded)
-            .map(|entry| entry.id)
-            .collect()
+        out.extend(
+            self.tree
+                .locate_in_envelope_intersecting(&expanded)
+                .map(|entry| entry.id),
+        );
     }
 
     /// Returns node IDs containing the given point, for hit testing.

@@ -4,9 +4,8 @@
 //! collection), and `TextPipeline` (compiled GPU pipeline for drawing glyphs).
 
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 
-use crate::renderer::{CameraUniform, QUAD_INDICES, QUAD_VERTICES, QuadVertex};
+use crate::renderer::{QUAD_INDICES, PersistentInstanceBuffer, QuadVertex, SharedPipelineResources};
 use crate::scene::{Color, SceneNode};
 
 use super::atlas::GlyphAtlas;
@@ -189,19 +188,12 @@ impl Default for TextBatch {
 
 /// The compiled text rendering pipeline.
 ///
-/// Owns GPU resources for rendering glyph quads: shader module, render pipeline,
-/// shared vertex/index buffers, and camera uniform buffer.
+/// Owns only the pipeline-specific GPU render pipeline. Shared resources
+/// (vertex/index buffers, camera uniform) are provided by
+/// [`SharedPipelineResources`] during creation and draw calls.
 pub struct TextPipeline {
     /// The compiled render pipeline.
     pipeline: wgpu::RenderPipeline,
-    /// Vertex buffer for the unit quad (shared by all instances).
-    vertex_buffer: wgpu::Buffer,
-    /// Index buffer for the unit quad.
-    index_buffer: wgpu::Buffer,
-    /// Camera uniform buffer.
-    camera_buffer: wgpu::Buffer,
-    /// Bind group containing the camera uniform.
-    camera_bind_group: wgpu::BindGroup,
 }
 
 impl TextPipeline {
@@ -211,55 +203,24 @@ impl TextPipeline {
     /// * `device` — The GPU device.
     /// * `target_format` — The texture format of the render target (surface).
     /// * `atlas_bind_group_layout` — The bind group layout for the glyph atlas.
+    /// * `shared` — Shared resources providing the camera bind group layout.
     #[must_use]
     pub fn new(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         atlas_bind_group_layout: &wgpu::BindGroupLayout,
+        shared: &SharedPipelineResources,
     ) -> Self {
-        // Load and compile the text shader.
         let shader_source = include_str!("../renderer/shaders/text.wgsl");
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("text_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        // Camera uniform buffer (same layout as RectPipeline).
-        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("text_camera_uniform_buffer"),
-            size: CameraUniform::size(),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("text_camera_bind_group_layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("text_camera_bind_group"),
-            layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
-
-        // Pipeline layout: group(0) = camera, group(1) = atlas.
+        // Pipeline layout: group(0) = camera (shared), group(1) = atlas.
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("text_pipeline_layout"),
-            bind_group_layouts: &[&camera_bind_group_layout, atlas_bind_group_layout],
+            bind_group_layouts: &[shared.camera_bind_group_layout(), atlas_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -297,59 +258,33 @@ impl TextPipeline {
             cache: None,
         });
 
-        // Create shared vertex and index buffers.
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("text_quad_vertex_buffer"),
-            contents: bytemuck::cast_slice(QUAD_VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("text_quad_index_buffer"),
-            contents: bytemuck::cast_slice(QUAD_INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        Self {
-            pipeline,
-            vertex_buffer,
-            index_buffer,
-            camera_buffer,
-            camera_bind_group,
-        }
-    }
-
-    /// Updates the camera uniform buffer with new data.
-    pub fn update_camera(&self, queue: &wgpu::Queue, uniform: &CameraUniform) {
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(uniform));
+        Self { pipeline }
     }
 
     /// Records draw commands for a batch of glyph instances.
     ///
+    /// Instance data must already be uploaded to `instance_buf` via
+    /// [`PersistentInstanceBuffer::upload`] before calling this method.
+    ///
     /// Does nothing if the batch is empty.
     pub fn draw<'a>(
         &'a self,
-        device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'a>,
         batch: &TextBatch,
+        instance_buf: &'a PersistentInstanceBuffer,
         atlas: &'a GlyphAtlas,
+        shared: &'a SharedPipelineResources,
     ) {
         if batch.is_empty() {
             return;
         }
 
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("glyph_instance_buffer"),
-            contents: batch.as_bytes(),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(0, shared.camera_bind_group(), &[]);
         pass.set_bind_group(1, atlas.bind_group(), &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.set_vertex_buffer(0, shared.vertex_buffer().slice(..));
+        pass.set_vertex_buffer(1, instance_buf.buffer().slice(..));
+        pass.set_index_buffer(shared.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
 
         #[allow(clippy::cast_possible_truncation)]
         let instance_count = batch.len() as u32;

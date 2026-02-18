@@ -15,10 +15,11 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 
 use selean_common::types::NodeId;
+use selean_engine::renderer::RectBatch;
 use selean_engine::scene::{BoundingBox, Color, SceneNode, SceneNodeKind};
 use selean_engine::text::{
-    FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, generate_glyph_sdf, layout_text,
-    shape_text,
+    FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, TextBatch, generate_glyph_sdf,
+    layout_text, shape_text,
 };
 
 use bench_utils::{SceneConfig, generate_scene};
@@ -564,6 +565,88 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Group 9: CPU batching
+// ---------------------------------------------------------------------------
+
+fn bench_cpu_batching(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cpu_batching");
+
+    // Pre-build scenes with visible rect and text nodes.
+    let rect_nodes: Vec<SceneNode> = (0..1000)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let x = (i as f32) * 10.0;
+            let mut node = SceneNode::new(
+                NodeId::new(),
+                format!("Rect-{i}"),
+                SceneNodeKind::Frame {
+                    corner_radius: [4.0; 4],
+                },
+                BoundingBox::new(x, 0.0, 80.0, 40.0),
+            );
+            node.fill = Some(Color::new(0.2, 0.4, 0.8, 1.0));
+            node.stroke = Some(Color::new(0.0, 0.0, 0.0, 1.0));
+            node.stroke_width = 1.0;
+            node
+        })
+        .collect();
+
+    for &count in &[100_usize, 500, 1000] {
+        group.bench_with_input(
+            BenchmarkId::new("rect_batch_push", count),
+            &count,
+            |b, &count| {
+                let nodes = &rect_nodes[..count];
+                b.iter(|| {
+                    let mut batch = RectBatch::new();
+                    for node in nodes {
+                        batch.push_node(node);
+                    }
+                    black_box(batch.len());
+                });
+            },
+        );
+    }
+
+    // Bench TextBatch with pre-built glyph instances.
+    let glyph_instance: selean_engine::text::GlyphInstance = bytemuck::Zeroable::zeroed();
+    for &count in &[100_usize, 500, 1000] {
+        group.bench_with_input(
+            BenchmarkId::new("text_batch_push", count),
+            &count,
+            |b, &count| {
+                b.iter(|| {
+                    let mut batch = TextBatch::new();
+                    for _ in 0..count {
+                        batch.push(glyph_instance);
+                    }
+                    black_box(batch.len());
+                });
+            },
+        );
+    }
+
+    // Bench as_bytes (bytemuck cast) for various batch sizes.
+    for &count in &[100_usize, 1000] {
+        group.bench_with_input(
+            BenchmarkId::new("rect_batch_as_bytes", count),
+            &count,
+            |b, &count| {
+                let mut batch = RectBatch::new();
+                for node in &rect_nodes[..count] {
+                    batch.push_node(node);
+                }
+                b.iter(|| {
+                    black_box(batch.as_bytes().len());
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Helper: builds a `GlyphCache` with SDF metadata for all unique glyphs in the given runs.
 ///
 /// Uses fake atlas regions (all at origin) — sufficient for layout benchmarking.
@@ -619,5 +702,6 @@ criterion_group!(
     bench_sdf_generation,
     bench_text_layout,
     bench_text_full_pipeline,
+    bench_cpu_batching,
 );
 criterion_main!(benches);

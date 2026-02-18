@@ -78,6 +78,14 @@ impl GlyphCache {
     pub fn contains(&self, key: &GlyphCacheKey) -> bool {
         self.entries.contains_key(key)
     }
+
+    /// Removes all cached glyphs.
+    ///
+    /// Use when switching fonts or documents. The atlas should also be reset
+    /// since cached atlas regions become invalid.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 impl Default for GlyphCache {
@@ -183,5 +191,19 @@ mod tests {
         let debug_str = format!("{cache:?}");
         assert!(debug_str.contains("GlyphCache"));
         assert!(debug_str.contains("count"));
+    }
+
+    #[test]
+    fn clear_removes_all_entries() {
+        let mut cache = GlyphCache::new();
+        cache.insert(test_key(1), test_cached_glyph());
+        cache.insert(test_key(2), test_cached_glyph());
+        assert_eq!(cache.len(), 2);
+
+        cache.clear();
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert!(!cache.contains(&test_key(1)));
+        assert!(!cache.contains(&test_key(2)));
     }
 }
