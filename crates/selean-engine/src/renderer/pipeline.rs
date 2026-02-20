@@ -11,8 +11,12 @@ use super::camera::Camera;
 use super::gpu::{GpuContext, GpuContextDescriptor};
 use super::rect_pipeline::{RectBatch, RectPipeline};
 use super::shared::{PersistentInstanceBuffer, SharedPipelineResources};
+use super::texture_atlas::TextureAtlas;
+use super::textured_quad::{TexturedQuadBatch, TexturedQuadPipeline};
+use crate::image::ImageSystem;
 use crate::scene::{SceneNode, SceneNodeKind};
 use crate::text::{TextBatch, TextPipeline, TextSystem};
+use crate::vector::VectorSystem;
 
 /// Configuration for renderer initialization.
 #[derive(Debug, Clone)]
@@ -68,6 +72,22 @@ pub struct Renderer {
     text_instance_buf: PersistentInstanceBuffer,
     /// Text subsystem (font, cache, atlas).
     text_system: TextSystem,
+    /// Textured quad pipeline (shared by image and vector rendering).
+    textured_quad_pipeline: TexturedQuadPipeline,
+    /// Per-frame image batch.
+    image_batch: TexturedQuadBatch,
+    /// Persistent GPU buffer for image instance data.
+    image_instance_buf: PersistentInstanceBuffer,
+    /// Image subsystem (decode, cache).
+    image_system: ImageSystem,
+    /// Per-frame vector batch.
+    vector_batch: TexturedQuadBatch,
+    /// Persistent GPU buffer for vector instance data.
+    vector_instance_buf: PersistentInstanceBuffer,
+    /// Vector subsystem (parse, rasterize, cache).
+    vector_system: VectorSystem,
+    /// RGBA atlas shared by images and vectors.
+    image_atlas: TextureAtlas<4>,
     /// Background clear color.
     clear_color: wgpu::Color,
     /// The texture format used for the render target.
@@ -110,11 +130,22 @@ impl Renderer {
             &shared,
         );
 
+        // Initialize RGBA atlas (shared by images and vectors).
+        let image_atlas = TextureAtlas::<4>::new(&gpu.device);
+
+        // Initialize textured quad pipeline (shared by images and vectors).
+        let textured_quad_pipeline = TexturedQuadPipeline::new(
+            &gpu.device,
+            target_format,
+            image_atlas.bind_group_layout(),
+            &shared,
+        );
+
         info!(
             viewport_w = descriptor.viewport_width,
             viewport_h = descriptor.viewport_height,
             format = ?target_format,
-            "Renderer initialized (with text support)"
+            "Renderer initialized (with text, image, and vector support)"
         );
 
         // Initial capacity: ~256 instances each (reasonable for typical scenes).
@@ -122,6 +153,10 @@ impl Renderer {
             PersistentInstanceBuffer::new(&gpu.device, "rect_instance_buffer", 256 * 72);
         let text_instance_buf =
             PersistentInstanceBuffer::new(&gpu.device, "glyph_instance_buffer", 256 * 64);
+        let image_instance_buf =
+            PersistentInstanceBuffer::new(&gpu.device, "image_instance_buffer", 256 * 64);
+        let vector_instance_buf =
+            PersistentInstanceBuffer::new(&gpu.device, "vector_instance_buffer", 256 * 64);
 
         Ok(Self {
             gpu,
@@ -134,6 +169,14 @@ impl Renderer {
             text_batch: TextBatch::new(),
             text_instance_buf,
             text_system,
+            textured_quad_pipeline,
+            image_batch: TexturedQuadBatch::new(),
+            image_instance_buf,
+            image_system: ImageSystem::new(),
+            vector_batch: TexturedQuadBatch::new(),
+            vector_instance_buf,
+            vector_system: VectorSystem::new(),
+            image_atlas,
             clear_color: descriptor.clear_color,
             target_format,
         })
@@ -174,11 +217,27 @@ impl Renderer {
         debug!(width, height, "Viewport resized");
     }
 
+    /// Registers an image asset for later use in Image nodes.
+    ///
+    /// The image bytes are decoded and optionally resized eagerly.
+    /// The decoded data is stored for atlas upload during the prepare phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EngineError::Image` if the bytes cannot be decoded.
+    pub fn register_image_asset(
+        &mut self,
+        asset_ref: &str,
+        bytes: &[u8],
+    ) -> Result<(), EngineError> {
+        self.image_system.register_asset(asset_ref, bytes)
+    }
+
     /// Prepares a frame for rendering by collecting visible scene nodes.
     ///
     /// Processes each node into the appropriate batch: rectangles go to
-    /// `RectBatch`, text nodes are shaped, SDF-cached, and laid out into
-    /// `TextBatch`.
+    /// `RectBatch`, text nodes to `TextBatch`, images and vectors to
+    /// `TexturedQuadBatch` instances.
     ///
     /// # Arguments
     /// * `visible_nodes` — Iterator of scene nodes within the viewport.
@@ -186,6 +245,8 @@ impl Renderer {
     pub fn prepare<'a>(&mut self, visible_nodes: impl Iterator<Item = &'a SceneNode>) {
         self.rect_batch.clear();
         self.text_batch.clear();
+        self.image_batch.clear();
+        self.vector_batch.clear();
 
         let mut node_count = 0u32;
         for node in visible_nodes {
@@ -210,12 +271,42 @@ impl Renderer {
                         warn!(?e, node_id = %node.id, "Failed to prepare text node");
                     }
                 }
-                // Image and Vector pipelines not yet implemented — skip.
-                SceneNodeKind::Image { .. } | SceneNodeKind::Vector { .. } => {}
+                SceneNodeKind::Image { asset_ref } => {
+                    if let Err(e) = self.image_system.prepare_image_node(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut self.image_atlas,
+                        node,
+                        asset_ref,
+                        &mut self.image_batch,
+                    ) {
+                        warn!(?e, node_id = %node.id, "Failed to prepare image node");
+                    }
+                }
+                SceneNodeKind::Vector { path_data } => {
+                    if let Err(e) = self.vector_system.prepare_vector_node(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut self.image_atlas,
+                        node,
+                        path_data,
+                        &mut self.vector_batch,
+                    ) {
+                        warn!(?e, node_id = %node.id, "Failed to prepare vector node");
+                    }
+                }
             }
         }
 
-        // Upload the camera uniform once (shared by both pipelines).
+        // Finalize UVs now that atlas dimensions are stable.
+        let (atlas_w, atlas_h) = self.image_atlas.dimensions();
+        self.image_batch.finalize_uvs(atlas_w, atlas_h);
+        self.vector_batch.finalize_uvs(atlas_w, atlas_h);
+
+        let (glyph_atlas_w, glyph_atlas_h) = self.text_system.atlas().dimensions();
+        self.text_batch.finalize_uvs(glyph_atlas_w, glyph_atlas_h);
+
+        // Upload the camera uniform once (shared by all pipelines).
         let camera_uniform = self.camera.build_uniform();
         self.shared.update_camera(&self.gpu.queue, &camera_uniform);
 
@@ -224,13 +315,21 @@ impl Renderer {
             .upload(&self.gpu.device, &self.gpu.queue, self.rect_batch.as_bytes());
         self.text_instance_buf
             .upload(&self.gpu.device, &self.gpu.queue, self.text_batch.as_bytes());
+        self.image_instance_buf
+            .upload(&self.gpu.device, &self.gpu.queue, self.image_batch.as_bytes());
+        self.vector_instance_buf
+            .upload(&self.gpu.device, &self.gpu.queue, self.vector_batch.as_bytes());
 
         debug!(
             rects = self.rect_batch.len(),
             glyphs = self.text_batch.len(),
+            images = self.image_batch.len(),
+            vectors = self.vector_batch.len(),
             total_nodes = node_count,
             rect_draws = self.rect_batch.draw_call_count(),
             text_draws = self.text_batch.draw_call_count(),
+            image_draws = self.image_batch.draw_call_count(),
+            vector_draws = self.vector_batch.draw_call_count(),
             "Frame prepared"
         );
     }
@@ -239,6 +338,8 @@ impl Renderer {
     ///
     /// Executes the render pass with the prepared batch data. Call `prepare()`
     /// before this method each frame.
+    ///
+    /// Draw order: rects → images → vectors → text (back to front).
     ///
     /// # Arguments
     /// * `view` — The texture view to render into (from a surface or offscreen target).
@@ -266,7 +367,7 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Draw rectangles first (typically behind text).
+            // 1. Draw rectangles (furthest back).
             self.rect_pipeline.draw(
                 &mut pass,
                 &self.rect_batch,
@@ -274,7 +375,25 @@ impl Renderer {
                 &self.shared,
             );
 
-            // Draw text on top.
+            // 2. Draw images.
+            self.textured_quad_pipeline.draw(
+                &mut pass,
+                &self.image_batch,
+                &self.image_instance_buf,
+                &self.image_atlas,
+                &self.shared,
+            );
+
+            // 3. Draw vectors.
+            self.textured_quad_pipeline.draw(
+                &mut pass,
+                &self.vector_batch,
+                &self.vector_instance_buf,
+                &self.image_atlas,
+                &self.shared,
+            );
+
+            // 4. Draw text on top.
             self.text_pipeline.draw(
                 &mut pass,
                 &self.text_batch,
@@ -309,6 +428,10 @@ pub struct FrameStats {
     pub rect_count: usize,
     /// Number of glyph instances submitted to the GPU.
     pub glyph_count: usize,
+    /// Number of image instances submitted to the GPU.
+    pub image_count: usize,
+    /// Number of vector instances submitted to the GPU.
+    pub vector_count: usize,
     /// Number of draw calls issued.
     pub draw_calls: usize,
     /// Total nodes processed (including non-renderable types).
@@ -322,7 +445,12 @@ impl Renderer {
         FrameStats {
             rect_count: self.rect_batch.len(),
             glyph_count: self.text_batch.len(),
-            draw_calls: self.rect_batch.draw_call_count() + self.text_batch.draw_call_count(),
+            image_count: self.image_batch.len(),
+            vector_count: self.vector_batch.len(),
+            draw_calls: self.rect_batch.draw_call_count()
+                + self.text_batch.draw_call_count()
+                + self.image_batch.draw_call_count()
+                + self.vector_batch.draw_call_count(),
             total_nodes_processed: 0,
         }
     }
@@ -344,6 +472,8 @@ mod tests {
         let stats = FrameStats::default();
         assert_eq!(stats.rect_count, 0);
         assert_eq!(stats.glyph_count, 0);
+        assert_eq!(stats.image_count, 0);
+        assert_eq!(stats.vector_count, 0);
         assert_eq!(stats.draw_calls, 0);
         assert_eq!(stats.total_nodes_processed, 0);
     }

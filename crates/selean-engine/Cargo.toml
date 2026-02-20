@@ -18,6 +18,9 @@ serde.workspace = true
 rustybuzz.workspace = true
 ttf-parser.workspace = true
 ab_glyph_rasterizer.workspace = true
+image.workspace = true
+tiny-skia.workspace = true
+svgtypes.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
@@ -26,6 +29,7 @@ pollster = "0.4"
 criterion.workspace = true
 rand.workspace = true
 ttf-parser.workspace = true
+image.workspace = true
 
 [[bench]]
 name = "engine_benchmarks"

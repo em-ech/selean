@@ -15,12 +15,14 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 
 use selean_common::types::NodeId;
-use selean_engine::renderer::RectBatch;
+use selean_engine::image::{decode_image, decode_image_resized};
+use selean_engine::renderer::{RectBatch, TexturedQuadBatch};
 use selean_engine::scene::{BoundingBox, Color, SceneNode, SceneNodeKind};
 use selean_engine::text::{
-    FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, TextBatch, generate_glyph_sdf,
-    layout_text, shape_text,
+    AtlasRegion, FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, TextBatch,
+    generate_glyph_sdf, layout_text, shape_text,
 };
+use selean_engine::vector::{cache::quantize_dimension, parser::parse_path_data, rasterizer::rasterize_path};
 
 use bench_utils::{SceneConfig, generate_scene};
 
@@ -647,6 +649,209 @@ fn bench_cpu_batching(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Group 10: Image decode
+// ---------------------------------------------------------------------------
+
+fn bench_image_decode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("image_decode");
+
+    // Create test PNGs of various sizes.
+    let sizes: &[(u32, u32, &str)] = &[
+        (64, 64, "64x64"),
+        (256, 256, "256x256"),
+        (1024, 1024, "1024x1024"),
+    ];
+
+    for &(w, h, label) in sizes {
+        let png = make_test_png(w, h);
+        group.bench_with_input(BenchmarkId::new("decode", label), &png, |b, png| {
+            b.iter(|| {
+                black_box(decode_image(png).expect("decode"));
+            });
+        });
+    }
+
+    // Decode + resize.
+    let large_png = make_test_png(512, 512);
+    group.bench_function("decode_resize_512_to_128", |b| {
+        b.iter(|| {
+            black_box(decode_image_resized(&large_png, 128).expect("decode_resized"));
+        });
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Group 11: Vector parse + rasterize
+// ---------------------------------------------------------------------------
+
+fn bench_vector_pipeline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vector_pipeline");
+
+    let paths: &[(&str, &str)] = &[
+        ("triangle", "M 0 0 L 50 0 L 25 50 Z"),
+        ("rect", "M 0 0 L 100 0 L 100 100 L 0 100 Z"),
+        (
+            "cubic",
+            "M 10 80 C 40 10 65 10 95 80 S 150 150 10 80",
+        ),
+        (
+            "complex",
+            "M 0 0 C 20 40 60 40 80 0 L 80 60 Q 40 100 0 60 Z",
+        ),
+    ];
+
+    // Parse benchmarks.
+    for &(label, path_data) in paths {
+        group.bench_with_input(
+            BenchmarkId::new("parse", label),
+            &path_data,
+            |b, &path_data| {
+                b.iter(|| {
+                    black_box(parse_path_data(path_data).expect("parse"));
+                });
+            },
+        );
+    }
+
+    // Rasterize benchmarks at different sizes.
+    for &(label, path_data) in paths {
+        let path = parse_path_data(path_data).expect("parse");
+        for &size in &[64u32, 128, 256] {
+            group.bench_with_input(
+                BenchmarkId::new(format!("rasterize_{label}"), size),
+                &size,
+                |b, &size| {
+                    b.iter(|| {
+                        black_box(
+                            rasterize_path(
+                                &path,
+                                size,
+                                size,
+                                Some(Color::BLACK),
+                                None,
+                                0.0,
+                            )
+                            .expect("rasterize"),
+                        );
+                    });
+                },
+            );
+        }
+    }
+
+    // Quantize dimension benchmark (very fast, verify negligible cost).
+    group.bench_function("quantize_dimension", |b| {
+        let dims: Vec<f32> = (1..=500).map(|i| i as f32).collect();
+        b.iter(|| {
+            for &d in &dims {
+                black_box(quantize_dimension(d));
+            }
+        });
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Group 12: Image/vector batch CPU operations
+// ---------------------------------------------------------------------------
+
+fn bench_textured_quad_batching(c: &mut Criterion) {
+    let mut group = c.benchmark_group("textured_quad_batching");
+
+    // Build image-like nodes for batching.
+    let image_nodes: Vec<SceneNode> = (0..1000)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let x = (i as f32) * 10.0;
+            let mut node = SceneNode::new(
+                NodeId::new(),
+                format!("Img-{i}"),
+                SceneNodeKind::Image {
+                    asset_ref: format!("asset_{i}.png"),
+                },
+                BoundingBox::new(x, 0.0, 80.0, 60.0),
+            );
+            node.fill = Some(Color::new(1.0, 1.0, 1.0, 1.0));
+            node.opacity = 1.0;
+            node
+        })
+        .collect();
+
+    let region = AtlasRegion {
+        x: 0,
+        y: 0,
+        width: 64,
+        height: 64,
+    };
+
+    for &count in &[100_usize, 500, 1000] {
+        group.bench_with_input(
+            BenchmarkId::new("push_pending", count),
+            &count,
+            |b, &count| {
+                let nodes = &image_nodes[..count];
+                b.iter(|| {
+                    let mut batch = TexturedQuadBatch::new();
+                    for node in nodes {
+                        batch.push_pending(node, region, node.fill);
+                    }
+                    black_box(batch.pending_count());
+                });
+            },
+        );
+    }
+
+    // Finalize UVs benchmark.
+    for &count in &[100_usize, 500, 1000] {
+        group.bench_with_input(
+            BenchmarkId::new("finalize_uvs", count),
+            &count,
+            |b, &count| {
+                b.iter_batched(
+                    || {
+                        let mut batch = TexturedQuadBatch::new();
+                        for node in &image_nodes[..count] {
+                            batch.push_pending(node, region, node.fill);
+                        }
+                        batch
+                    },
+                    |mut batch| {
+                        batch.finalize_uvs(2048, 2048);
+                        black_box(batch.len());
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Creates a minimal valid RGBA PNG for benchmarking.
+fn make_test_png(width: u32, height: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let encoder = image::codecs::png::PngEncoder::new(&mut buf);
+        let data: Vec<u8> = (0..(width * height))
+            .flat_map(|_| [255u8, 0, 0, 255])
+            .collect();
+        image::ImageEncoder::write_image(
+            encoder,
+            &data,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )
+        .expect("encode test png");
+    }
+    buf
+}
+
 /// Helper: builds a `GlyphCache` with SDF metadata for all unique glyphs in the given runs.
 ///
 /// Uses fake atlas regions (all at origin) — sufficient for layout benchmarking.
@@ -703,5 +908,8 @@ criterion_group!(
     bench_text_layout,
     bench_text_full_pipeline,
     bench_cpu_batching,
+    bench_image_decode,
+    bench_vector_pipeline,
+    bench_textured_quad_batching,
 );
 criterion_main!(benches);

@@ -28,15 +28,18 @@ pub struct TypeDistribution {
     pub groups: f32,
     /// Fraction of nodes that are images (0.0–1.0).
     pub images: f32,
+    /// Fraction of nodes that are vectors (0.0–1.0).
+    pub vectors: f32,
 }
 
 impl Default for TypeDistribution {
     fn default() -> Self {
         Self {
-            frames: 0.60,
+            frames: 0.55,
             text: 0.25,
             groups: 0.10,
             images: 0.05,
+            vectors: 0.05,
         }
     }
 }
@@ -96,6 +99,7 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
     let frame_count = (config.node_count as f32 * dist.frames).round() as usize;
     let text_count = (config.node_count as f32 * dist.text).round() as usize;
     let image_count = (config.node_count as f32 * dist.images).round() as usize;
+    let vector_count = (config.node_count as f32 * dist.vectors).round() as usize;
 
     // Phase 1: Create group hierarchy (nesting up to max_depth).
     let mut group_ids: Vec<(NodeId, u32)> = Vec::with_capacity(group_count);
@@ -137,7 +141,7 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
 
     // Phase 2: Create leaf nodes (frames, text, images) and distribute among groups.
     let mut leaf_kinds: Vec<SceneNodeKind> =
-        Vec::with_capacity(frame_count + text_count + image_count);
+        Vec::with_capacity(frame_count + text_count + image_count + vector_count);
 
     for _ in 0..frame_count {
         let radii: [f32; 4] = if rng.gen_bool(0.4) {
@@ -161,6 +165,18 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
     for i in 0..image_count {
         leaf_kinds.push(SceneNodeKind::Image {
             asset_ref: format!("asset_{i}.png"),
+        });
+    }
+
+    let vector_paths = [
+        "M 0 0 L 50 0 L 25 50 Z",
+        "M 10 80 C 40 10 65 10 95 80 S 150 150 10 80",
+        "M 0 0 L 100 0 L 100 100 L 0 100 Z",
+        "M 50 0 A 50 50 0 1 1 50 100 A 50 50 0 1 1 50 0",
+    ];
+    for i in 0..vector_count {
+        leaf_kinds.push(SceneNodeKind::Vector {
+            path_data: vector_paths[i % vector_paths.len()].to_string(),
         });
     }
 

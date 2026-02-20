@@ -83,6 +83,20 @@ pub enum EngineError {
         /// Human-readable explanation of the font error.
         reason: String,
     },
+
+    /// Failed to decode or process an image asset.
+    #[error("image error: {reason}")]
+    Image {
+        /// Human-readable explanation of the image error.
+        reason: String,
+    },
+
+    /// Failed to parse or rasterize a vector path.
+    #[error("vector error: {reason}")]
+    Vector {
+        /// Human-readable explanation of the vector error.
+        reason: String,
+    },
 }
 
 /// A type alias for `Result` using `SeleanError`.
@@ -155,6 +169,12 @@ mod tests {
             },
             EngineError::Font {
                 reason: "invalid format".to_string(),
+            },
+            EngineError::Image {
+                reason: "unsupported format".to_string(),
+            },
+            EngineError::Vector {
+                reason: "invalid path data".to_string(),
             },
         ];
 

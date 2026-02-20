@@ -1,10 +1,12 @@
 //! Text rendering pipeline with instanced glyph quads.
 //!
 //! Provides `GlyphInstance` (per-glyph GPU data), `TextBatch` (per-frame
-//! collection), and `TextPipeline` (compiled GPU pipeline for drawing glyphs).
+//! collection with two-pass UV normalization), and `TextPipeline` (compiled
+//! GPU pipeline for drawing glyphs).
 
 use bytemuck::{Pod, Zeroable};
 
+use crate::renderer::texture_atlas::AtlasRegion;
 use crate::renderer::{QUAD_INDICES, PersistentInstanceBuffer, QuadVertex, SharedPipelineResources};
 use crate::scene::{Color, SceneNode};
 
@@ -95,9 +97,26 @@ impl GlyphInstance {
     }
 }
 
-/// A batch of glyph instances ready to be rendered.
+/// A pending glyph stored during the prepare phase before UV normalization.
+#[derive(Debug, Clone, Copy)]
+struct PendingGlyph {
+    pos: [f32; 2],
+    size: [f32; 2],
+    atlas_region: AtlasRegion,
+    color: [f32; 4],
+    opacity: f32,
+}
+
+/// A batch of glyph instances with two-pass UV normalization.
+///
+/// During the prepare phase, glyphs are added with pixel-space atlas regions.
+/// After all text nodes are processed and the atlas dimensions are final,
+/// `finalize_uvs()` converts pixel regions to normalized UV coordinates.
+/// This prevents stale UVs when the atlas grows mid-loop.
 pub struct TextBatch {
-    /// CPU-side instance data, cleared each frame.
+    /// Pending glyphs with pixel-space atlas regions (pre-finalization).
+    pending: Vec<PendingGlyph>,
+    /// Finalized instance data ready for GPU upload.
     instances: Vec<GlyphInstance>,
 }
 
@@ -106,30 +125,31 @@ impl TextBatch {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            pending: Vec::with_capacity(512),
             instances: Vec::with_capacity(512),
         }
     }
 
     /// Clears the batch for a new frame.
     pub fn clear(&mut self) {
+        self.pending.clear();
         self.instances.clear();
     }
 
-    /// Adds a glyph instance to the batch.
+    /// Adds a glyph instance to the batch (already finalized, for backward compat).
     pub fn push(&mut self, instance: GlyphInstance) {
         self.instances.push(instance);
     }
 
-    /// Adds all glyph instances for a text node.
+    /// Adds all glyph instances for a text node with pixel-space atlas regions.
     ///
-    /// Looks up each positioned glyph's atlas UVs and creates `GlyphInstance`s.
+    /// Atlas regions are stored in pixel coordinates. Call `finalize_uvs()`
+    /// after all nodes are processed to normalize to UV coordinates.
     pub fn push_text_node(
         &mut self,
         node: &SceneNode,
         positioned: &[PositionedGlyph],
         cache: &GlyphCache,
-        atlas_width: u32,
-        atlas_height: u32,
         sdf_size: u16,
     ) {
         if !node.visible || positioned.is_empty() {
@@ -145,20 +165,46 @@ impl TextBatch {
             };
 
             if let Some(cached) = cache.get(&key) {
-                let uv_rect = cached.atlas_region.uv_rect(atlas_width, atlas_height);
-                let instance = GlyphInstance::from_positioned(glyph, uv_rect, &color, node.opacity);
-                self.instances.push(instance);
+                self.pending.push(PendingGlyph {
+                    pos: [glyph.x, glyph.y],
+                    size: [glyph.width, glyph.height],
+                    atlas_region: cached.atlas_region,
+                    color: [color.r, color.g, color.b, color.a],
+                    opacity: node.opacity,
+                });
             }
         }
     }
 
-    /// Returns the number of instances in the batch.
+    /// Converts all pending glyphs to finalized instances by normalizing
+    /// atlas regions to UV coordinates.
+    ///
+    /// Call this after all text nodes are processed and the atlas dimensions
+    /// are final for this frame.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn finalize_uvs(&mut self, atlas_width: u32, atlas_height: u32) {
+        self.instances.clear();
+        self.instances.reserve(self.pending.len());
+
+        for pg in &self.pending {
+            let uv_rect = pg.atlas_region.uv_rect(atlas_width, atlas_height);
+            self.instances.push(GlyphInstance {
+                pos: pg.pos,
+                size: pg.size,
+                uv_rect,
+                color: pg.color,
+                opacity_pad: [pg.opacity, 0.0, 0.0, 0.0],
+            });
+        }
+    }
+
+    /// Returns the number of finalized instances in the batch.
     #[must_use]
     pub fn len(&self) -> usize {
         self.instances.len()
     }
 
-    /// Returns `true` if the batch is empty.
+    /// Returns `true` if the batch is empty (no finalized instances).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.instances.is_empty()
@@ -376,5 +422,69 @@ mod tests {
         assert_eq!(instance.size, [10.0, 15.0]);
         assert_eq!(instance.uv_rect, uv_rect);
         assert!((instance.opacity_pad[0] - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn finalize_uvs_normalizes_correctly() {
+        use crate::scene::{BoundingBox, SceneNodeKind};
+        use selean_common::types::NodeId;
+
+        let mut batch = TextBatch::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "A".to_string(),
+                font_size: 16.0,
+            },
+            BoundingBox::new(10.0, 20.0, 100.0, 30.0),
+        );
+
+        // Simulate adding a pending glyph with a pixel-space region.
+        let mut cache = GlyphCache::new();
+        let key = GlyphCacheKey {
+            glyph_id: 42,
+            sdf_size: 48,
+        };
+        cache.insert(
+            key,
+            super::super::cache::CachedGlyph {
+                atlas_region: AtlasRegion {
+                    x: 100,
+                    y: 200,
+                    width: 48,
+                    height: 48,
+                },
+                bearing_x: 2.0,
+                bearing_y: 40.0,
+                glyph_width_funits: 600,
+                glyph_height_funits: 800,
+            },
+        );
+
+        let positioned = vec![PositionedGlyph {
+            glyph_id: 42,
+            x: 15.0,
+            y: 25.0,
+            width: 10.0,
+            height: 12.0,
+        }];
+
+        batch.push_text_node(&node, &positioned, &cache, 48);
+
+        // Before finalization, instances should be empty.
+        assert!(batch.is_empty());
+
+        // Finalize with atlas size 1024x1024.
+        batch.finalize_uvs(1024, 1024);
+        assert_eq!(batch.len(), 1);
+
+        let instance = &batch.instances[0];
+        assert_eq!(instance.pos, [15.0, 25.0]);
+        // UVs should be normalized: 100/1024, 200/1024, 148/1024, 248/1024
+        assert!((instance.uv_rect[0] - 100.0 / 1024.0).abs() < f32::EPSILON);
+        assert!((instance.uv_rect[1] - 200.0 / 1024.0).abs() < f32::EPSILON);
+        assert!((instance.uv_rect[2] - 148.0 / 1024.0).abs() < f32::EPSILON);
+        assert!((instance.uv_rect[3] - 248.0 / 1024.0).abs() < f32::EPSILON);
     }
 }

@@ -9,6 +9,10 @@ mod pipeline;
 mod quad;
 mod rect_pipeline;
 mod shared;
+/// Generic texture atlas parameterized by channel count.
+pub mod texture_atlas;
+/// Textured quad pipeline shared by image and vector rendering.
+pub mod textured_quad;
 
 pub use camera::{Camera, CameraUniform};
 pub use gpu::{GpuContext, GpuContextDescriptor};
@@ -16,3 +20,5 @@ pub use pipeline::{FrameStats, Renderer, RendererDescriptor};
 pub use quad::{QUAD_INDICES, QUAD_VERTICES, QuadVertex};
 pub use rect_pipeline::{RectBatch, RectInstance, RectPipeline};
 pub use shared::{PersistentInstanceBuffer, SharedPipelineResources};
+pub use texture_atlas::{AtlasRegion, GlyphAtlas, ImageAtlas, TextureAtlas};
+pub use textured_quad::{TexturedQuadBatch, TexturedQuadInstance, TexturedQuadPipeline};

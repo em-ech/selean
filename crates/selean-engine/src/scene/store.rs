@@ -417,6 +417,42 @@ impl SceneGraph {
         })
     }
 
+    /// Updates the path data of a Vector node.
+    ///
+    /// Marks the node with `DIRTY_STYLE`.
+    /// Returns `false` if the node doesn't exist or is not a Vector node.
+    pub fn set_path_data(&mut self, id: NodeId, new_path_data: String) -> bool {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
+            if let SceneNodeKind::Vector {
+                path_data: ref mut pd,
+            } = node.kind
+            {
+                *pd = new_path_data;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the asset reference of an Image node.
+    ///
+    /// Marks the node with `DIRTY_STYLE`.
+    /// Returns `false` if the node doesn't exist or is not an Image node.
+    pub fn set_asset_ref(&mut self, id: NodeId, new_asset_ref: String) -> bool {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
+            if let SceneNodeKind::Image {
+                asset_ref: ref mut ar,
+            } = node.kind
+            {
+                *ar = new_asset_ref;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
     // --- Render order ---
 
     /// Returns visible nodes for rendering, sorted in back-to-front render order.
@@ -1137,6 +1173,138 @@ mod tests {
         assert!(
             graph.get(id).expect("exists").dirty.is_clean(),
             "non-text node should not be dirtied"
+        );
+    }
+
+    // --- Image/Vector node mutations ---
+
+    #[test]
+    fn set_path_data_updates_vector_node() {
+        let mut graph = SceneGraph::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Icon".to_string(),
+            SceneNodeKind::Vector {
+                path_data: "M 0 0 L 10 10".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 24.0, 24.0),
+        );
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_path_data(id, "M 0 0 L 20 20".to_string()));
+
+        let node = graph.get(id).expect("node should exist");
+        if let SceneNodeKind::Vector { path_data } = &node.kind {
+            assert_eq!(path_data, "M 0 0 L 20 20");
+        } else {
+            panic!("expected Vector node");
+        }
+        assert!(node.dirty.contains(DirtyFlags::STYLE));
+    }
+
+    #[test]
+    fn set_path_data_on_frame_returns_false() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Rect", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(!graph.set_path_data(id, "M 0 0 L 10 10".to_string()));
+        assert!(graph.get(id).expect("exists").dirty.is_clean());
+    }
+
+    #[test]
+    fn set_path_data_propagates_dirty() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 400.0, 400.0);
+        let parent_id = graph.add_root(parent);
+
+        let vector_node = SceneNode::new(
+            NodeId::new(),
+            "Icon".to_string(),
+            SceneNodeKind::Vector {
+                path_data: "M 0 0 L 10 10".to_string(),
+            },
+            BoundingBox::new(10.0, 10.0, 24.0, 24.0),
+        );
+        let vector_id = vector_node.id;
+        graph.add_child(parent_id, vector_node);
+        graph.clear_all_dirty();
+
+        graph.set_path_data(vector_id, "M 0 0 L 20 20".to_string());
+
+        assert!(
+            graph
+                .get(parent_id)
+                .expect("parent")
+                .dirty
+                .contains(DirtyFlags::CHILDREN),
+        );
+    }
+
+    #[test]
+    fn set_asset_ref_updates_image_node() {
+        let mut graph = SceneGraph::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Photo".to_string(),
+            SceneNodeKind::Image {
+                asset_ref: "old.png".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_asset_ref(id, "new.png".to_string()));
+
+        let node = graph.get(id).expect("node should exist");
+        if let SceneNodeKind::Image { asset_ref } = &node.kind {
+            assert_eq!(asset_ref, "new.png");
+        } else {
+            panic!("expected Image node");
+        }
+        assert!(node.dirty.contains(DirtyFlags::STYLE));
+    }
+
+    #[test]
+    fn set_asset_ref_on_frame_returns_false() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Rect", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(!graph.set_asset_ref(id, "img.png".to_string()));
+        assert!(graph.get(id).expect("exists").dirty.is_clean());
+    }
+
+    #[test]
+    fn set_asset_ref_propagates_dirty() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 400.0, 400.0);
+        let parent_id = graph.add_root(parent);
+
+        let image_node = SceneNode::new(
+            NodeId::new(),
+            "Photo".to_string(),
+            SceneNodeKind::Image {
+                asset_ref: "old.png".to_string(),
+            },
+            BoundingBox::new(10.0, 10.0, 100.0, 100.0),
+        );
+        let image_id = image_node.id;
+        graph.add_child(parent_id, image_node);
+        graph.clear_all_dirty();
+
+        graph.set_asset_ref(image_id, "new.png".to_string());
+
+        assert!(
+            graph
+                .get(parent_id)
+                .expect("parent")
+                .dirty
+                .contains(DirtyFlags::CHILDREN),
         );
     }
 

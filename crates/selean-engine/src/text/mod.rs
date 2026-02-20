@@ -13,6 +13,7 @@ pub mod sdf;
 pub mod shaper;
 
 pub use atlas::{AtlasRegion, GlyphAtlas};
+pub use packer::{PackResult, ShelfPacker};
 pub use cache::{CachedGlyph, GlyphCache, GlyphCacheKey};
 pub use font::FontData;
 pub use layout::{PositionedGlyph, TextLayout, layout_text};
@@ -172,13 +173,10 @@ impl TextSystem {
             TextCacheAction::FullHit => {
                 // Fast path: reuse cached layout, just push instances to batch.
                 if let Some(cached) = self.node_text_cache.get(&node.id) {
-                    let (atlas_w, atlas_h) = self.atlas.dimensions();
                     batch.push_text_node(
                         node,
                         &cached.layout.glyphs,
                         &self.cache,
-                        atlas_w,
-                        atlas_h,
                         sdf_size,
                     );
                 }
@@ -199,13 +197,10 @@ impl TextSystem {
                     return Ok(());
                 };
 
-                let (atlas_w, atlas_h) = self.atlas.dimensions();
                 batch.push_text_node(
                     node,
                     &layout.glyphs,
                     &self.cache,
-                    atlas_w,
-                    atlas_h,
                     sdf_size,
                 );
 
@@ -234,13 +229,10 @@ impl TextSystem {
                     sdf_size,
                 );
 
-                let (atlas_w, atlas_h) = self.atlas.dimensions();
                 batch.push_text_node(
                     node,
                     &layout.glyphs,
                     &self.cache,
-                    atlas_w,
-                    atlas_h,
                     sdf_size,
                 );
 
