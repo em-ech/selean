@@ -7,7 +7,9 @@
 mod dirty;
 mod node;
 mod store;
+pub mod transform;
 
 pub use dirty::DirtyFlags;
-pub use node::{BoundingBox, Color, SceneNode, SceneNodeKind};
+pub use node::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind};
 pub use store::SceneGraph;
+pub use transform::{Transform2D, TransformColumns};

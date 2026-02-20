@@ -15,7 +15,9 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 
 use selean_common::types::NodeId;
-use selean_engine::scene::{BoundingBox, Color, SceneGraph, SceneNode, SceneNodeKind};
+use selean_engine::scene::{
+    BlendMode, BoundingBox, Color, SceneGraph, SceneNode, SceneNodeKind, Transform2D,
+};
 
 /// Distribution of node types in the synthetic scene.
 #[derive(Debug, Clone, Copy)]
@@ -59,6 +61,10 @@ pub struct SceneConfig {
     pub canvas_height: f32,
     /// Maximum nesting depth for groups.
     pub max_depth: u32,
+    /// Fraction of leaf nodes that get a random rotation/scale transform (0.0–1.0).
+    pub transform_fraction: f32,
+    /// Fraction of leaf nodes that use `BlendMode::Add` instead of `Normal` (0.0–1.0).
+    pub add_blend_fraction: f32,
 }
 
 impl Default for SceneConfig {
@@ -70,6 +76,8 @@ impl Default for SceneConfig {
             canvas_width: 10_000.0,
             canvas_height: 10_000.0,
             max_depth: 4,
+            transform_fraction: 0.2,
+            add_blend_fraction: 0.05,
         }
     }
 }
@@ -201,6 +209,23 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
             node.stroke_width = rng.gen_range(1.0_f32..4.0);
         }
 
+        // Apply random transform to a fraction of nodes.
+        if config.transform_fraction > 0.0 && rng.gen_bool(f64::from(config.transform_fraction)) {
+            let angle = rng.gen_range(-std::f32::consts::FRAC_PI_4..std::f32::consts::FRAC_PI_4);
+            let scale = rng.gen_range(0.5_f32..2.0);
+            let cx = bounds.x + bounds.width * 0.5;
+            let cy = bounds.y + bounds.height * 0.5;
+            node.local_transform = Transform2D::from_rotation_around(angle, cx, cy)
+                .compose(&Transform2D::scale(scale, scale));
+        }
+
+        // Apply Add blend mode to a small fraction of nodes.
+        if config.add_blend_fraction > 0.0
+            && rng.gen_bool(f64::from(config.add_blend_fraction))
+        {
+            node.blend_mode = BlendMode::Add;
+        }
+
         // 80% of leaves go into a group, 20% are root-level.
         if !group_ids.is_empty() && rng.gen_bool(0.8) {
             let group_idx = rng.gen_range(0..group_ids.len());
@@ -210,6 +235,9 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
             graph.add_root(node);
         }
     }
+
+    // Recompute world transforms before clearing dirty flags.
+    graph.recompute_world_transforms();
 
     // Clear dirty flags so benchmarks start from a clean state.
     graph.clear_all_dirty();

@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use selean_common::types::NodeId;
 
 use super::dirty::DirtyFlags;
-use super::node::{BoundingBox, Color, SceneNode, SceneNodeKind};
+use super::node::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind};
+use super::transform::Transform2D;
 use crate::spatial::SpatialIndex;
 
 /// The central scene graph store.
@@ -34,6 +35,8 @@ pub struct SceneGraph {
     z_indices: HashMap<NodeId, u32>,
     /// Whether the z-index map needs recomputation.
     z_dirty: bool,
+    /// Whether any node has a dirty `TRANSFORM` flag (gates world transform recomputation).
+    has_any_transform_dirty: bool,
     /// Reusable buffer for viewport query results, avoiding per-frame allocation.
     visible_ids_buf: Vec<NodeId>,
 }
@@ -48,6 +51,7 @@ impl SceneGraph {
             roots: Vec::new(),
             z_indices: HashMap::new(),
             z_dirty: false,
+            has_any_transform_dirty: false,
             visible_ids_buf: Vec::new(),
         }
     }
@@ -139,7 +143,9 @@ impl SceneGraph {
     /// If a node with the same ID already exists, it is replaced.
     pub fn add_root(&mut self, node: SceneNode) -> NodeId {
         let id = node.id;
-        self.spatial.insert_node(id, &node.bounds);
+        // Root nodes have world_transform == local_transform (no parent).
+        let world_aabb = node.world_transform.transform_aabb(&node.bounds);
+        self.spatial.insert_node(id, &world_aabb);
         self.nodes.insert(id, node);
         self.roots.push(id);
         self.z_dirty = true;
@@ -162,6 +168,8 @@ impl SceneGraph {
         let child_id = child.id;
         child.parent = Some(parent_id);
 
+        // Insert with identity AABB for now; propagate_transform_dirty_down
+        // will cause recompute_world_transforms to fix it.
         self.spatial.insert_node(child_id, &child.bounds);
         self.nodes.insert(child_id, child);
 
@@ -170,6 +178,8 @@ impl SceneGraph {
             parent.children.push(child_id);
         }
 
+        // The child's world transform depends on the new parent.
+        self.propagate_transform_dirty_down(child_id);
         self.propagate_dirty_up(parent_id, DirtyFlags::CHILDREN);
         self.z_dirty = true;
         true
@@ -258,6 +268,8 @@ impl SceneGraph {
             parent.children.push(node_id);
         }
 
+        // New parent means new world transform for the reparented node and its descendants.
+        self.propagate_transform_dirty_down(node_id);
         self.propagate_dirty_up(new_parent_id, DirtyFlags::CHILDREN);
         self.z_dirty = true;
         true
@@ -299,15 +311,21 @@ impl SceneGraph {
 
     /// Updates a node's bounding box.
     ///
-    /// Syncs the spatial index and marks the node with `DIRTY_GEOMETRY`.
-    /// Returns `false` if the node doesn't exist.
+    /// Syncs the spatial index (using the cached world transform for AABB) and
+    /// marks the node with `DIRTY_GEOMETRY`. Returns `false` if the node doesn't exist.
     pub fn set_bounds(&mut self, id: NodeId, bounds: BoundingBox) -> bool {
         let found = self.mutate_node(id, DirtyFlags::GEOMETRY, |node| {
             node.bounds = bounds;
             true
         });
         if found {
-            self.spatial.update_node(id, &bounds);
+            // Use the cached world transform to compute the spatial AABB.
+            // If the transform is also dirty this frame, recompute_world_transforms()
+            // will correct the spatial AABB during the prepare phase.
+            if let Some(node) = self.nodes.get(&id) {
+                let world_aabb = node.world_transform.transform_aabb(&bounds);
+                self.spatial.update_node(id, &world_aabb);
+            }
         }
         found
     }
@@ -453,6 +471,142 @@ impl SceneGraph {
         })
     }
 
+    // --- Transform mutations ---
+
+    /// Sets the local transform for a node.
+    ///
+    /// Marks the node and all descendants with `TRANSFORM` dirty.
+    /// The world transform is recomputed lazily during the prepare phase.
+    /// Returns `false` if the node doesn't exist.
+    pub fn set_transform(&mut self, id: NodeId, transform: Transform2D) -> bool {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.local_transform = transform;
+            node.dirty |= DirtyFlags::TRANSFORM;
+        } else {
+            return false;
+        }
+
+        self.propagate_transform_dirty_down(id);
+        self.propagate_dirty_up_from_child(id);
+        true
+    }
+
+    /// Sets the local transform to a pure rotation around the node's center.
+    ///
+    /// This **replaces** the entire local transform (it does not compose with
+    /// any existing scale or skew). Use [`set_transform`] for composed transforms.
+    ///
+    /// Returns `false` if the node doesn't exist.
+    pub fn set_rotation(&mut self, id: NodeId, angle_rad: f32) -> bool {
+        let Some(node) = self.nodes.get(&id) else {
+            return false;
+        };
+        let cx = node.bounds.x + node.bounds.width * 0.5;
+        let cy = node.bounds.y + node.bounds.height * 0.5;
+        let transform = Transform2D::from_rotation_around(angle_rad, cx, cy);
+        self.set_transform(id, transform)
+    }
+
+    /// Sets the local transform to a pure scale around the node's center.
+    ///
+    /// This **replaces** the entire local transform (it does not compose with
+    /// any existing rotation or skew). Use [`set_transform`] for composed transforms.
+    ///
+    /// Returns `false` if the node doesn't exist.
+    pub fn set_scale(&mut self, id: NodeId, sx: f32, sy: f32) -> bool {
+        let Some(node) = self.nodes.get(&id) else {
+            return false;
+        };
+        let cx = node.bounds.x + node.bounds.width * 0.5;
+        let cy = node.bounds.y + node.bounds.height * 0.5;
+        let transform = Transform2D::from_scale_around(sx, sy, cx, cy);
+        self.set_transform(id, transform)
+    }
+
+    /// Sets the blend mode for a node.
+    ///
+    /// Marks the node with `STYLE` dirty.
+    /// Returns `false` if the node doesn't exist.
+    pub fn set_blend_mode(&mut self, id: NodeId, mode: BlendMode) -> bool {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
+            node.blend_mode = mode;
+            true
+        })
+    }
+
+    // --- World transform recomputation ---
+
+    /// Recomputes world transforms for all dirty nodes.
+    ///
+    /// Walks the full tree (DFS from all roots), only recomputing nodes that
+    /// have the `TRANSFORM` dirty flag set. Gated by `has_any_transform_dirty`
+    /// so zero-cost on frames with no transform changes.
+    ///
+    /// After recomputation, the spatial index AABBs are updated to reflect
+    /// the new world-space bounds. Call this at the start of the prepare phase.
+    pub fn recompute_world_transforms(&mut self) {
+        if !self.has_any_transform_dirty {
+            return;
+        }
+
+        let roots: Vec<NodeId> = self.roots.clone();
+        for &root_id in &roots {
+            self.recompute_world_transform_recursive(root_id, Transform2D::identity());
+        }
+
+        self.has_any_transform_dirty = false;
+    }
+
+    // --- Hit testing ---
+
+    /// Returns node IDs at the given point, sorted front-to-back (topmost first).
+    ///
+    /// Uses the R-tree spatial index for broad-phase AABB filtering, then
+    /// inverse-transforms the point into each node's local space for precise
+    /// narrow-phase checking. Invisible nodes are excluded.
+    ///
+    /// Ensure z-indices are up-to-date before calling (e.g., via `visible_nodes_sorted`
+    /// or after any tree structure changes).
+    #[must_use]
+    pub fn hit_test(&mut self, x: f32, y: f32) -> Vec<NodeId> {
+        // Ensure z-indices are up to date.
+        if self.z_dirty {
+            self.recompute_z_indices();
+        }
+
+        let candidates = self.spatial.query_point(x, y);
+        let mut hits: Vec<NodeId> = candidates
+            .into_iter()
+            .filter(|&id| {
+                let Some(node) = self.nodes.get(&id) else {
+                    return false;
+                };
+
+                // Skip invisible nodes.
+                if !node.visible {
+                    return false;
+                }
+
+                // Inverse-transform the click point into local space.
+                let Some(inv) = node.world_transform.inverse() else {
+                    // Non-invertible transform (zero-scale) — cannot be hit.
+                    return false;
+                };
+                let (lx, ly) = inv.transform_point(x, y);
+                node.bounds.contains_point(lx, ly)
+            })
+            .collect();
+
+        // Sort front-to-back (highest z-index first).
+        hits.sort_by(|a, b| {
+            let za = self.z_indices.get(a).copied().unwrap_or(0);
+            let zb = self.z_indices.get(b).copied().unwrap_or(0);
+            zb.cmp(&za)
+        });
+
+        hits
+    }
+
     // --- Render order ---
 
     /// Returns visible nodes for rendering, sorted in back-to-front render order.
@@ -576,7 +730,10 @@ impl SceneGraph {
         let entries: Vec<_> = self
             .nodes
             .values()
-            .map(|n| crate::spatial::SpatialEntry::new(n.id, &n.bounds))
+            .map(|n| {
+                let world_aabb = n.world_transform.transform_aabb(&n.bounds);
+                crate::spatial::SpatialEntry::new(n.id, &world_aabb)
+            })
             .collect();
         self.spatial = SI::bulk_load(entries);
     }
@@ -635,6 +792,61 @@ impl SceneGraph {
     fn propagate_dirty_up_from_child(&mut self, child_id: NodeId) {
         if let Some(parent_id) = self.parent(child_id) {
             self.propagate_dirty_up(parent_id, DirtyFlags::CHILDREN);
+        }
+    }
+
+    /// Marks a node and all its descendants with `TRANSFORM` dirty.
+    ///
+    /// Uses the clone-children-per-level pattern to avoid borrow conflicts.
+    fn propagate_transform_dirty_down(&mut self, id: NodeId) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.dirty |= DirtyFlags::TRANSFORM;
+        }
+        self.has_any_transform_dirty = true;
+
+        let children = self
+            .nodes
+            .get(&id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+        for child_id in children {
+            self.propagate_transform_dirty_down(child_id);
+        }
+    }
+
+    /// Recursively recomputes world transforms for dirty nodes.
+    ///
+    /// Always recurses into children (they may be dirty even if the parent isn't).
+    /// Only recomputes nodes that have the `TRANSFORM` flag set.
+    fn recompute_world_transform_recursive(
+        &mut self,
+        id: NodeId,
+        parent_world: Transform2D,
+    ) {
+        // Compute new world transform and collect data needed for spatial update.
+        let (world_transform, children, spatial_update) = {
+            let Some(node) = self.nodes.get_mut(&id) else {
+                return;
+            };
+
+            if node.dirty.contains(DirtyFlags::TRANSFORM) {
+                node.world_transform = parent_world.compose(&node.local_transform);
+                let world_aabb = node.world_transform.transform_aabb(&node.bounds);
+                let wt = node.world_transform;
+                node.dirty = node.dirty.without(DirtyFlags::TRANSFORM);
+                (wt, node.children.clone(), Some(world_aabb))
+            } else {
+                (node.world_transform, node.children.clone(), None)
+            }
+        };
+
+        // Update spatial index outside the nodes borrow.
+        if let Some(world_aabb) = spatial_update {
+            self.spatial.update_node(id, &world_aabb);
+        }
+
+        for child_id in children {
+            self.recompute_world_transform_recursive(child_id, world_transform);
         }
     }
 
@@ -1662,6 +1874,356 @@ mod tests {
         let debug = format!("{graph:?}");
         assert!(debug.contains("SceneGraph"));
         assert!(debug.contains("nodes"));
+    }
+
+    // --- Transform mutations ---
+
+    #[test]
+    fn set_transform_marks_node_dirty() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        graph.set_transform(id, Transform2D::rotation(0.5));
+        let node = graph.get(id).expect("exists");
+        assert!(node.dirty.contains(DirtyFlags::TRANSFORM));
+    }
+
+    #[test]
+    fn set_transform_on_nonexistent_returns_false() {
+        let mut graph = SceneGraph::new();
+        assert!(!graph.set_transform(NodeId::new(), Transform2D::identity()));
+    }
+
+    #[test]
+    fn set_transform_propagates_to_descendants() {
+        let mut graph = SceneGraph::new();
+        let root = frame_node("Root", 0.0, 0.0, 500.0, 500.0);
+        let root_id = graph.add_root(root);
+        let child = frame_node("Child", 10.0, 10.0, 100.0, 100.0);
+        let child_id = child.id;
+        graph.add_child(root_id, child);
+        let gc = frame_node("GC", 20.0, 20.0, 50.0, 50.0);
+        let gc_id = gc.id;
+        graph.add_child(child_id, gc);
+        graph.clear_all_dirty();
+
+        // Set transform on root — child and grandchild should be dirty.
+        graph.set_transform(root_id, Transform2D::rotation(0.5));
+        assert!(
+            graph
+                .get(child_id)
+                .expect("child")
+                .dirty
+                .contains(DirtyFlags::TRANSFORM)
+        );
+        assert!(
+            graph
+                .get(gc_id)
+                .expect("gc")
+                .dirty
+                .contains(DirtyFlags::TRANSFORM)
+        );
+    }
+
+    #[test]
+    fn set_rotation_replaces_transform() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_rotation(id, std::f32::consts::FRAC_PI_4));
+
+        let node = graph.get(id).expect("exists");
+        assert!(!node.local_transform.is_identity());
+        assert!(node.dirty.contains(DirtyFlags::TRANSFORM));
+    }
+
+    #[test]
+    fn set_rotation_on_nonexistent_returns_false() {
+        let mut graph = SceneGraph::new();
+        assert!(!graph.set_rotation(NodeId::new(), 0.5));
+    }
+
+    #[test]
+    fn set_scale_replaces_transform() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_scale(id, 2.0, 3.0));
+
+        let node = graph.get(id).expect("exists");
+        assert!(!node.local_transform.is_identity());
+        assert!(node.dirty.contains(DirtyFlags::TRANSFORM));
+    }
+
+    #[test]
+    fn set_scale_on_nonexistent_returns_false() {
+        let mut graph = SceneGraph::new();
+        assert!(!graph.set_scale(NodeId::new(), 1.0, 1.0));
+    }
+
+    #[test]
+    fn set_blend_mode_marks_style_dirty() {
+        use crate::scene::BlendMode;
+
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_blend_mode(id, BlendMode::Add));
+        let node = graph.get(id).expect("exists");
+        assert_eq!(node.blend_mode, BlendMode::Add);
+        assert!(node.dirty.contains(DirtyFlags::STYLE));
+    }
+
+    #[test]
+    fn set_blend_mode_on_nonexistent_returns_false() {
+        use crate::scene::BlendMode;
+        let mut graph = SceneGraph::new();
+        assert!(!graph.set_blend_mode(NodeId::new(), BlendMode::Add));
+    }
+
+    // --- World transform recomputation ---
+
+    #[test]
+    fn recompute_world_transforms_root_only() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 10.0, 20.0, 100.0, 50.0);
+        let id = graph.add_root(node);
+
+        graph.set_transform(id, Transform2D::translation(100.0, 200.0));
+        graph.recompute_world_transforms();
+
+        let node = graph.get(id).expect("exists");
+        assert!(!node.dirty.contains(DirtyFlags::TRANSFORM));
+        // World = identity (no parent) * translation(100, 200) = translation(100, 200)
+        let (x, y) = node.world_transform.transform_point(0.0, 0.0);
+        assert!((x - 100.0).abs() < 1e-5);
+        assert!((y - 200.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn recompute_world_transforms_parent_child() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+        let child = frame_node("Child", 10.0, 10.0, 50.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        graph.set_transform(parent_id, Transform2D::translation(100.0, 0.0));
+        graph.recompute_world_transforms();
+
+        // Child world = parent_world * child_local = translate(100,0) * identity
+        let child_node = graph.get(child_id).expect("child");
+        let (x, y) = child_node.world_transform.transform_point(0.0, 0.0);
+        assert!((x - 100.0).abs() < 1e-5);
+        assert!((y - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn recompute_world_transforms_cascades_parent_child() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+        let child = frame_node("Child", 10.0, 10.0, 50.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        // Set transforms on both parent and child.
+        graph.set_transform(parent_id, Transform2D::translation(100.0, 0.0));
+        graph.set_transform(child_id, Transform2D::translation(0.0, 50.0));
+        graph.recompute_world_transforms();
+
+        // Child world = parent_world * child_local = translate(100,0) * translate(0,50)
+        let child_node = graph.get(child_id).expect("child");
+        let (x, y) = child_node.world_transform.transform_point(0.0, 0.0);
+        assert!((x - 100.0).abs() < 1e-5);
+        assert!((y - 50.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn recompute_noop_on_clean_graph() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        graph.add_root(node);
+        graph.clear_all_dirty();
+        // This should be a no-op and not panic.
+        graph.recompute_world_transforms();
+    }
+
+    // --- Hit testing ---
+
+    #[test]
+    fn hit_test_unrotated_rect() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 100.0, 100.0, 50.0, 50.0);
+        let id = graph.add_root(node);
+        graph.recompute_world_transforms();
+
+        // Hit at center.
+        let hits = graph.hit_test(125.0, 125.0);
+        assert_eq!(hits, vec![id]);
+
+        // Miss outside.
+        let hits = graph.hit_test(200.0, 200.0);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn hit_test_translated_rect() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 50.0, 50.0);
+        let id = graph.add_root(node);
+
+        graph.set_transform(id, Transform2D::translation(100.0, 100.0));
+        graph.recompute_world_transforms();
+
+        // Original location should miss.
+        let hits = graph.hit_test(25.0, 25.0);
+        assert!(hits.is_empty());
+
+        // Translated location should hit.
+        let hits = graph.hit_test(125.0, 125.0);
+        assert_eq!(hits, vec![id]);
+    }
+
+    #[test]
+    fn hit_test_rotated_rect() {
+        let mut graph = SceneGraph::new();
+        // 100x100 rect at (0, 0).
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        // Rotate 45 degrees around center (50, 50).
+        graph.set_rotation(id, std::f32::consts::FRAC_PI_4);
+        graph.recompute_world_transforms();
+
+        // Center should always hit.
+        let hits = graph.hit_test(50.0, 50.0);
+        assert_eq!(hits, vec![id]);
+    }
+
+    #[test]
+    fn hit_test_skips_invisible() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.set_visible(id, false);
+        graph.recompute_world_transforms();
+
+        let hits = graph.hit_test(50.0, 50.0);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn hit_test_skips_zero_scale() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        graph.set_transform(id, Transform2D::scale(0.0, 0.0));
+        graph.recompute_world_transforms();
+
+        let hits = graph.hit_test(50.0, 50.0);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn hit_test_front_to_back_order() {
+        let mut graph = SceneGraph::new();
+        graph.spatial_mut().set_overscan(0.0);
+
+        let back = frame_node("Back", 0.0, 0.0, 100.0, 100.0);
+        let back_id = graph.add_root(back);
+        let front = frame_node("Front", 0.0, 0.0, 100.0, 100.0);
+        let front_id = graph.add_root(front);
+        graph.recompute_world_transforms();
+
+        let hits = graph.hit_test(50.0, 50.0);
+        assert_eq!(hits.len(), 2);
+        // Front (higher z-index) should come first.
+        assert_eq!(hits[0], front_id);
+        assert_eq!(hits[1], back_id);
+    }
+
+    // --- add_child / reparent transform dirty propagation (Issue 10) ---
+
+    #[test]
+    fn add_child_marks_child_transform_dirty() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+        graph.clear_all_dirty();
+
+        let child = frame_node("Child", 10.0, 10.0, 50.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        let child_node = graph.get(child_id).expect("child");
+        assert!(
+            child_node.dirty.contains(DirtyFlags::TRANSFORM),
+            "newly added child should have TRANSFORM dirty"
+        );
+    }
+
+    #[test]
+    fn reparent_marks_node_and_descendants_transform_dirty() {
+        let mut graph = SceneGraph::new();
+        let parent_a = frame_node("ParentA", 0.0, 0.0, 200.0, 200.0);
+        let parent_a_id = graph.add_root(parent_a);
+        let parent_b = frame_node("ParentB", 300.0, 0.0, 200.0, 200.0);
+        let parent_b_id = graph.add_root(parent_b);
+
+        let child = frame_node("Child", 10.0, 10.0, 100.0, 100.0);
+        let child_id = child.id;
+        graph.add_child(parent_a_id, child);
+        let gc = frame_node("GC", 20.0, 20.0, 30.0, 30.0);
+        let gc_id = gc.id;
+        graph.add_child(child_id, gc);
+
+        graph.clear_all_dirty();
+
+        // Reparent child (with grandchild) to parent_b.
+        graph.reparent(child_id, parent_b_id);
+
+        let child_node = graph.get(child_id).expect("child");
+        assert!(
+            child_node.dirty.contains(DirtyFlags::TRANSFORM),
+            "reparented child should have TRANSFORM dirty"
+        );
+        let gc_node = graph.get(gc_id).expect("gc");
+        assert!(
+            gc_node.dirty.contains(DirtyFlags::TRANSFORM),
+            "reparented grandchild should have TRANSFORM dirty"
+        );
+    }
+
+    #[test]
+    fn reparent_same_parent_does_not_dirty_transform() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+        let child = frame_node("Child", 10.0, 10.0, 50.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        graph.clear_all_dirty();
+
+        // Reparent to same parent — should be a no-op.
+        graph.reparent(child_id, parent_id);
+
+        let child_node = graph.get(child_id).expect("child");
+        assert!(
+            !child_node.dirty.contains(DirtyFlags::TRANSFORM),
+            "same-parent reparent should not dirty TRANSFORM"
+        );
     }
 
     // --- Proptest: SceneGraph + SpatialIndex consistency ---

@@ -29,9 +29,9 @@ var atlas_sampler: sampler;
 // --- Instance data ---
 
 struct QuadInstance {
-    // Quad position (top-left corner) in world space.
+    // Quad position (top-left corner) in local space.
     @location(2) pos: vec2<f32>,
-    // Quad size (width, height) in world space.
+    // Quad size (width, height) in local space.
     @location(3) size: vec2<f32>,
     // UV rectangle in the atlas: [u_min, v_min, u_max, v_max].
     @location(4) uv_rect: vec4<f32>,
@@ -39,6 +39,10 @@ struct QuadInstance {
     @location(5) tint_color: vec4<f32>,
     // x: opacity, yzw: unused.
     @location(6) opacity_pad: vec4<f32>,
+    // 2D affine transform columns (world_transform).
+    @location(7) transform_c0: vec2<f32>,
+    @location(8) transform_c1: vec2<f32>,
+    @location(9) transform_c2: vec2<f32>,
 };
 
 // --- Vertex input/output ---
@@ -66,8 +70,14 @@ struct VertexOutput {
 fn vs_main(vert: VertexInput, inst: QuadInstance) -> VertexOutput {
     var out: VertexOutput;
 
-    // Scale and translate the unit quad to the instance's world-space rectangle.
-    let world_pos = inst.pos + vert.quad_pos * inst.size;
+    // Compute position in local (node) space.
+    let local_pos = inst.pos + vert.quad_pos * inst.size;
+
+    // Apply 2D affine transform to get world position.
+    let world_pos = vec2<f32>(
+        inst.transform_c0.x * local_pos.x + inst.transform_c1.x * local_pos.y + inst.transform_c2.x,
+        inst.transform_c0.y * local_pos.x + inst.transform_c1.y * local_pos.y + inst.transform_c2.y,
+    );
     out.clip_pos = camera.view_proj * vec4<f32>(world_pos, 0.0, 1.0);
 
     // Interpolate UV within the atlas region.

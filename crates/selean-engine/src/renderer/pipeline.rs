@@ -150,13 +150,13 @@ impl Renderer {
 
         // Initial capacity: ~256 instances each (reasonable for typical scenes).
         let rect_instance_buf =
-            PersistentInstanceBuffer::new(&gpu.device, "rect_instance_buffer", 256 * 72);
+            PersistentInstanceBuffer::new(&gpu.device, "rect_instance_buffer", 256 * 96);
         let text_instance_buf =
-            PersistentInstanceBuffer::new(&gpu.device, "glyph_instance_buffer", 256 * 64);
+            PersistentInstanceBuffer::new(&gpu.device, "glyph_instance_buffer", 256 * 88);
         let image_instance_buf =
-            PersistentInstanceBuffer::new(&gpu.device, "image_instance_buffer", 256 * 64);
+            PersistentInstanceBuffer::new(&gpu.device, "image_instance_buffer", 256 * 88);
         let vector_instance_buf =
-            PersistentInstanceBuffer::new(&gpu.device, "vector_instance_buffer", 256 * 64);
+            PersistentInstanceBuffer::new(&gpu.device, "vector_instance_buffer", 256 * 88);
 
         Ok(Self {
             gpu,
@@ -305,6 +305,9 @@ impl Renderer {
 
         let (glyph_atlas_w, glyph_atlas_h) = self.text_system.atlas().dimensions();
         self.text_batch.finalize_uvs(glyph_atlas_w, glyph_atlas_h);
+
+        // Finalize blend mode partitioning for rect batch (text/image/vector do it in finalize_uvs).
+        self.rect_batch.finalize_blend();
 
         // Upload the camera uniform once (shared by all pipelines).
         let camera_uniform = self.camera.build_uniform();

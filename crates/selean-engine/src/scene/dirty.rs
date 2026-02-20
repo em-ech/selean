@@ -28,8 +28,11 @@ impl DirtyFlags {
     pub const TEXT: Self = Self(0b0001_0000);
     /// Shadow, blur, or other effects changed — compositing pass affected.
     pub const EFFECTS: Self = Self(0b0010_0000);
+    /// Local transform changed — world transform needs recomputation.
+    /// Propagates *downward* to all descendants (unlike `CHILDREN` which goes up).
+    pub const TRANSFORM: Self = Self(0b0100_0000);
     /// All flags set — used when a node is newly created.
-    pub const ALL: Self = Self(0b0011_1111);
+    pub const ALL: Self = Self(0b0111_1111);
 
     /// Returns `true` if no dirty flags are set.
     #[must_use]
@@ -109,6 +112,7 @@ impl fmt::Debug for DirtyFlags {
             (Self::LAYOUT, "LAYOUT"),
             (Self::TEXT, "TEXT"),
             (Self::EFFECTS, "EFFECTS"),
+            (Self::TRANSFORM, "TRANSFORM"),
         ];
 
         for (flag, name) in flags {
@@ -217,6 +221,7 @@ mod tests {
         assert!(DirtyFlags::ALL.contains(DirtyFlags::LAYOUT));
         assert!(DirtyFlags::ALL.contains(DirtyFlags::TEXT));
         assert!(DirtyFlags::ALL.contains(DirtyFlags::EFFECTS));
+        assert!(DirtyFlags::ALL.contains(DirtyFlags::TRANSFORM));
     }
 
     #[test]

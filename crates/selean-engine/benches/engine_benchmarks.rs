@@ -17,7 +17,7 @@ use rand::rngs::StdRng;
 use selean_common::types::NodeId;
 use selean_engine::image::{decode_image, decode_image_resized};
 use selean_engine::renderer::{RectBatch, TexturedQuadBatch};
-use selean_engine::scene::{BoundingBox, Color, SceneNode, SceneNodeKind};
+use selean_engine::scene::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind, Transform2D};
 use selean_engine::text::{
     AtlasRegion, FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, TextBatch,
     generate_glyph_sdf, layout_text, shape_text,
@@ -832,6 +832,194 @@ fn bench_textured_quad_batching(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Group 13: Transform mutations + world transform recomputation
+// ---------------------------------------------------------------------------
+
+fn bench_transforms(c: &mut Criterion) {
+    let mut group = c.benchmark_group("transforms");
+
+    for &count in TIERS {
+        let scene = generate_scene(&SceneConfig::with_count(count));
+        let all_ids: Vec<NodeId> = scene
+            .roots()
+            .iter()
+            .flat_map(|&r| {
+                let mut ids = vec![r];
+                ids.extend(scene.descendants(r));
+                ids
+            })
+            .collect();
+
+        // set_transform on 100 nodes (marks descendants dirty).
+        group.bench_with_input(
+            BenchmarkId::new("set_transform_100", count),
+            &count,
+            |b, _| {
+                let ids: Vec<NodeId> = all_ids.iter().copied().take(100).collect();
+                let mut rng = StdRng::seed_from_u64(77);
+                let transforms: Vec<Transform2D> = (0..100)
+                    .map(|_| {
+                        let angle = rng.gen_range(-std::f32::consts::FRAC_PI_4..std::f32::consts::FRAC_PI_4);
+                        Transform2D::rotation(angle)
+                    })
+                    .collect();
+                b.iter_batched(
+                    || scene.clone(),
+                    |mut scene| {
+                        for (id, t) in ids.iter().zip(transforms.iter()) {
+                            scene.set_transform(*id, *t);
+                        }
+                        black_box(scene);
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        // set_rotation on 100 nodes (convenience wrapper).
+        group.bench_with_input(
+            BenchmarkId::new("set_rotation_100", count),
+            &count,
+            |b, _| {
+                let ids: Vec<NodeId> = all_ids.iter().copied().take(100).collect();
+                let mut rng = StdRng::seed_from_u64(88);
+                let angles: Vec<f32> = (0..100)
+                    .map(|_| rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI))
+                    .collect();
+                b.iter_batched(
+                    || scene.clone(),
+                    |mut scene| {
+                        for (id, &a) in ids.iter().zip(angles.iter()) {
+                            scene.set_rotation(*id, a);
+                        }
+                        black_box(scene);
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        // World transform recomputation after dirtying 100 nodes.
+        group.bench_with_input(
+            BenchmarkId::new("recompute_world_transforms", count),
+            &count,
+            |b, _| {
+                let ids: Vec<NodeId> = all_ids.iter().copied().take(100).collect();
+                b.iter_batched(
+                    || {
+                        let mut s = scene.clone();
+                        for id in &ids {
+                            s.set_transform(*id, Transform2D::rotation(0.1));
+                        }
+                        s
+                    },
+                    |mut scene| {
+                        scene.recompute_world_transforms();
+                        black_box(scene);
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Group 14: Hit testing (with rotated nodes)
+// ---------------------------------------------------------------------------
+
+fn bench_hit_testing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hit_testing");
+
+    for &count in TIERS {
+        // Scene with 20% rotated nodes.
+        let config = SceneConfig {
+            node_count: count,
+            transform_fraction: 0.2,
+            ..SceneConfig::default()
+        };
+        let mut scene = generate_scene(&config);
+
+        // hit_test at center of canvas.
+        group.bench_with_input(
+            BenchmarkId::new("center", count),
+            &count,
+            |b, _| {
+                b.iter(|| {
+                    black_box(scene.hit_test(5000.0, 5000.0));
+                });
+            },
+        );
+
+        // hit_test at corner (fewer hits expected).
+        group.bench_with_input(
+            BenchmarkId::new("corner", count),
+            &count,
+            |b, _| {
+                b.iter(|| {
+                    black_box(scene.hit_test(100.0, 100.0));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Group 15: Blend mode batch splitting
+// ---------------------------------------------------------------------------
+
+fn bench_blend_mode_batching(c: &mut Criterion) {
+    let mut group = c.benchmark_group("blend_mode_batching");
+
+    // Build rect nodes with varying blend modes.
+    for &add_fraction in &[0.0_f32, 0.05, 0.20] {
+        let label = format!("add_{:.0}pct", add_fraction * 100.0);
+        let nodes: Vec<SceneNode> = (0..1000)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let x = (i as f32) * 10.0;
+                let mut node = SceneNode::new(
+                    NodeId::new(),
+                    format!("Rect-{i}"),
+                    SceneNodeKind::Frame {
+                        corner_radius: [4.0; 4],
+                    },
+                    BoundingBox::new(x, 0.0, 80.0, 40.0),
+                );
+                node.fill = Some(Color::new(0.2, 0.4, 0.8, 1.0));
+                node.opacity = 1.0;
+                #[allow(clippy::cast_precision_loss)]
+                if (i as f32) < 1000.0 * add_fraction {
+                    node.blend_mode = BlendMode::Add;
+                }
+                node
+            })
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("rect_push_1000", &label),
+            &label,
+            |b, _| {
+                b.iter(|| {
+                    let mut batch = RectBatch::new();
+                    for node in &nodes {
+                        batch.push_node(node);
+                    }
+                    batch.finalize_blend();
+                    black_box(batch.len());
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Creates a minimal valid RGBA PNG for benchmarking.
 fn make_test_png(width: u32, height: u32) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -911,5 +1099,8 @@ criterion_group!(
     bench_image_decode,
     bench_vector_pipeline,
     bench_textured_quad_batching,
+    bench_transforms,
+    bench_hit_testing,
+    bench_blend_mode_batching,
 );
 criterion_main!(benches);

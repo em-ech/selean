@@ -1,9 +1,11 @@
 //! Shared GPU resources used by all instanced rendering pipelines.
 //!
-//! Both `RectPipeline` and `TextPipeline` use the same unit quad geometry and
-//! camera uniform. This module provides those resources once, avoiding
-//! duplication and ensuring a single `queue.write_buffer` call per frame
-//! for the camera.
+//! All instanced pipelines use the same unit quad geometry and camera uniform.
+//! This module provides those resources once, avoiding duplication and ensuring
+//! a single `queue.write_buffer` call per frame for the camera.
+//!
+//! Also provides the shared blend state constants and pipeline creation helper
+//! used by all pipeline types to create Normal + Add blend mode variants.
 
 use wgpu::util::DeviceExt;
 
@@ -175,4 +177,74 @@ impl PersistentInstanceBuffer {
     pub fn buffer(&self) -> &wgpu::Buffer {
         &self.buffer
     }
+}
+
+// --- Blend state constants ---
+
+/// Additive blending: source color is added to destination.
+///
+/// Used for the `BlendMode::Add` pipeline variant.
+pub const BLEND_STATE_ADD: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
+// --- Shared pipeline creation helper ---
+
+/// Creates a render pipeline with the given blend state.
+///
+/// This helper encapsulates the common pipeline descriptor structure shared by
+/// all instanced rendering pipelines (rect, text, textured quad). The only
+/// difference between Normal and Add pipeline variants is the blend state.
+#[must_use]
+pub fn create_pipeline_with_blend(
+    device: &wgpu::Device,
+    label: &str,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader_module: &wgpu::ShaderModule,
+    buffers: &[wgpu::VertexBufferLayout<'_>],
+    target_format: wgpu::TextureFormat,
+    blend_state: wgpu::BlendState,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader_module,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers,
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader_module,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(blend_state),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview: None,
+        cache: None,
+    })
 }

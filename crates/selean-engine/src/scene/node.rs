@@ -7,6 +7,7 @@
 use selean_common::types::NodeId;
 
 use super::DirtyFlags;
+use super::transform::Transform2D;
 
 /// The visual type of a scene node, determining how it is rendered.
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +156,53 @@ impl Color {
     }
 }
 
+/// Compositing blend mode for a scene node.
+///
+/// Determines how the node's pixels are composited with the destination (background).
+/// Only `Normal` and `Add` can be rendered with a single wgpu blend state.
+/// Other modes require multi-pass rendering with intermediate render targets
+/// and are defined here for API completeness; they fall back to `Normal` with a warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BlendMode {
+    /// Standard alpha blending (source-over).
+    #[default]
+    Normal,
+    /// Additive blending: source color is added to destination.
+    Add,
+    // --- Future modes (require multi-pass rendering) ---
+    /// Multiply: darkens by multiplying source and destination.
+    Multiply,
+    /// Screen: lightens by inverting, multiplying, and inverting again.
+    Screen,
+    /// Overlay: combines Multiply and Screen based on destination luminance.
+    Overlay,
+    /// Darken: keeps the darker of source and destination per channel.
+    Darken,
+    /// Lighten: keeps the lighter of source and destination per channel.
+    Lighten,
+    /// Color Dodge: brightens destination to reflect source.
+    ColorDodge,
+    /// Color Burn: darkens destination to reflect source.
+    ColorBurn,
+    /// Hard Light: combines Multiply and Screen based on source luminance.
+    HardLight,
+    /// Soft Light: similar to Hard Light but softer.
+    SoftLight,
+    /// Difference: absolute difference between source and destination.
+    Difference,
+    /// Exclusion: similar to Difference but lower contrast.
+    Exclusion,
+}
+
+impl BlendMode {
+    /// Returns `true` if this blend mode can be rendered natively with a wgpu blend state
+    /// (no multi-pass rendering required).
+    #[must_use]
+    pub fn is_native(&self) -> bool {
+        matches!(self, Self::Normal | Self::Add)
+    }
+}
+
 /// A node in the scene graph.
 ///
 /// Holds its identity, visual type, spatial bounds, styling, hierarchy info,
@@ -179,6 +227,13 @@ pub struct SceneNode {
     pub opacity: f32,
     /// Whether this node is visible. Invisible nodes are skipped entirely.
     pub visible: bool,
+    /// Local transform (user-set). Applied relative to the node's position.
+    pub local_transform: Transform2D,
+    /// Cached world transform (`parent.world_transform * local_transform`).
+    /// Recomputed lazily during the prepare phase when `TRANSFORM` is dirty.
+    pub world_transform: Transform2D,
+    /// Compositing blend mode.
+    pub blend_mode: BlendMode,
     /// IDs of child nodes, in render order (back to front).
     pub children: Vec<NodeId>,
     /// ID of the parent node, if any. Root nodes have `None`.
@@ -204,6 +259,9 @@ impl SceneNode {
             stroke_width: 0.0,
             opacity: 1.0,
             visible: true,
+            local_transform: Transform2D::identity(),
+            world_transform: Transform2D::identity(),
+            blend_mode: BlendMode::Normal,
             children: Vec::new(),
             parent: None,
             dirty: DirtyFlags::ALL,
@@ -397,6 +455,9 @@ mod tests {
         assert_eq!(node.stroke_width, 0.0);
         assert_eq!(node.opacity, 1.0);
         assert!(node.visible);
+        assert!(node.local_transform.is_identity());
+        assert!(node.world_transform.is_identity());
+        assert_eq!(node.blend_mode, BlendMode::Normal);
         assert!(node.children.is_empty());
         assert!(node.parent.is_none());
     }

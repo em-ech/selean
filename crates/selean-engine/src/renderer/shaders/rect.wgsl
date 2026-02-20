@@ -20,9 +20,9 @@ var<uniform> camera: CameraUniform;
 // --- Instance data ---
 
 struct RectInstance {
-    // Rectangle position (top-left corner) in world space.
+    // Rectangle position (top-left corner) in local space.
     @location(2) pos: vec2<f32>,
-    // Rectangle size (width, height) in world space.
+    // Rectangle size (width, height) in local space.
     @location(3) size: vec2<f32>,
     // Fill color (RGBA, linear, non-premultiplied).
     @location(4) fill_color: vec4<f32>,
@@ -32,6 +32,10 @@ struct RectInstance {
     @location(6) stroke_width_opacity: vec2<f32>,
     // Per-corner radius: (top-left, top-right, bottom-right, bottom-left).
     @location(7) corner_radii: vec4<f32>,
+    // 2D affine transform columns (world_transform).
+    @location(8) transform_c0: vec2<f32>,
+    @location(9) transform_c1: vec2<f32>,
+    @location(10) transform_c2: vec2<f32>,
 };
 
 // --- Vertex input/output ---
@@ -65,11 +69,18 @@ struct VertexOutput {
 fn vs_main(vert: VertexInput, inst: RectInstance) -> VertexOutput {
     var out: VertexOutput;
 
-    // Scale and translate the unit quad to the instance's world-space rectangle.
-    let world_pos = inst.pos + vert.quad_pos * inst.size;
+    // Compute position in local (node) space.
+    let local_pos = inst.pos + vert.quad_pos * inst.size;
+
+    // Apply 2D affine transform to get world position.
+    let world_pos = vec2<f32>(
+        inst.transform_c0.x * local_pos.x + inst.transform_c1.x * local_pos.y + inst.transform_c2.x,
+        inst.transform_c0.y * local_pos.x + inst.transform_c1.y * local_pos.y + inst.transform_c2.y,
+    );
     out.clip_pos = camera.view_proj * vec4<f32>(world_pos, 0.0, 1.0);
 
     // Pass local position (in pixels within the rect) for SDF computation.
+    // This stays in node-local space so SDF anti-aliasing works correctly with rotation.
     out.local_pos = vert.quad_pos * inst.size;
     out.rect_size = inst.size;
     out.fill_color = inst.fill_color;

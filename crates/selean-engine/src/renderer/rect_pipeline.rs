@@ -5,14 +5,17 @@
 //! instances ready for drawing).
 
 use bytemuck::{Pod, Zeroable};
+use tracing::warn;
 
 use super::quad::{QUAD_INDICES, QuadVertex};
-use super::shared::{PersistentInstanceBuffer, SharedPipelineResources};
-use crate::scene::{Color, SceneNode, SceneNodeKind};
+use super::shared::{
+    BLEND_STATE_ADD, PersistentInstanceBuffer, SharedPipelineResources, create_pipeline_with_blend,
+};
+use crate::scene::{BlendMode, Color, SceneNode, SceneNodeKind, TransformColumns};
 
 /// Maximum number of rectangle instances per draw call.
 ///
-/// 16,384 instances * 80 bytes = ~1.3 MB, well within GPU buffer limits.
+/// 16,384 instances * 96 bytes = ~1.5 MB, well within GPU buffer limits.
 /// If more instances are needed, they're split into multiple draw calls.
 const MAX_INSTANCES_PER_BATCH: usize = 16_384;
 
@@ -37,12 +40,18 @@ pub struct RectInstance {
     pub stroke_width_opacity: [f32; 2],
     /// Per-corner radius: `[top_left, top_right, bottom_right, bottom_left]`.
     pub corner_radii: [f32; 4],
+    /// 2D affine transform columns: `[c0, c1, c2]` (24 bytes).
+    pub transform: TransformColumns,
 }
 
 impl RectInstance {
     /// Returns the vertex buffer layout descriptor for instanced attributes.
     #[must_use]
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        // Transform columns at locations 8, 9, 10 starting at byte offset 72.
+        const TRANSFORM_ATTRS: [wgpu::VertexAttribute; 3] =
+            TransformColumns::vertex_attributes(8, 72);
+
         const ATTRS: &[wgpu::VertexAttribute] = &[
             // location(2): pos
             wgpu::VertexAttribute {
@@ -80,6 +89,12 @@ impl RectInstance {
                 offset: 56,
                 shader_location: 7,
             },
+            // location(8): transform_c0
+            TRANSFORM_ATTRS[0],
+            // location(9): transform_c1
+            TRANSFORM_ATTRS[1],
+            // location(10): transform_c2
+            TRANSFORM_ATTRS[2],
         ];
 
         wgpu::VertexBufferLayout {
@@ -114,17 +129,23 @@ impl RectInstance {
             stroke_color: [stroke.r, stroke.g, stroke.b, stroke.a],
             stroke_width_opacity: [node.stroke_width, node.opacity],
             corner_radii,
+            transform: node.world_transform.to_gpu_columns(),
         })
     }
 }
 
 /// A batch of rectangle instances ready to be rendered.
 ///
-/// Collects `RectInstance` data on the CPU side, then uploads to a GPU
-/// instance buffer when ready to draw.
+/// Collects `RectInstance` data on the CPU side, partitioned by blend mode.
+/// Normal instances come first, followed by Add instances. The GPU upload
+/// buffer is contiguous so both groups share a single instance buffer.
 pub struct RectBatch {
-    /// CPU-side instance data, cleared each frame.
-    instances: Vec<RectInstance>,
+    /// Normal blend mode instances.
+    normal_instances: Vec<RectInstance>,
+    /// Additive blend mode instances.
+    add_instances: Vec<RectInstance>,
+    /// Combined byte buffer for GPU upload (only used when `add_instances` is non-empty).
+    upload_cache: Vec<u8>,
 }
 
 impl RectBatch {
@@ -132,21 +153,29 @@ impl RectBatch {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            instances: Vec::with_capacity(1024),
+            normal_instances: Vec::with_capacity(1024),
+            add_instances: Vec::new(),
+            upload_cache: Vec::new(),
         }
     }
 
     /// Clears the batch for a new frame.
     pub fn clear(&mut self) {
-        self.instances.clear();
+        self.normal_instances.clear();
+        self.add_instances.clear();
+        self.upload_cache.clear();
     }
 
-    /// Adds a rectangle instance to the batch.
+    /// Adds a rectangle instance to the batch (Normal blend mode).
     pub fn push(&mut self, instance: RectInstance) {
-        self.instances.push(instance);
+        self.normal_instances.push(instance);
     }
 
     /// Adds a scene node to the batch if it's a rectangle type.
+    ///
+    /// Routes the instance to the Normal or Add sub-batch based on blend mode.
+    /// Non-native blend modes (Multiply, Screen, etc.) fall back to Normal
+    /// with a warning.
     ///
     /// Returns `true` if the node was added, `false` if it was skipped
     /// (non-rectangle node type, invisible, or zero-size).
@@ -156,45 +185,92 @@ impl RectBatch {
         }
 
         if let Some(instance) = RectInstance::from_scene_node(node) {
-            self.instances.push(instance);
+            match node.blend_mode {
+                BlendMode::Add => self.add_instances.push(instance),
+                BlendMode::Normal => self.normal_instances.push(instance),
+                other => {
+                    warn!(?other, node_id = %node.id, "Non-native blend mode, falling back to Normal");
+                    self.normal_instances.push(instance);
+                }
+            }
             true
         } else {
             false
         }
     }
 
-    /// Returns the number of instances in the batch.
+    /// Returns the total number of instances in the batch.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.instances.len()
+        self.normal_instances.len() + self.add_instances.len()
+    }
+
+    /// Returns the number of Normal blend mode instances.
+    #[must_use]
+    pub fn normal_len(&self) -> usize {
+        self.normal_instances.len()
+    }
+
+    /// Returns the number of Add blend mode instances.
+    #[must_use]
+    pub fn add_len(&self) -> usize {
+        self.add_instances.len()
     }
 
     /// Returns `true` if the batch is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.instances.is_empty()
+        self.normal_instances.is_empty() && self.add_instances.is_empty()
+    }
+
+    /// Prepares the combined upload buffer for GPU upload.
+    ///
+    /// Must be called after all instances are pushed and before `as_bytes()`.
+    /// When there are no Add instances (the common case), `as_bytes()` returns
+    /// a zero-copy view of the normal instances. Otherwise, this builds a
+    /// contiguous byte buffer with Normal instances first, then Add.
+    pub fn finalize_blend(&mut self) {
+        if !self.add_instances.is_empty() {
+            self.upload_cache.clear();
+            let normal_bytes: &[u8] = bytemuck::cast_slice(&self.normal_instances);
+            let add_bytes: &[u8] = bytemuck::cast_slice(&self.add_instances);
+            self.upload_cache.reserve(normal_bytes.len() + add_bytes.len());
+            self.upload_cache.extend_from_slice(normal_bytes);
+            self.upload_cache.extend_from_slice(add_bytes);
+        }
     }
 
     /// Returns the instance data as a byte slice for GPU upload.
+    ///
+    /// Call `finalize_blend()` first if Add instances are present.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        bytemuck::cast_slice(&self.instances)
+        if self.add_instances.is_empty() {
+            bytemuck::cast_slice(&self.normal_instances)
+        } else {
+            &self.upload_cache
+        }
     }
 
     /// Returns the number of draw calls needed to render all instances.
-    ///
-    /// Instances beyond `MAX_INSTANCES_PER_BATCH` require additional draw calls.
     #[must_use]
     pub fn draw_call_count(&self) -> usize {
-        if self.instances.is_empty() {
+        let total = self.len();
+        if total == 0 {
             return 0;
         }
-        self.instances.len().div_ceil(MAX_INSTANCES_PER_BATCH)
-    }
-
-    /// Returns an iterator over sub-batches of up to `MAX_INSTANCES_PER_BATCH` instances.
-    pub fn chunks(&self) -> impl Iterator<Item = &[RectInstance]> {
-        self.instances.chunks(MAX_INSTANCES_PER_BATCH)
+        // Each blend mode group gets its own draw call(s).
+        let normal_calls = if self.normal_instances.is_empty() {
+            0
+        } else {
+            self.normal_instances.len().div_ceil(MAX_INSTANCES_PER_BATCH)
+        };
+        let add_calls = if self.add_instances.is_empty() {
+            0
+        } else {
+            self.add_instances.len().div_ceil(MAX_INSTANCES_PER_BATCH)
+        };
+        normal_calls + add_calls
     }
 }
 
@@ -204,23 +280,19 @@ impl Default for RectBatch {
     }
 }
 
-/// The compiled rectangle rendering pipeline.
+/// The compiled rectangle rendering pipeline with Normal + Add blend mode variants.
 ///
-/// Owns only the pipeline-specific GPU render pipeline. Shared resources
-/// (vertex/index buffers, camera uniform) are provided by
+/// Shared resources (vertex/index buffers, camera uniform) are provided by
 /// [`SharedPipelineResources`] during creation and draw calls.
 pub struct RectPipeline {
-    /// The compiled render pipeline.
-    pipeline: wgpu::RenderPipeline,
+    /// Pipeline variant for Normal (alpha) blending.
+    pipeline_normal: wgpu::RenderPipeline,
+    /// Pipeline variant for Additive blending.
+    pipeline_add: wgpu::RenderPipeline,
 }
 
 impl RectPipeline {
-    /// Creates the rectangle pipeline for the given device and output format.
-    ///
-    /// # Arguments
-    /// * `device` — The GPU device.
-    /// * `target_format` — The texture format of the render target (surface).
-    /// * `shared` — Shared resources providing the camera bind group layout.
+    /// Creates the rectangle pipeline variants for the given device and output format.
     #[must_use]
     pub fn new(
         device: &wgpu::Device,
@@ -239,47 +311,40 @@ impl RectPipeline {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("rect_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader_module,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[QuadVertex::layout(), RectInstance::layout()],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader_module,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
-        });
+        let buffers = [QuadVertex::layout(), RectInstance::layout()];
 
-        Self { pipeline }
+        let pipeline_normal = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_normal",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+
+        let pipeline_add = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_add",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            BLEND_STATE_ADD,
+        );
+
+        Self {
+            pipeline_normal,
+            pipeline_add,
+        }
     }
 
     /// Records draw commands for a batch of rectangle instances.
     ///
     /// Instance data must already be uploaded to `instance_buf` via
     /// [`PersistentInstanceBuffer::upload`] before calling this method.
+    /// Normal instances occupy indices `0..normal_len`, Add instances
+    /// occupy `normal_len..total_len` in the instance buffer.
     ///
     /// Does nothing if the batch is empty.
     pub fn draw<'a>(
@@ -293,17 +358,29 @@ impl RectPipeline {
             return;
         }
 
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, shared.camera_bind_group(), &[]);
         pass.set_vertex_buffer(0, shared.vertex_buffer().slice(..));
         pass.set_vertex_buffer(1, instance_buf.buffer().slice(..));
         pass.set_index_buffer(shared.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
 
         #[allow(clippy::cast_possible_truncation)]
-        let instance_count = batch.len() as u32;
-        #[allow(clippy::cast_possible_truncation)]
         let index_count = QUAD_INDICES.len() as u32;
-        pass.draw_indexed(0..index_count, 0, 0..instance_count);
+        #[allow(clippy::cast_possible_truncation)]
+        let normal_count = batch.normal_len() as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let add_count = batch.add_len() as u32;
+
+        // Draw Normal instances.
+        if normal_count > 0 {
+            pass.set_pipeline(&self.pipeline_normal);
+            pass.draw_indexed(0..index_count, 0, 0..normal_count);
+        }
+
+        // Draw Add instances (offset by normal_count in the instance buffer).
+        if add_count > 0 {
+            pass.set_pipeline(&self.pipeline_add);
+            pass.draw_indexed(0..index_count, 0, normal_count..normal_count + add_count);
+        }
     }
 }
 
@@ -317,9 +394,9 @@ mod tests {
     use selean_common::types::NodeId;
 
     #[test]
-    fn rect_instance_size_is_72_bytes() {
-        // 2 + 2 + 4 + 4 + 2 + 4 = 18 floats * 4 bytes = 72 bytes.
-        assert_eq!(std::mem::size_of::<RectInstance>(), 72);
+    fn rect_instance_size_is_96_bytes() {
+        // 2 + 2 + 4 + 4 + 2 + 4 + 2 + 2 + 2 = 24 floats * 4 bytes = 96 bytes.
+        assert_eq!(std::mem::size_of::<RectInstance>(), 96);
     }
 
     #[test]
@@ -533,6 +610,7 @@ mod tests {
         let mut batch = RectBatch::new();
         batch.push(bytemuck::Zeroable::zeroed());
         batch.push(bytemuck::Zeroable::zeroed());
+        batch.finalize_blend();
         assert_eq!(
             batch.as_bytes().len(),
             2 * std::mem::size_of::<RectInstance>()
@@ -613,15 +691,76 @@ mod tests {
     }
 
     #[test]
-    fn batch_chunks_splits_correctly() {
+    fn batch_push_node_routes_by_blend_mode() {
         let mut batch = RectBatch::new();
-        for _ in 0..=MAX_INSTANCES_PER_BATCH {
-            batch.push(bytemuck::Zeroable::zeroed());
-        }
 
-        let chunks: Vec<_> = batch.chunks().collect();
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].len(), MAX_INSTANCES_PER_BATCH);
-        assert_eq!(chunks[1].len(), 1);
+        // Normal blend mode node.
+        let node_normal = SceneNode::new(
+            NodeId::new(),
+            "Normal".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        assert!(batch.push_node(&node_normal));
+        assert_eq!(batch.normal_len(), 1);
+        assert_eq!(batch.add_len(), 0);
+
+        // Add blend mode node.
+        let mut node_add = SceneNode::new(
+            NodeId::new(),
+            "Additive".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        node_add.blend_mode = BlendMode::Add;
+        assert!(batch.push_node(&node_add));
+        assert_eq!(batch.normal_len(), 1);
+        assert_eq!(batch.add_len(), 1);
+        assert_eq!(batch.len(), 2);
+    }
+
+    #[test]
+    fn batch_finalize_blend_produces_contiguous_bytes() {
+        let mut batch = RectBatch::new();
+        batch.push(bytemuck::Zeroable::zeroed()); // normal
+
+        // Manually add to add_instances.
+        let mut node_add = SceneNode::new(
+            NodeId::new(),
+            "Add".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        node_add.blend_mode = BlendMode::Add;
+        batch.push_node(&node_add);
+
+        batch.finalize_blend();
+        assert_eq!(
+            batch.as_bytes().len(),
+            2 * std::mem::size_of::<RectInstance>()
+        );
+    }
+
+    #[test]
+    fn batch_non_native_falls_back_to_normal() {
+        let mut batch = RectBatch::new();
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "Multiply".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        node.blend_mode = BlendMode::Multiply;
+        assert!(batch.push_node(&node));
+        assert_eq!(batch.normal_len(), 1);
+        assert_eq!(batch.add_len(), 0);
     }
 }

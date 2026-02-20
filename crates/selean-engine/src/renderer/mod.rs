@@ -19,6 +19,8 @@ pub use gpu::{GpuContext, GpuContextDescriptor};
 pub use pipeline::{FrameStats, Renderer, RendererDescriptor};
 pub use quad::{QUAD_INDICES, QUAD_VERTICES, QuadVertex};
 pub use rect_pipeline::{RectBatch, RectInstance, RectPipeline};
-pub use shared::{PersistentInstanceBuffer, SharedPipelineResources};
+pub use shared::{
+    BLEND_STATE_ADD, PersistentInstanceBuffer, SharedPipelineResources, create_pipeline_with_blend,
+};
 pub use texture_atlas::{AtlasRegion, GlyphAtlas, ImageAtlas, TextureAtlas};
 pub use textured_quad::{TexturedQuadBatch, TexturedQuadInstance, TexturedQuadPipeline};
