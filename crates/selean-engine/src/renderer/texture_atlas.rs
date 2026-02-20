@@ -93,14 +93,10 @@ impl<const CHANNELS: u32> TextureAtlas<CHANNELS> {
     fn atlas_full_error(old_w: u32, old_h: u32) -> EngineError {
         match CHANNELS {
             1 => EngineError::Font {
-                reason: format!(
-                    "glyph atlas at maximum size {old_w}x{old_h}, cannot grow further"
-                ),
+                reason: format!("glyph atlas at maximum size {old_w}x{old_h}, cannot grow further"),
             },
             4 => EngineError::Image {
-                reason: format!(
-                    "image atlas at maximum size {old_w}x{old_h}, cannot grow further"
-                ),
+                reason: format!("image atlas at maximum size {old_w}x{old_h}, cannot grow further"),
             },
             _ => unreachable!(),
         }
@@ -163,8 +159,12 @@ impl<const CHANNELS: u32> TextureAtlas<CHANNELS> {
         let initial_size = DEFAULT_ATLAS_SIZE.min(self.max_dimension);
 
         let (texture, texture_view) = Self::create_texture(device, initial_size, initial_size);
-        let bind_group =
-            Self::create_bind_group(device, &self.bind_group_layout, &texture_view, &self.sampler);
+        let bind_group = Self::create_bind_group(
+            device,
+            &self.bind_group_layout,
+            &texture_view,
+            &self.sampler,
+        );
 
         self.texture = texture;
         self.texture_view = texture_view;
@@ -295,11 +295,7 @@ impl<const CHANNELS: u32> TextureAtlas<CHANNELS> {
         self.bind_group = bind_group;
         self.packer.grow(new_width, new_height);
 
-        debug!(
-            width = new_width,
-            height = new_height,
-            "Atlas grown"
-        );
+        debug!(width = new_width, height = new_height, "Atlas grown");
 
         Ok(())
     }

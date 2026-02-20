@@ -8,6 +8,7 @@
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
     clippy::similar_names,
+    clippy::too_many_lines,
     missing_docs
 )]
 
@@ -220,9 +221,7 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
         }
 
         // Apply Add blend mode to a small fraction of nodes.
-        if config.add_blend_fraction > 0.0
-            && rng.gen_bool(f64::from(config.add_blend_fraction))
-        {
+        if config.add_blend_fraction > 0.0 && rng.gen_bool(f64::from(config.add_blend_fraction)) {
             node.blend_mode = BlendMode::Add;
         }
 

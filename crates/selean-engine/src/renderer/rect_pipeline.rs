@@ -9,7 +9,8 @@ use tracing::warn;
 
 use super::quad::{QUAD_INDICES, QuadVertex};
 use super::shared::{
-    BLEND_STATE_ADD, PersistentInstanceBuffer, SharedPipelineResources, create_pipeline_with_blend,
+    BLEND_STATE_ADD, PersistentInstanceBuffer, STENCIL_NOOP, SharedPipelineResources,
+    create_pipeline_with_blend,
 };
 use crate::scene::{BlendMode, Color, SceneNode, SceneNodeKind, TransformColumns};
 
@@ -234,7 +235,8 @@ impl RectBatch {
             self.upload_cache.clear();
             let normal_bytes: &[u8] = bytemuck::cast_slice(&self.normal_instances);
             let add_bytes: &[u8] = bytemuck::cast_slice(&self.add_instances);
-            self.upload_cache.reserve(normal_bytes.len() + add_bytes.len());
+            self.upload_cache
+                .reserve(normal_bytes.len() + add_bytes.len());
             self.upload_cache.extend_from_slice(normal_bytes);
             self.upload_cache.extend_from_slice(add_bytes);
         }
@@ -263,7 +265,9 @@ impl RectBatch {
         let normal_calls = if self.normal_instances.is_empty() {
             0
         } else {
-            self.normal_instances.len().div_ceil(MAX_INSTANCES_PER_BATCH)
+            self.normal_instances
+                .len()
+                .div_ceil(MAX_INSTANCES_PER_BATCH)
         };
         let add_calls = if self.add_instances.is_empty() {
             0
@@ -321,6 +325,8 @@ impl RectPipeline {
             &buffers,
             target_format,
             wgpu::BlendState::ALPHA_BLENDING,
+            Some(STENCIL_NOOP),
+            wgpu::ColorWrites::ALL,
         );
 
         let pipeline_add = create_pipeline_with_blend(
@@ -331,6 +337,8 @@ impl RectPipeline {
             &buffers,
             target_format,
             BLEND_STATE_ADD,
+            Some(STENCIL_NOOP),
+            wgpu::ColorWrites::ALL,
         );
 
         Self {

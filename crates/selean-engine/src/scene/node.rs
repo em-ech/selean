@@ -7,6 +7,7 @@
 use selean_common::types::NodeId;
 
 use super::DirtyFlags;
+use super::clip::ClipMode;
 use super::transform::Transform2D;
 
 /// The visual type of a scene node, determining how it is rendered.
@@ -234,6 +235,8 @@ pub struct SceneNode {
     pub world_transform: Transform2D,
     /// Compositing blend mode.
     pub blend_mode: BlendMode,
+    /// Clipping mode. When not `None`, children are clipped to this node's bounds.
+    pub clip_mode: ClipMode,
     /// IDs of child nodes, in render order (back to front).
     pub children: Vec<NodeId>,
     /// ID of the parent node, if any. Root nodes have `None`.
@@ -262,6 +265,7 @@ impl SceneNode {
             local_transform: Transform2D::identity(),
             world_transform: Transform2D::identity(),
             blend_mode: BlendMode::Normal,
+            clip_mode: ClipMode::None,
             children: Vec::new(),
             parent: None,
             dirty: DirtyFlags::ALL,
@@ -458,6 +462,7 @@ mod tests {
         assert!(node.local_transform.is_identity());
         assert!(node.world_transform.is_identity());
         assert_eq!(node.blend_mode, BlendMode::Normal);
+        assert_eq!(node.clip_mode, ClipMode::None);
         assert!(node.children.is_empty());
         assert!(node.parent.is_none());
     }

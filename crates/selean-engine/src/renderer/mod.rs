@@ -20,7 +20,8 @@ pub use pipeline::{FrameStats, Renderer, RendererDescriptor};
 pub use quad::{QUAD_INDICES, QUAD_VERTICES, QuadVertex};
 pub use rect_pipeline::{RectBatch, RectInstance, RectPipeline};
 pub use shared::{
-    BLEND_STATE_ADD, PersistentInstanceBuffer, SharedPipelineResources, create_pipeline_with_blend,
+    BLEND_STATE_ADD, PersistentInstanceBuffer, STENCIL_NOOP, SharedPipelineResources,
+    create_pipeline_with_blend, create_stencil_texture,
 };
 pub use texture_atlas::{AtlasRegion, GlyphAtlas, ImageAtlas, TextureAtlas};
 pub use textured_quad::{TexturedQuadBatch, TexturedQuadInstance, TexturedQuadPipeline};

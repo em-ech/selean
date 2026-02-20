@@ -6,7 +6,12 @@
 //! 3. Render preparation — `visible_nodes_sorted` with varying viewport sizes
 //! 4. Full frame simulation — combined mutation + query + render prep
 
-#![allow(clippy::expect_used, clippy::too_many_lines, missing_docs)]
+#![allow(
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::cast_precision_loss,
+    missing_docs
+)]
 
 mod bench_utils;
 
@@ -22,7 +27,9 @@ use selean_engine::text::{
     AtlasRegion, FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, TextBatch,
     generate_glyph_sdf, layout_text, shape_text,
 };
-use selean_engine::vector::{cache::quantize_dimension, parser::parse_path_data, rasterizer::rasterize_path};
+use selean_engine::vector::{
+    cache::quantize_dimension, parser::parse_path_data, rasterizer::rasterize_path,
+};
 
 use bench_utils::{SceneConfig, generate_scene};
 
@@ -693,10 +700,7 @@ fn bench_vector_pipeline(c: &mut Criterion) {
     let paths: &[(&str, &str)] = &[
         ("triangle", "M 0 0 L 50 0 L 25 50 Z"),
         ("rect", "M 0 0 L 100 0 L 100 100 L 0 100 Z"),
-        (
-            "cubic",
-            "M 10 80 C 40 10 65 10 95 80 S 150 150 10 80",
-        ),
+        ("cubic", "M 10 80 C 40 10 65 10 95 80 S 150 150 10 80"),
         (
             "complex",
             "M 0 0 C 20 40 60 40 80 0 L 80 60 Q 40 100 0 60 Z",
@@ -726,15 +730,8 @@ fn bench_vector_pipeline(c: &mut Criterion) {
                 |b, &size| {
                     b.iter(|| {
                         black_box(
-                            rasterize_path(
-                                &path,
-                                size,
-                                size,
-                                Some(Color::BLACK),
-                                None,
-                                0.0,
-                            )
-                            .expect("rasterize"),
+                            rasterize_path(&path, size, size, Some(Color::BLACK), None, 0.0)
+                                .expect("rasterize"),
                         );
                     });
                 },
@@ -860,7 +857,8 @@ fn bench_transforms(c: &mut Criterion) {
                 let mut rng = StdRng::seed_from_u64(77);
                 let transforms: Vec<Transform2D> = (0..100)
                     .map(|_| {
-                        let angle = rng.gen_range(-std::f32::consts::FRAC_PI_4..std::f32::consts::FRAC_PI_4);
+                        let angle = rng
+                            .gen_range(-std::f32::consts::FRAC_PI_4..std::f32::consts::FRAC_PI_4);
                         Transform2D::rotation(angle)
                     })
                     .collect();
@@ -944,26 +942,18 @@ fn bench_hit_testing(c: &mut Criterion) {
         let mut scene = generate_scene(&config);
 
         // hit_test at center of canvas.
-        group.bench_with_input(
-            BenchmarkId::new("center", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    black_box(scene.hit_test(5000.0, 5000.0));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("center", count), &count, |b, _| {
+            b.iter(|| {
+                black_box(scene.hit_test(5000.0, 5000.0));
+            });
+        });
 
         // hit_test at corner (fewer hits expected).
-        group.bench_with_input(
-            BenchmarkId::new("corner", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    black_box(scene.hit_test(100.0, 100.0));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("corner", count), &count, |b, _| {
+            b.iter(|| {
+                black_box(scene.hit_test(100.0, 100.0));
+            });
+        });
     }
 
     group.finish();

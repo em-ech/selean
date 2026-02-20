@@ -81,6 +81,7 @@ pub fn decode_image_resized(bytes: &[u8], max_dim: u32) -> Result<DecodedImage, 
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

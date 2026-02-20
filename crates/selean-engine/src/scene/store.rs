@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use selean_common::types::NodeId;
 
+use super::clip::ClipMode;
 use super::dirty::DirtyFlags;
 use super::node::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind};
 use super::transform::Transform2D;
@@ -534,6 +535,19 @@ impl SceneGraph {
         })
     }
 
+    /// Sets the clip mode for a node.
+    ///
+    /// When set to a mode other than `None`, all descendants are clipped to
+    /// this node's bounds. Marks the node with `CLIP` dirty and propagates
+    /// `CHILDREN` up to ancestors.
+    /// Returns `false` if the node doesn't exist.
+    pub fn set_clip_mode(&mut self, id: NodeId, mode: ClipMode) -> bool {
+        self.mutate_node(id, DirtyFlags::CLIP, |node| {
+            node.clip_mode = mode;
+            true
+        })
+    }
+
     // --- World transform recomputation ---
 
     /// Recomputes world transforms for all dirty nodes.
@@ -559,11 +573,129 @@ impl SceneGraph {
 
     // --- Hit testing ---
 
+    /// Returns the ancestor clip chain for a node: all ancestors (from immediate
+    /// parent up to root) that have a clip mode other than `None`.
+    ///
+    /// The returned vec is ordered from nearest ancestor to most distant.
+    #[must_use]
+    pub fn ancestor_clip_chain(&self, id: NodeId) -> Vec<(NodeId, ClipMode)> {
+        let mut result = Vec::new();
+        let mut current = id;
+        while let Some(parent_id) = self.parent(current) {
+            if let Some(node) = self.nodes.get(&parent_id) {
+                if node.clip_mode != ClipMode::None {
+                    result.push((parent_id, node.clip_mode));
+                }
+            }
+            current = parent_id;
+        }
+        result
+    }
+
+    /// Tests whether a world-space point passes the clip region of a clip node.
+    ///
+    /// For `Scissor` and `ShaderRect` clips, tests against the world-space AABB.
+    /// For `Stencil` clips on `Frame` nodes with corner radii, tests using the
+    /// SDF distance to the rounded rect in local space.
+    #[must_use]
+    pub fn point_passes_clip(&self, x: f32, y: f32, clip_node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(&clip_node_id) else {
+            return true;
+        };
+
+        match node.clip_mode {
+            ClipMode::None => true,
+            ClipMode::Scissor | ClipMode::ShaderRect => {
+                // Test against world-space AABB.
+                let world_aabb = node.world_transform.transform_aabb(&node.bounds);
+                x >= world_aabb.x
+                    && x <= world_aabb.right()
+                    && y >= world_aabb.y
+                    && y <= world_aabb.bottom()
+            }
+            ClipMode::Stencil => {
+                // For stencil, test in local space for precision.
+                let Some(inv) = node.world_transform.inverse() else {
+                    return false;
+                };
+                let (lx, ly) = inv.transform_point(x, y);
+
+                // First check AABB.
+                if !node.bounds.contains_point(lx, ly) {
+                    return false;
+                }
+
+                // If this is a Frame with corner radii, do SDF check.
+                if let SceneNodeKind::Frame { corner_radius } = &node.kind {
+                    let has_radii = corner_radius.iter().any(|&r| r > 0.0);
+                    if has_radii {
+                        return Self::point_inside_rounded_rect(
+                            lx,
+                            ly,
+                            &node.bounds,
+                            corner_radius,
+                        );
+                    }
+                }
+
+                true
+            }
+        }
+    }
+
+    /// SDF-based point-in-rounded-rect test.
+    ///
+    /// Returns `true` if the point (in local space) is inside the rounded rectangle.
+    fn point_inside_rounded_rect(
+        lx: f32,
+        ly: f32,
+        bounds: &BoundingBox,
+        corner_radius: &[f32; 4],
+    ) -> bool {
+        let half_w = bounds.width * 0.5;
+        let half_h = bounds.height * 0.5;
+        let cx = bounds.x + half_w;
+        let cy = bounds.y + half_h;
+
+        // Position relative to rect center.
+        let px = lx - cx;
+        let py = ly - cy;
+
+        // Select corner radius based on quadrant.
+        // corner_radius: [top_left, top_right, bottom_right, bottom_left]
+        let radius = if py < 0.0 {
+            if px < 0.0 {
+                corner_radius[0] // top-left
+            } else {
+                corner_radius[1] // top-right
+            }
+        } else if px >= 0.0 {
+            corner_radius[2] // bottom-right
+        } else {
+            corner_radius[3] // bottom-left
+        };
+
+        let max_radius = half_w.min(half_h);
+        let r = radius.min(max_radius);
+
+        // SDF for rounded rect.
+        let qx = px.abs() - half_w + r;
+        let qy = py.abs() - half_h + r;
+        let dist = qx.max(qy).min(0.0)
+            + (qx.max(0.0) * qx.max(0.0) + qy.max(0.0) * qy.max(0.0)).sqrt()
+            - r;
+
+        dist <= 0.0
+    }
+
     /// Returns node IDs at the given point, sorted front-to-back (topmost first).
     ///
     /// Uses the R-tree spatial index for broad-phase AABB filtering, then
     /// inverse-transforms the point into each node's local space for precise
     /// narrow-phase checking. Invisible nodes are excluded.
+    ///
+    /// Clip-aware: nodes whose ancestors have clip regions are excluded if the
+    /// point falls outside any ancestor's clip region.
     ///
     /// Ensure z-indices are up-to-date before calling (e.g., via `visible_nodes_sorted`
     /// or after any tree structure changes).
@@ -593,7 +725,15 @@ impl SceneGraph {
                     return false;
                 };
                 let (lx, ly) = inv.transform_point(x, y);
-                node.bounds.contains_point(lx, ly)
+                if !node.bounds.contains_point(lx, ly) {
+                    return false;
+                }
+
+                // Check ancestor clip chain.
+                let clip_chain = self.ancestor_clip_chain(id);
+                clip_chain
+                    .iter()
+                    .all(|&(clip_id, _)| self.point_passes_clip(x, y, clip_id))
             })
             .collect();
 
@@ -818,11 +958,7 @@ impl SceneGraph {
     ///
     /// Always recurses into children (they may be dirty even if the parent isn't).
     /// Only recomputes nodes that have the `TRANSFORM` flag set.
-    fn recompute_world_transform_recursive(
-        &mut self,
-        id: NodeId,
-        parent_world: Transform2D,
-    ) {
+    fn recompute_world_transform_recursive(&mut self, id: NodeId, parent_world: Transform2D) {
         // Compute new world transform and collect data needed for spatial update.
         let (world_transform, children, spatial_update) = {
             let Some(node) = self.nodes.get_mut(&id) else {
@@ -2176,22 +2312,22 @@ mod tests {
     #[test]
     fn reparent_marks_node_and_descendants_transform_dirty() {
         let mut graph = SceneGraph::new();
-        let parent_a = frame_node("ParentA", 0.0, 0.0, 200.0, 200.0);
-        let parent_a_id = graph.add_root(parent_a);
-        let parent_b = frame_node("ParentB", 300.0, 0.0, 200.0, 200.0);
-        let parent_b_id = graph.add_root(parent_b);
+        let first_parent = frame_node("ParentA", 0.0, 0.0, 200.0, 200.0);
+        let first_parent_id = graph.add_root(first_parent);
+        let second_parent = frame_node("ParentB", 300.0, 0.0, 200.0, 200.0);
+        let second_parent_id = graph.add_root(second_parent);
 
         let child = frame_node("Child", 10.0, 10.0, 100.0, 100.0);
         let child_id = child.id;
-        graph.add_child(parent_a_id, child);
+        graph.add_child(first_parent_id, child);
         let gc = frame_node("GC", 20.0, 20.0, 30.0, 30.0);
         let gc_id = gc.id;
         graph.add_child(child_id, gc);
 
         graph.clear_all_dirty();
 
-        // Reparent child (with grandchild) to parent_b.
-        graph.reparent(child_id, parent_b_id);
+        // Reparent child (with grandchild) to second_parent.
+        graph.reparent(child_id, second_parent_id);
 
         let child_node = graph.get(child_id).expect("child");
         assert!(
@@ -2233,7 +2369,12 @@ mod tests {
         use proptest::prelude::*;
 
         fn arb_bounds() -> impl Strategy<Value = BoundingBox> {
-            (0.0_f32..1000.0, 0.0_f32..1000.0, 1.0_f32..200.0, 1.0_f32..200.0)
+            (
+                0.0_f32..1000.0,
+                0.0_f32..1000.0,
+                1.0_f32..200.0,
+                1.0_f32..200.0,
+            )
                 .prop_map(|(x, y, w, h)| BoundingBox::new(x, y, w, h))
         }
 
@@ -2325,5 +2466,223 @@ mod tests {
         assert_eq!(graph.get(id).expect("exists").name, "Second");
         // Note: roots will have the ID twice. This is acceptable for now;
         // production code should check for duplicates.
+    }
+
+    // --- Clip mode tests ---
+
+    #[test]
+    fn set_clip_mode_marks_clip_dirty() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Clip", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        assert!(graph.set_clip_mode(id, ClipMode::Scissor));
+
+        let n = graph.get(id).expect("exists");
+        assert_eq!(n.clip_mode, ClipMode::Scissor);
+        assert!(n.dirty.contains(DirtyFlags::CLIP));
+    }
+
+    #[test]
+    fn set_clip_mode_propagates_children_up() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+        let child = frame_node("Child", 10.0, 10.0, 50.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+        graph.clear_all_dirty();
+
+        graph.set_clip_mode(child_id, ClipMode::Stencil);
+
+        let p = graph.get(parent_id).expect("exists");
+        assert!(p.dirty.contains(DirtyFlags::CHILDREN));
+    }
+
+    #[test]
+    fn set_clip_mode_nonexistent_returns_false() {
+        let mut graph = SceneGraph::new();
+        assert!(!graph.set_clip_mode(NodeId::new(), ClipMode::Scissor));
+    }
+
+    #[test]
+    fn clip_mode_default_is_none() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        assert_eq!(graph.get(id).expect("exists").clip_mode, ClipMode::None);
+    }
+
+    #[test]
+    fn set_clip_mode_all_modes() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        for mode in [
+            ClipMode::None,
+            ClipMode::Scissor,
+            ClipMode::Stencil,
+            ClipMode::ShaderRect,
+        ] {
+            graph.set_clip_mode(id, mode);
+            assert_eq!(graph.get(id).expect("exists").clip_mode, mode);
+        }
+    }
+
+    // --- Clip-aware hit testing tests ---
+
+    #[test]
+    fn scissor_clip_blocks_hit_outside_parent_bounds() {
+        let mut graph = SceneGraph::new();
+        // Parent at (0,0) 100x100 with Scissor clip.
+        let parent = frame_node("ClipParent", 0.0, 0.0, 100.0, 100.0);
+        let parent_id = graph.add_root(parent);
+        graph.set_clip_mode(parent_id, ClipMode::Scissor);
+
+        // Child extends beyond parent bounds: (50, 50) to (200, 200).
+        let child = frame_node("Child", 50.0, 50.0, 150.0, 150.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        graph.recompute_world_transforms();
+
+        // Point inside both parent and child: should hit.
+        let hits = graph.hit_test(75.0, 75.0);
+        assert!(hits.contains(&child_id));
+
+        // Point inside child but outside parent clip: should NOT hit child.
+        let hits = graph.hit_test(150.0, 150.0);
+        assert!(!hits.contains(&child_id));
+    }
+
+    #[test]
+    fn stencil_clip_with_rounded_corners_blocks_corner_hit() {
+        let mut graph = SceneGraph::new();
+        // Parent with large corner radius (50 = half of 100px).
+        let mut parent = SceneNode::new(
+            NodeId::new(),
+            "RoundedClip".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [50.0, 50.0, 50.0, 50.0],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        parent.fill = Some(Color::WHITE);
+        let parent_id = graph.add_root(parent);
+        graph.set_clip_mode(parent_id, ClipMode::Stencil);
+
+        // Child fills the entire parent.
+        let child = frame_node("Child", 0.0, 0.0, 100.0, 100.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        graph.recompute_world_transforms();
+
+        // Center of rounded rect: should hit.
+        let hits = graph.hit_test(50.0, 50.0);
+        assert!(hits.contains(&child_id));
+
+        // Corner of the AABB (outside the rounded rect): should NOT hit.
+        // With radius 50 (fully rounded = circle), point (1, 1) is outside.
+        let hits = graph.hit_test(1.0, 1.0);
+        assert!(!hits.contains(&child_id));
+    }
+
+    #[test]
+    fn nested_clips_both_must_pass() {
+        let mut graph = SceneGraph::new();
+        // Outer clip at (0,0) 200x200.
+        let outer = frame_node("Outer", 0.0, 0.0, 200.0, 200.0);
+        let outer_id = graph.add_root(outer);
+        graph.set_clip_mode(outer_id, ClipMode::Scissor);
+
+        // Inner clip at (50,50) 100x100.
+        let inner = frame_node("Inner", 50.0, 50.0, 100.0, 100.0);
+        let inner_id = inner.id;
+        graph.add_child(outer_id, inner);
+        graph.set_clip_mode(inner_id, ClipMode::Scissor);
+
+        // Leaf covers a wide area.
+        let leaf = frame_node("Leaf", 0.0, 0.0, 300.0, 300.0);
+        let leaf_id = leaf.id;
+        graph.add_child(inner_id, leaf);
+
+        graph.recompute_world_transforms();
+
+        // Inside both clips.
+        let hits = graph.hit_test(75.0, 75.0);
+        assert!(hits.contains(&leaf_id));
+
+        // Inside outer but outside inner.
+        let hits = graph.hit_test(25.0, 25.0);
+        assert!(!hits.contains(&leaf_id));
+
+        // Outside both.
+        let hits = graph.hit_test(250.0, 250.0);
+        assert!(!hits.contains(&leaf_id));
+    }
+
+    #[test]
+    fn no_clip_regression_passes() {
+        // Ensure nodes without clip ancestors still work.
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Normal", 10.0, 10.0, 50.0, 50.0);
+        let id = graph.add_root(node);
+        graph.recompute_world_transforms();
+
+        let hits = graph.hit_test(30.0, 30.0);
+        assert!(hits.contains(&id));
+    }
+
+    #[test]
+    fn ancestor_clip_chain_returns_correct_ancestors() {
+        let mut graph = SceneGraph::new();
+        let a = frame_node("A", 0.0, 0.0, 200.0, 200.0);
+        let a_id = graph.add_root(a);
+        graph.set_clip_mode(a_id, ClipMode::Scissor);
+
+        let b = frame_node("B", 10.0, 10.0, 150.0, 150.0);
+        let b_id = b.id;
+        graph.add_child(a_id, b);
+        // B has no clip mode.
+
+        let c = frame_node("C", 20.0, 20.0, 100.0, 100.0);
+        let c_id = c.id;
+        graph.add_child(b_id, c);
+        graph.set_clip_mode(c_id, ClipMode::Stencil);
+
+        let d = frame_node("D", 30.0, 30.0, 50.0, 50.0);
+        let d_id = d.id;
+        graph.add_child(c_id, d);
+
+        let chain = graph.ancestor_clip_chain(d_id);
+        // Should contain C (Stencil) and A (Scissor), but not B (None).
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0], (c_id, ClipMode::Stencil));
+        assert_eq!(chain[1], (a_id, ClipMode::Scissor));
+    }
+
+    #[test]
+    fn shader_rect_clip_blocks_hit() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("ShaderClip", 0.0, 0.0, 100.0, 100.0);
+        let parent_id = graph.add_root(parent);
+        graph.set_clip_mode(parent_id, ClipMode::ShaderRect);
+
+        let child = frame_node("Child", 80.0, 80.0, 100.0, 100.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        graph.recompute_world_transforms();
+
+        // Inside parent clip and child.
+        let hits = graph.hit_test(90.0, 90.0);
+        assert!(hits.contains(&child_id));
+
+        // Inside child but outside parent clip.
+        let hits = graph.hit_test(120.0, 120.0);
+        assert!(!hits.contains(&child_id));
     }
 }

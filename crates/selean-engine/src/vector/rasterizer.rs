@@ -65,13 +65,7 @@ pub fn rasterize_path(
     // Fill the path.
     if let Some(fill_color) = fill {
         let paint = color_to_paint(fill_color);
-        pixmap.fill_path(
-            path,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            transform,
-            None,
-        );
+        pixmap.fill_path(path, &paint, tiny_skia::FillRule::Winding, transform, None);
     }
 
     // Stroke the path.
@@ -96,12 +90,16 @@ pub fn rasterize_path(
 /// Converts a `Color` to a `tiny_skia::Paint`.
 fn color_to_paint(color: Color) -> tiny_skia::Paint<'static> {
     let mut paint = tiny_skia::Paint::default();
-    paint.set_color(tiny_skia::Color::from_rgba(color.r, color.g, color.b, color.a).unwrap_or(tiny_skia::Color::BLACK));
+    paint.set_color(
+        tiny_skia::Color::from_rgba(color.r, color.g, color.b, color.a)
+            .unwrap_or(tiny_skia::Color::BLACK),
+    );
     paint.anti_alias = true;
     paint
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::vector::parser::parse_path_data;
@@ -109,15 +107,8 @@ mod tests {
     #[test]
     fn rasterize_simple_line() {
         let path = parse_path_data("M 0 0 L 10 10").expect("parse");
-        let result = rasterize_path(
-            &path,
-            32,
-            32,
-            None,
-            Some(Color::BLACK),
-            2.0,
-        )
-        .expect("rasterize");
+        let result =
+            rasterize_path(&path, 32, 32, None, Some(Color::BLACK), 2.0).expect("rasterize");
 
         assert_eq!(result.width, 32);
         assert_eq!(result.height, 32);

@@ -96,7 +96,9 @@ impl Transform2D {
         let translate_to_origin = Self::translation(-cx, -cy);
         let rotate = Self::rotation(angle_rad);
         let translate_back = Self::translation(cx, cy);
-        translate_back.compose(&rotate).compose(&translate_to_origin)
+        translate_back
+            .compose(&rotate)
+            .compose(&translate_to_origin)
     }
 
     /// Creates a scale around a specific center point.
@@ -314,7 +316,7 @@ impl Default for TransformColumns {
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)]
+#[allow(clippy::float_cmp, clippy::unwrap_used, clippy::uninlined_format_args)]
 mod tests {
     use super::*;
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
@@ -592,8 +594,7 @@ mod tests {
         let round_trip = t.compose(&inv);
         assert!(
             round_trip.is_identity(),
-            "round trip should be identity, got {:?}",
-            round_trip
+            "round trip should be identity, got {round_trip:?}"
         );
     }
 
@@ -748,6 +749,7 @@ mod tests {
 
     // --- Property-based tests ---
 
+    #[allow(clippy::expect_used)]
     mod proptests {
         use super::*;
         use proptest::prelude::*;

@@ -9,8 +9,8 @@ use tracing::warn;
 
 use crate::renderer::texture_atlas::AtlasRegion;
 use crate::renderer::{
-    BLEND_STATE_ADD, QUAD_INDICES, PersistentInstanceBuffer, QuadVertex, SharedPipelineResources,
-    create_pipeline_with_blend,
+    BLEND_STATE_ADD, PersistentInstanceBuffer, QUAD_INDICES, QuadVertex, STENCIL_NOOP,
+    SharedPipelineResources, create_pipeline_with_blend,
 };
 use crate::scene::{BlendMode, Color, SceneNode, TransformColumns};
 
@@ -248,7 +248,8 @@ impl TextBatch {
             self.upload_cache.clear();
             let normal_bytes: &[u8] = bytemuck::cast_slice(&self.normal_instances);
             let add_bytes: &[u8] = bytemuck::cast_slice(&self.add_instances);
-            self.upload_cache.reserve(normal_bytes.len() + add_bytes.len());
+            self.upload_cache
+                .reserve(normal_bytes.len() + add_bytes.len());
             self.upload_cache.extend_from_slice(normal_bytes);
             self.upload_cache.extend_from_slice(add_bytes);
         }
@@ -294,7 +295,9 @@ impl TextBatch {
         let normal_calls = if self.normal_instances.is_empty() {
             0
         } else {
-            self.normal_instances.len().div_ceil(MAX_INSTANCES_PER_BATCH)
+            self.normal_instances
+                .len()
+                .div_ceil(MAX_INSTANCES_PER_BATCH)
         };
         let add_calls = if self.add_instances.is_empty() {
             0
@@ -353,6 +356,8 @@ impl TextPipeline {
             &buffers,
             target_format,
             wgpu::BlendState::ALPHA_BLENDING,
+            Some(STENCIL_NOOP),
+            wgpu::ColorWrites::ALL,
         );
 
         let pipeline_add = create_pipeline_with_blend(
@@ -363,6 +368,8 @@ impl TextPipeline {
             &buffers,
             target_format,
             BLEND_STATE_ADD,
+            Some(STENCIL_NOOP),
+            wgpu::ColorWrites::ALL,
         );
 
         Self {
@@ -487,8 +494,13 @@ mod tests {
         let uv_rect = [0.0, 0.1, 0.05, 0.15];
         let color = Color::BLACK;
 
-        let instance =
-            GlyphInstance::from_positioned(&glyph, uv_rect, &color, 0.8, TransformColumns::identity());
+        let instance = GlyphInstance::from_positioned(
+            &glyph,
+            uv_rect,
+            &color,
+            0.8,
+            TransformColumns::identity(),
+        );
 
         assert_eq!(instance.pos, [100.0, 200.0]);
         assert_eq!(instance.size, [10.0, 15.0]);

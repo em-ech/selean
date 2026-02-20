@@ -199,12 +199,42 @@ pub const BLEND_STATE_ADD: wgpu::BlendState = wgpu::BlendState {
 
 // --- Shared pipeline creation helper ---
 
-/// Creates a render pipeline with the given blend state.
+/// No-op stencil state: always passes, never writes. Used by pipelines that
+/// don't interact with stencil but must be compatible with the stencil attachment.
+pub const STENCIL_NOOP: wgpu::DepthStencilState = wgpu::DepthStencilState {
+    format: wgpu::TextureFormat::Depth24PlusStencil8,
+    depth_write_enabled: false,
+    depth_compare: wgpu::CompareFunction::Always,
+    stencil: wgpu::StencilState {
+        front: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        },
+        back: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        },
+        read_mask: 0xFF,
+        write_mask: 0x00,
+    },
+    bias: wgpu::DepthBiasState {
+        constant: 0,
+        slope_scale: 0.0,
+        clamp: 0.0,
+    },
+};
+
+/// Creates a render pipeline with the given blend state, depth/stencil state,
+/// and color write mask.
 ///
 /// This helper encapsulates the common pipeline descriptor structure shared by
-/// all instanced rendering pipelines (rect, text, textured quad). The only
-/// difference between Normal and Add pipeline variants is the blend state.
+/// all instanced rendering pipelines (rect, text, textured quad).
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn create_pipeline_with_blend(
     device: &wgpu::Device,
     label: &str,
@@ -213,6 +243,8 @@ pub fn create_pipeline_with_blend(
     buffers: &[wgpu::VertexBufferLayout<'_>],
     target_format: wgpu::TextureFormat,
     blend_state: wgpu::BlendState,
+    depth_stencil: Option<wgpu::DepthStencilState>,
+    color_writes: wgpu::ColorWrites,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -232,7 +264,7 @@ pub fn create_pipeline_with_blend(
             polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil,
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader_module,
@@ -241,10 +273,35 @@ pub fn create_pipeline_with_blend(
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: Some(blend_state),
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask: color_writes,
             })],
         }),
         multiview: None,
         cache: None,
     })
+}
+
+/// Creates the stencil texture and view for the given dimensions.
+#[must_use]
+pub fn create_stencil_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("stencil_texture"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }

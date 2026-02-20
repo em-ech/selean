@@ -4,11 +4,13 @@
 //! via dirty flag bitmasks. Only nodes with non-zero dirty flags are processed
 //! during rendering.
 
+pub mod clip;
 mod dirty;
 mod node;
 mod store;
 pub mod transform;
 
+pub use clip::{ClipMode, ClipRect};
 pub use dirty::DirtyFlags;
 pub use node::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind};
 pub use store::SceneGraph;

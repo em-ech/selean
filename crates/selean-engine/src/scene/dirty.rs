@@ -31,8 +31,10 @@ impl DirtyFlags {
     /// Local transform changed — world transform needs recomputation.
     /// Propagates *downward* to all descendants (unlike `CHILDREN` which goes up).
     pub const TRANSFORM: Self = Self(0b0100_0000);
+    /// Clip mode changed — clipping state needs updating.
+    pub const CLIP: Self = Self(0b1000_0000);
     /// All flags set — used when a node is newly created.
-    pub const ALL: Self = Self(0b0111_1111);
+    pub const ALL: Self = Self(0b1111_1111);
 
     /// Returns `true` if no dirty flags are set.
     #[must_use]
@@ -113,6 +115,7 @@ impl fmt::Debug for DirtyFlags {
             (Self::TEXT, "TEXT"),
             (Self::EFFECTS, "EFFECTS"),
             (Self::TRANSFORM, "TRANSFORM"),
+            (Self::CLIP, "CLIP"),
         ];
 
         for (flag, name) in flags {
@@ -222,6 +225,20 @@ mod tests {
         assert!(DirtyFlags::ALL.contains(DirtyFlags::TEXT));
         assert!(DirtyFlags::ALL.contains(DirtyFlags::EFFECTS));
         assert!(DirtyFlags::ALL.contains(DirtyFlags::TRANSFORM));
+        assert!(DirtyFlags::ALL.contains(DirtyFlags::CLIP));
+    }
+
+    #[test]
+    fn clip_flag() {
+        let flags = DirtyFlags::CLIP;
+        assert!(flags.contains(DirtyFlags::CLIP));
+        assert!(!flags.contains(DirtyFlags::GEOMETRY));
+        assert_eq!(flags.bits(), 0b1000_0000);
+    }
+
+    #[test]
+    fn debug_format_clip() {
+        assert_eq!(format!("{:?}", DirtyFlags::CLIP), "DirtyFlags(CLIP)");
     }
 
     #[test]

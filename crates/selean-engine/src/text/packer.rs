@@ -211,10 +211,7 @@ mod tests {
 
         // Row height is now 51 (50+1 padding). Force new row with a wide glyph.
         // 150+1=151 > remaining (200-82=118), so wraps to new row at y=51.
-        assert_eq!(
-            packer.allocate(150, 30),
-            PackResult::Placed { x: 0, y: 51 }
-        );
+        assert_eq!(packer.allocate(150, 30), PackResult::Placed { x: 0, y: 51 });
     }
 
     #[test]

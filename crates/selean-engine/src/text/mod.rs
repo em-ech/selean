@@ -13,10 +13,10 @@ pub mod sdf;
 pub mod shaper;
 
 pub use atlas::{AtlasRegion, GlyphAtlas};
-pub use packer::{PackResult, ShelfPacker};
 pub use cache::{CachedGlyph, GlyphCache, GlyphCacheKey};
 pub use font::FontData;
 pub use layout::{PositionedGlyph, TextLayout, layout_text};
+pub use packer::{PackResult, ShelfPacker};
 pub use pipeline::{GlyphInstance, TextBatch, TextPipeline};
 pub use sdf::{SdfBitmap, SdfParams, generate_glyph_sdf};
 pub use shaper::{ShapedGlyph, ShapedRun, shape_text};
@@ -173,12 +173,7 @@ impl TextSystem {
             TextCacheAction::FullHit => {
                 // Fast path: reuse cached layout, just push instances to batch.
                 if let Some(cached) = self.node_text_cache.get(&node.id) {
-                    batch.push_text_node(
-                        node,
-                        &cached.layout.glyphs,
-                        &self.cache,
-                        sdf_size,
-                    );
+                    batch.push_text_node(node, &cached.layout.glyphs, &self.cache, sdf_size);
                 }
             }
             TextCacheAction::RelayoutOnly => {
@@ -197,12 +192,7 @@ impl TextSystem {
                     return Ok(());
                 };
 
-                batch.push_text_node(
-                    node,
-                    &layout.glyphs,
-                    &self.cache,
-                    sdf_size,
-                );
+                batch.push_text_node(node, &layout.glyphs, &self.cache, sdf_size);
 
                 if let Some(entry) = self.node_text_cache.get_mut(&node.id) {
                     entry.font_size = font_size;
@@ -229,12 +219,7 @@ impl TextSystem {
                     sdf_size,
                 );
 
-                batch.push_text_node(
-                    node,
-                    &layout.glyphs,
-                    &self.cache,
-                    sdf_size,
-                );
+                batch.push_text_node(node, &layout.glyphs, &self.cache, sdf_size);
 
                 self.node_text_cache.insert(
                     node.id,

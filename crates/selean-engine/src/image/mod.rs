@@ -50,11 +50,7 @@ impl ImageSystem {
     /// # Errors
     ///
     /// Returns `EngineError::Image` if the bytes cannot be decoded.
-    pub fn register_asset(
-        &mut self,
-        asset_ref: &str,
-        bytes: &[u8],
-    ) -> Result<(), EngineError> {
+    pub fn register_asset(&mut self, asset_ref: &str, bytes: &[u8]) -> Result<(), EngineError> {
         let decoded = decode_image_resized(bytes, MAX_IMAGE_DIM)?;
         debug!(
             asset_ref,
@@ -62,8 +58,7 @@ impl ImageSystem {
             height = decoded.height,
             "Image asset registered"
         );
-        self.decoded_assets
-            .insert(asset_ref.to_owned(), decoded);
+        self.decoded_assets.insert(asset_ref.to_owned(), decoded);
         // Invalidate cache entry if re-registering the same asset.
         self.cache.clear_entry(asset_ref);
         Ok(())

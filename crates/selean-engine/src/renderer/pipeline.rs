@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 use super::camera::Camera;
 use super::gpu::{GpuContext, GpuContextDescriptor};
 use super::rect_pipeline::{RectBatch, RectPipeline};
-use super::shared::{PersistentInstanceBuffer, SharedPipelineResources};
+use super::shared::{PersistentInstanceBuffer, SharedPipelineResources, create_stencil_texture};
 use super::texture_atlas::TextureAtlas;
 use super::textured_quad::{TexturedQuadBatch, TexturedQuadPipeline};
 use crate::image::ImageSystem;
@@ -88,6 +88,10 @@ pub struct Renderer {
     vector_system: VectorSystem,
     /// RGBA atlas shared by images and vectors.
     image_atlas: TextureAtlas<4>,
+    /// Stencil texture for clip masking.
+    stencil_texture: wgpu::Texture,
+    /// Stencil texture view for render pass attachment.
+    stencil_view: wgpu::TextureView,
     /// Background clear color.
     clear_color: wgpu::Color,
     /// The texture format used for the render target.
@@ -141,6 +145,14 @@ impl Renderer {
             &shared,
         );
 
+        // Create stencil texture for clip masking.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let (stencil_texture, stencil_view) = create_stencil_texture(
+            &gpu.device,
+            descriptor.viewport_width as u32,
+            descriptor.viewport_height as u32,
+        );
+
         info!(
             viewport_w = descriptor.viewport_width,
             viewport_h = descriptor.viewport_height,
@@ -177,6 +189,8 @@ impl Renderer {
             vector_instance_buf,
             vector_system: VectorSystem::new(),
             image_atlas,
+            stencil_texture,
+            stencil_view,
             clear_color: descriptor.clear_color,
             target_format,
         })
@@ -212,8 +226,16 @@ impl Renderer {
     }
 
     /// Updates the viewport size (e.g., on window resize).
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     pub fn resize(&mut self, width: f32, height: f32) {
         self.camera.set_viewport_size(width, height);
+
+        // Recreate stencil texture to match new viewport size.
+        let (stencil_texture, stencil_view) =
+            create_stencil_texture(&self.gpu.device, width as u32, height as u32);
+        self.stencil_texture = stencil_texture;
+        self.stencil_view = stencil_view;
+
         debug!(width, height, "Viewport resized");
     }
 
@@ -256,10 +278,7 @@ impl Renderer {
                 SceneNodeKind::Frame { .. } | SceneNodeKind::Group => {
                     self.rect_batch.push_node(node);
                 }
-                SceneNodeKind::Text {
-                    content,
-                    font_size,
-                } => {
+                SceneNodeKind::Text { content, font_size } => {
                     if let Err(e) = self.text_system.prepare_text_node(
                         &self.gpu.device,
                         &self.gpu.queue,
@@ -314,14 +333,26 @@ impl Renderer {
         self.shared.update_camera(&self.gpu.queue, &camera_uniform);
 
         // Upload instance data to persistent GPU buffers.
-        self.rect_instance_buf
-            .upload(&self.gpu.device, &self.gpu.queue, self.rect_batch.as_bytes());
-        self.text_instance_buf
-            .upload(&self.gpu.device, &self.gpu.queue, self.text_batch.as_bytes());
-        self.image_instance_buf
-            .upload(&self.gpu.device, &self.gpu.queue, self.image_batch.as_bytes());
-        self.vector_instance_buf
-            .upload(&self.gpu.device, &self.gpu.queue, self.vector_batch.as_bytes());
+        self.rect_instance_buf.upload(
+            &self.gpu.device,
+            &self.gpu.queue,
+            self.rect_batch.as_bytes(),
+        );
+        self.text_instance_buf.upload(
+            &self.gpu.device,
+            &self.gpu.queue,
+            self.text_batch.as_bytes(),
+        );
+        self.image_instance_buf.upload(
+            &self.gpu.device,
+            &self.gpu.queue,
+            self.image_batch.as_bytes(),
+        );
+        self.vector_instance_buf.upload(
+            &self.gpu.device,
+            &self.gpu.queue,
+            self.vector_batch.as_bytes(),
+        );
 
         debug!(
             rects = self.rect_batch.len(),
@@ -365,7 +396,14 @@ impl Renderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.stencil_view,
+                    depth_ops: None,
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });

@@ -76,6 +76,7 @@ pub fn parse_path_data(path_data: &str) -> Result<tiny_skia::Path, EngineError> 
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -168,8 +169,7 @@ mod tests {
 
     #[test]
     fn parse_multiple_subpaths() {
-        let path =
-            parse_path_data("M 0 0 L 10 10 Z M 20 20 L 30 30 Z").expect("should parse");
+        let path = parse_path_data("M 0 0 L 10 10 Z M 20 20 L 30 30 Z").expect("should parse");
         assert!(path.bounds().width() > 0.0);
     }
 }
