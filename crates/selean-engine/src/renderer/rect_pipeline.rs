@@ -9,14 +9,14 @@ use tracing::warn;
 
 use super::quad::{QUAD_INDICES, QuadVertex};
 use super::shared::{
-    BLEND_STATE_ADD, PersistentInstanceBuffer, STENCIL_NOOP, SharedPipelineResources,
-    create_pipeline_with_blend,
+    BLEND_STATE_ADD, PersistentInstanceBuffer, STENCIL_DECREMENT, STENCIL_NOOP, STENCIL_TEST,
+    STENCIL_WRITE, SharedPipelineResources, create_pipeline_with_blend,
 };
-use crate::scene::{BlendMode, Color, SceneNode, SceneNodeKind, TransformColumns};
+use crate::scene::{BlendMode, ClipRect, Color, SceneNode, SceneNodeKind, TransformColumns};
 
 /// Maximum number of rectangle instances per draw call.
 ///
-/// 16,384 instances * 96 bytes = ~1.5 MB, well within GPU buffer limits.
+/// 16,384 instances * 112 bytes = ~1.75 MB, well within GPU buffer limits.
 /// If more instances are needed, they're split into multiple draw calls.
 const MAX_INSTANCES_PER_BATCH: usize = 16_384;
 
@@ -43,6 +43,9 @@ pub struct RectInstance {
     pub corner_radii: [f32; 4],
     /// 2D affine transform columns: `[c0, c1, c2]` (24 bytes).
     pub transform: TransformColumns,
+    /// Clip rectangle for `ShaderRect` clipping: `[min_x, min_y, max_x, max_y]`.
+    /// Fragments outside this rect are discarded. `ClipRect::INFINITE` disables clipping.
+    pub clip_rect: [f32; 4],
 }
 
 impl RectInstance {
@@ -96,6 +99,12 @@ impl RectInstance {
             TRANSFORM_ATTRS[1],
             // location(10): transform_c2
             TRANSFORM_ATTRS[2],
+            // location(11): clip_rect
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 96,
+                shader_location: 11,
+            },
         ];
 
         wgpu::VertexBufferLayout {
@@ -131,6 +140,7 @@ impl RectInstance {
             stroke_width_opacity: [node.stroke_width, node.opacity],
             corner_radii,
             transform: node.world_transform.to_gpu_columns(),
+            clip_rect: ClipRect::INFINITE.to_array(),
         })
     }
 }
@@ -147,6 +157,8 @@ pub struct RectBatch {
     add_instances: Vec<RectInstance>,
     /// Combined byte buffer for GPU upload (only used when `add_instances` is non-empty).
     upload_cache: Vec<u8>,
+    /// Ordered instances for hierarchical DFS rendering (replaces blend-partitioned vecs).
+    ordered_instances: Vec<RectInstance>,
 }
 
 impl RectBatch {
@@ -157,6 +169,7 @@ impl RectBatch {
             normal_instances: Vec::with_capacity(1024),
             add_instances: Vec::new(),
             upload_cache: Vec::new(),
+            ordered_instances: Vec::with_capacity(1024),
         }
     }
 
@@ -165,6 +178,7 @@ impl RectBatch {
         self.normal_instances.clear();
         self.add_instances.clear();
         self.upload_cache.clear();
+        self.ordered_instances.clear();
     }
 
     /// Adds a rectangle instance to the batch (Normal blend mode).
@@ -276,6 +290,28 @@ impl RectBatch {
         };
         normal_calls + add_calls
     }
+
+    /// Appends an instance to the ordered list (used by hierarchical DFS rendering).
+    pub fn push_ordered(&mut self, instance: RectInstance) {
+        self.ordered_instances.push(instance);
+    }
+
+    /// Returns the number of ordered instances.
+    #[must_use]
+    pub fn ordered_len(&self) -> usize {
+        self.ordered_instances.len()
+    }
+
+    /// Returns the ordered instance data as a byte slice for GPU upload.
+    #[must_use]
+    pub fn ordered_as_bytes(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.ordered_instances)
+    }
+
+    /// Clears only the ordered instances (used between frames).
+    pub fn clear_ordered(&mut self) {
+        self.ordered_instances.clear();
+    }
 }
 
 impl Default for RectBatch {
@@ -284,15 +320,24 @@ impl Default for RectBatch {
     }
 }
 
-/// The compiled rectangle rendering pipeline with Normal + Add blend mode variants.
+/// The compiled rectangle rendering pipeline with blend mode and stencil variants.
 ///
 /// Shared resources (vertex/index buffers, camera uniform) are provided by
 /// [`SharedPipelineResources`] during creation and draw calls.
+#[allow(clippy::struct_field_names)]
 pub struct RectPipeline {
     /// Pipeline variant for Normal (alpha) blending.
     pipeline_normal: wgpu::RenderPipeline,
     /// Pipeline variant for Additive blending.
     pipeline_add: wgpu::RenderPipeline,
+    /// Normal blend with stencil Equal test (render inside stencil clip).
+    pipeline_normal_stencil_test: wgpu::RenderPipeline,
+    /// Additive blend with stencil Equal test (render inside stencil clip).
+    pipeline_add_stencil_test: wgpu::RenderPipeline,
+    /// Stencil write: `IncrementClamp`, no color output (clip push).
+    pipeline_stencil_write: wgpu::RenderPipeline,
+    /// Stencil decrement: `DecrementClamp`, no color output (clip pop).
+    pipeline_stencil_decrement: wgpu::RenderPipeline,
 }
 
 impl RectPipeline {
@@ -341,10 +386,87 @@ impl RectPipeline {
             wgpu::ColorWrites::ALL,
         );
 
+        let pipeline_normal_stencil_test = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_normal_stencil_test",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            wgpu::BlendState::ALPHA_BLENDING,
+            Some(STENCIL_TEST),
+            wgpu::ColorWrites::ALL,
+        );
+
+        let pipeline_add_stencil_test = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_add_stencil_test",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            BLEND_STATE_ADD,
+            Some(STENCIL_TEST),
+            wgpu::ColorWrites::ALL,
+        );
+
+        let pipeline_stencil_write = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_stencil_write",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            wgpu::BlendState::ALPHA_BLENDING,
+            Some(STENCIL_WRITE),
+            wgpu::ColorWrites::empty(),
+        );
+
+        let pipeline_stencil_decrement = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_stencil_decrement",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            wgpu::BlendState::ALPHA_BLENDING,
+            Some(STENCIL_DECREMENT),
+            wgpu::ColorWrites::empty(),
+        );
+
         Self {
             pipeline_normal,
             pipeline_add,
+            pipeline_normal_stencil_test,
+            pipeline_add_stencil_test,
+            pipeline_stencil_write,
+            pipeline_stencil_decrement,
         }
+    }
+
+    /// Returns the pipeline variant for the given blend mode and stencil test state.
+    ///
+    /// Non-native blend modes (Multiply, Screen, etc.) fall back to Normal.
+    #[must_use]
+    pub fn select_pipeline(&self, blend: BlendMode, stencil_test: bool) -> &wgpu::RenderPipeline {
+        match (blend, stencil_test) {
+            (BlendMode::Add, false) => &self.pipeline_add,
+            (BlendMode::Add, true) => &self.pipeline_add_stencil_test,
+            (_, false) => &self.pipeline_normal,
+            (_, true) => &self.pipeline_normal_stencil_test,
+        }
+    }
+
+    /// Returns the stencil-write pipeline (`IncrementClamp`, no color output).
+    #[must_use]
+    pub fn stencil_write_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline_stencil_write
+    }
+
+    /// Returns the stencil-decrement pipeline (`DecrementClamp`, no color output).
+    #[must_use]
+    pub fn stencil_decrement_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline_stencil_decrement
     }
 
     /// Records draw commands for a batch of rectangle instances.
@@ -398,13 +520,13 @@ mod tests {
 
     use super::*;
     use crate::renderer::QUAD_VERTICES;
-    use crate::scene::{BoundingBox, SceneNodeKind};
+    use crate::scene::{BoundingBox, ClipRect, SceneNodeKind};
     use selean_common::types::NodeId;
 
     #[test]
-    fn rect_instance_size_is_96_bytes() {
-        // 2 + 2 + 4 + 4 + 2 + 4 + 2 + 2 + 2 = 24 floats * 4 bytes = 96 bytes.
-        assert_eq!(std::mem::size_of::<RectInstance>(), 96);
+    fn rect_instance_size_is_112_bytes() {
+        // 2 + 2 + 4 + 4 + 2 + 4 + 6 + 4 = 28 floats * 4 bytes = 112 bytes.
+        assert_eq!(std::mem::size_of::<RectInstance>(), 112);
     }
 
     #[test]
@@ -442,6 +564,7 @@ mod tests {
         assert_eq!(inst.pos, [10.0, 20.0]);
         assert_eq!(inst.size, [100.0, 50.0]);
         assert_eq!(inst.corner_radii, [4.0, 8.0, 12.0, 16.0]);
+        assert_eq!(inst.clip_rect, ClipRect::INFINITE.to_array());
     }
 
     #[test]

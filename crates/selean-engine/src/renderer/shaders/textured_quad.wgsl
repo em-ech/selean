@@ -43,6 +43,8 @@ struct QuadInstance {
     @location(7) transform_c0: vec2<f32>,
     @location(8) transform_c1: vec2<f32>,
     @location(9) transform_c2: vec2<f32>,
+    // Clip rectangle: [min_x, min_y, max_x, max_y]. Fragments outside are discarded.
+    @location(10) clip_rect: vec4<f32>,
 };
 
 // --- Vertex input/output ---
@@ -62,6 +64,10 @@ struct VertexOutput {
     @location(1) tint_color: vec4<f32>,
     // Opacity.
     @location(2) opacity: f32,
+    // World-space position for clip rect testing.
+    @location(3) world_pos: vec2<f32>,
+    // Clip rectangle passthrough.
+    @location(4) clip_rect: vec4<f32>,
 };
 
 // --- Vertex shader ---
@@ -87,6 +93,8 @@ fn vs_main(vert: VertexInput, inst: QuadInstance) -> VertexOutput {
 
     out.tint_color = inst.tint_color;
     out.opacity = inst.opacity_pad.x;
+    out.world_pos = world_pos;
+    out.clip_rect = inst.clip_rect;
 
     return out;
 }
@@ -95,6 +103,12 @@ fn vs_main(vert: VertexInput, inst: QuadInstance) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // ShaderRect clip: discard fragments outside the clip rectangle.
+    if (in.world_pos.x < in.clip_rect.x || in.world_pos.x > in.clip_rect.z ||
+        in.world_pos.y < in.clip_rect.y || in.world_pos.y > in.clip_rect.w) {
+        discard;
+    }
+
     // Sample the RGBA texture from the atlas.
     let tex_color = textureSample(atlas_texture, atlas_sampler, in.atlas_uv);
 

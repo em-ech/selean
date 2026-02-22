@@ -228,6 +228,93 @@ pub const STENCIL_NOOP: wgpu::DepthStencilState = wgpu::DepthStencilState {
     },
 };
 
+/// Stencil-test state: only passes where stencil equals the reference value.
+/// Used by pipelines that render content inside a stencil clip region.
+pub const STENCIL_TEST: wgpu::DepthStencilState = wgpu::DepthStencilState {
+    format: wgpu::TextureFormat::Depth24PlusStencil8,
+    depth_write_enabled: false,
+    depth_compare: wgpu::CompareFunction::Always,
+    stencil: wgpu::StencilState {
+        front: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        },
+        back: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        },
+        read_mask: 0xFF,
+        write_mask: 0x00,
+    },
+    bias: wgpu::DepthBiasState {
+        constant: 0,
+        slope_scale: 0.0,
+        clamp: 0.0,
+    },
+};
+
+/// Stencil-write state: increments stencil buffer on pass (clip push).
+/// Used to write clip shapes into the stencil buffer.
+pub const STENCIL_WRITE: wgpu::DepthStencilState = wgpu::DepthStencilState {
+    format: wgpu::TextureFormat::Depth24PlusStencil8,
+    depth_write_enabled: false,
+    depth_compare: wgpu::CompareFunction::Always,
+    stencil: wgpu::StencilState {
+        front: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::IncrementClamp,
+        },
+        back: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::IncrementClamp,
+        },
+        read_mask: 0xFF,
+        write_mask: 0xFF,
+    },
+    bias: wgpu::DepthBiasState {
+        constant: 0,
+        slope_scale: 0.0,
+        clamp: 0.0,
+    },
+};
+
+/// Stencil-decrement state: decrements stencil buffer on pass (clip pop).
+/// Used to restore the stencil buffer when popping a clip boundary.
+pub const STENCIL_DECREMENT: wgpu::DepthStencilState = wgpu::DepthStencilState {
+    format: wgpu::TextureFormat::Depth24PlusStencil8,
+    depth_write_enabled: false,
+    depth_compare: wgpu::CompareFunction::Always,
+    stencil: wgpu::StencilState {
+        front: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::DecrementClamp,
+        },
+        back: wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::DecrementClamp,
+        },
+        read_mask: 0xFF,
+        write_mask: 0xFF,
+    },
+    bias: wgpu::DepthBiasState {
+        constant: 0,
+        slope_scale: 0.0,
+        clamp: 0.0,
+    },
+};
+
 /// Creates a render pipeline with the given blend state, depth/stencil state,
 /// and color write mask.
 ///

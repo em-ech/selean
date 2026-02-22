@@ -5,16 +5,20 @@
 //! and executing render passes.
 
 use selean_common::error::EngineError;
+use selean_common::types::NodeId;
 use tracing::{debug, info, warn};
 
 use super::camera::Camera;
+use super::clip_stack::ClipStack;
+use super::draw_list::{DrawCommand, DrawList};
 use super::gpu::{GpuContext, GpuContextDescriptor};
-use super::rect_pipeline::{RectBatch, RectPipeline};
+use super::quad::QUAD_INDICES;
+use super::rect_pipeline::{RectBatch, RectInstance, RectPipeline};
 use super::shared::{PersistentInstanceBuffer, SharedPipelineResources, create_stencil_texture};
 use super::texture_atlas::TextureAtlas;
 use super::textured_quad::{TexturedQuadBatch, TexturedQuadPipeline};
 use crate::image::ImageSystem;
-use crate::scene::{SceneNode, SceneNodeKind};
+use crate::scene::{BlendMode, ClipMode, ClipRect, SceneGraph, SceneNode, SceneNodeKind};
 use crate::text::{TextBatch, TextPipeline, TextSystem};
 use crate::vector::VectorSystem;
 
@@ -45,6 +49,57 @@ impl Default for RendererDescriptor {
             },
         }
     }
+}
+
+/// An entry in the render order produced by the DFS traversal.
+///
+/// Phase 1 (DFS) populates these entries. Phase 2 (after UV finalization)
+/// iterates them to patch clip rects and emit [`DrawCommand`]s.
+#[derive(Debug, Clone)]
+enum RenderOrderEntry {
+    Rect {
+        instance_start: u32,
+        instance_count: u32,
+        blend: BlendMode,
+        stencil_test: bool,
+    },
+    Text {
+        pending_start: u32,
+        pending_count: u32,
+        blend: BlendMode,
+        stencil_test: bool,
+        shader_clip_rect: ClipRect,
+    },
+    Image {
+        pending_start: u32,
+        pending_count: u32,
+        blend: BlendMode,
+        stencil_test: bool,
+        shader_clip_rect: ClipRect,
+    },
+    Vector {
+        pending_start: u32,
+        pending_count: u32,
+        blend: BlendMode,
+        stencil_test: bool,
+        shader_clip_rect: ClipRect,
+    },
+    PushScissor {
+        clip_rect: ClipRect,
+    },
+    PopScissor {
+        parent_scissor: Option<ClipRect>,
+    },
+    PushStencil {
+        write_instance_start: u32,
+        write_instance_count: u32,
+        new_stencil_ref: u32,
+    },
+    PopStencil {
+        decrement_instance_start: u32,
+        decrement_instance_count: u32,
+        restored_stencil_ref: u32,
+    },
 }
 
 /// Top-level renderer that orchestrates the entire rendering pipeline.
@@ -96,6 +151,12 @@ pub struct Renderer {
     clear_color: wgpu::Color,
     /// The texture format used for the render target.
     target_format: wgpu::TextureFormat,
+    /// Draw command list for the current frame (reused across frames).
+    draw_list: DrawList,
+    /// Render order entries from DFS traversal (reused across frames).
+    render_order: Vec<RenderOrderEntry>,
+    /// Clip state stack for DFS traversal (reused across frames).
+    clip_stack: ClipStack,
 }
 
 impl Renderer {
@@ -193,6 +254,9 @@ impl Renderer {
             stencil_view,
             clear_color: descriptor.clear_color,
             target_format,
+            draw_list: DrawList::new(),
+            render_order: Vec::with_capacity(256),
+            clip_stack: ClipStack::new(),
         })
     }
 
@@ -255,129 +319,435 @@ impl Renderer {
         self.image_system.register_asset(asset_ref, bytes)
     }
 
-    /// Prepares a frame for rendering by collecting visible scene nodes.
+    /// Renders a complete frame using hierarchical DFS traversal.
     ///
-    /// Processes each node into the appropriate batch: rectangles go to
-    /// `RectBatch`, text nodes to `TextBatch`, images and vectors to
-    /// `TexturedQuadBatch` instances.
+    /// Replaces the flat `prepare()` + `render()` flow. Walks the scene tree
+    /// depth-first, respecting clip node boundaries, and produces a draw list
+    /// that is executed in a single render pass.
     ///
     /// # Arguments
-    /// * `visible_nodes` — Iterator of scene nodes within the viewport.
-    ///   Nodes should be in back-to-front render order.
-    pub fn prepare<'a>(&mut self, visible_nodes: impl Iterator<Item = &'a SceneNode>) {
+    /// * `scene` — The scene graph (world transforms are recomputed if dirty).
+    /// * `view` — The texture view to render into.
+    pub fn render_frame(&mut self, scene: &mut SceneGraph, view: &wgpu::TextureView) {
+        // Phase 0: Recompute cached world transforms.
+        scene.recompute_world_transforms();
+
+        // Clear per-frame state.
         self.rect_batch.clear();
         self.text_batch.clear();
         self.image_batch.clear();
         self.vector_batch.clear();
+        self.render_order.clear();
+        self.draw_list.clear();
+        self.clip_stack.clear();
 
-        let mut node_count = 0u32;
-        for node in visible_nodes {
-            node_count += 1;
-
-            match &node.kind {
-                SceneNodeKind::Frame { .. } | SceneNodeKind::Group => {
-                    self.rect_batch.push_node(node);
-                }
-                SceneNodeKind::Text { content, font_size } => {
-                    if let Err(e) = self.text_system.prepare_text_node(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        node,
-                        content,
-                        *font_size,
-                        &mut self.text_batch,
-                    ) {
-                        warn!(?e, node_id = %node.id, "Failed to prepare text node");
-                    }
-                }
-                SceneNodeKind::Image { asset_ref } => {
-                    if let Err(e) = self.image_system.prepare_image_node(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &mut self.image_atlas,
-                        node,
-                        asset_ref,
-                        &mut self.image_batch,
-                    ) {
-                        warn!(?e, node_id = %node.id, "Failed to prepare image node");
-                    }
-                }
-                SceneNodeKind::Vector { path_data } => {
-                    if let Err(e) = self.vector_system.prepare_vector_node(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &mut self.image_atlas,
-                        node,
-                        path_data,
-                        &mut self.vector_batch,
-                    ) {
-                        warn!(?e, node_id = %node.id, "Failed to prepare vector node");
-                    }
-                }
-            }
+        // Phase 1: DFS traversal from each root.
+        let roots = scene.roots().to_vec();
+        for root_id in roots {
+            self.dfs_visit(scene, root_id);
         }
 
-        // Finalize UVs now that atlas dimensions are stable.
+        // Phase 2: Finalize UVs (atlas dimensions are now stable).
         let (atlas_w, atlas_h) = self.image_atlas.dimensions();
-        self.image_batch.finalize_uvs(atlas_w, atlas_h);
-        self.vector_batch.finalize_uvs(atlas_w, atlas_h);
+        self.image_batch.finalize_uvs_ordered(atlas_w, atlas_h);
+        self.vector_batch.finalize_uvs_ordered(atlas_w, atlas_h);
 
         let (glyph_atlas_w, glyph_atlas_h) = self.text_system.atlas().dimensions();
-        self.text_batch.finalize_uvs(glyph_atlas_w, glyph_atlas_h);
+        self.text_batch
+            .finalize_uvs_ordered(glyph_atlas_w, glyph_atlas_h);
 
-        // Finalize blend mode partitioning for rect batch (text/image/vector do it in finalize_uvs).
-        self.rect_batch.finalize_blend();
+        // Phase 2b: Iterate render order, patch clip rects, emit draw commands.
+        self.build_draw_list();
 
-        // Upload the camera uniform once (shared by all pipelines).
+        // Merge adjacent compatible draw commands.
+        self.draw_list.merge_adjacent();
+
+        // Upload camera uniform.
         let camera_uniform = self.camera.build_uniform();
         self.shared.update_camera(&self.gpu.queue, &camera_uniform);
 
-        // Upload instance data to persistent GPU buffers.
+        // Upload ordered instance buffers.
         self.rect_instance_buf.upload(
             &self.gpu.device,
             &self.gpu.queue,
-            self.rect_batch.as_bytes(),
+            self.rect_batch.ordered_as_bytes(),
         );
         self.text_instance_buf.upload(
             &self.gpu.device,
             &self.gpu.queue,
-            self.text_batch.as_bytes(),
+            self.text_batch.ordered_as_bytes(),
         );
         self.image_instance_buf.upload(
             &self.gpu.device,
             &self.gpu.queue,
-            self.image_batch.as_bytes(),
+            self.image_batch.ordered_as_bytes(),
         );
         self.vector_instance_buf.upload(
             &self.gpu.device,
             &self.gpu.queue,
-            self.vector_batch.as_bytes(),
+            self.vector_batch.ordered_as_bytes(),
         );
 
         debug!(
-            rects = self.rect_batch.len(),
-            glyphs = self.text_batch.len(),
-            images = self.image_batch.len(),
-            vectors = self.vector_batch.len(),
-            total_nodes = node_count,
-            rect_draws = self.rect_batch.draw_call_count(),
-            text_draws = self.text_batch.draw_call_count(),
-            image_draws = self.image_batch.draw_call_count(),
-            vector_draws = self.vector_batch.draw_call_count(),
-            "Frame prepared"
+            rects = self.rect_batch.ordered_len(),
+            glyphs = self.text_batch.ordered_len(),
+            images = self.image_batch.ordered_len(),
+            vectors = self.vector_batch.ordered_len(),
+            draw_commands = self.draw_list.len(),
+            "Frame prepared (hierarchical DFS)"
         );
+
+        // Phase 3: Execute the draw list in a render pass.
+        self.execute_draw_list(view);
     }
 
-    /// Renders a frame to the given texture view.
-    ///
-    /// Executes the render pass with the prepared batch data. Call `prepare()`
-    /// before this method each frame.
-    ///
-    /// Draw order: rects → images → vectors → text (back to front).
-    ///
-    /// # Arguments
-    /// * `view` — The texture view to render into (from a surface or offscreen target).
-    pub fn render(&self, view: &wgpu::TextureView) {
+    /// DFS visit for a single node and its descendants.
+    #[allow(clippy::too_many_lines)]
+    fn dfs_visit(&mut self, scene: &SceneGraph, node_id: NodeId) {
+        let Some(node) = scene.get(node_id) else {
+            return;
+        };
+        if !node.visible {
+            return;
+        }
+
+        let clip_mode = node.clip_mode;
+        let blend_mode = node.blend_mode;
+        let is_clip = clip_mode != ClipMode::None;
+
+        // Enter clip: push clip state and emit render order entry.
+        let parent_scissor = self.clip_stack.current_scissor().copied();
+        if is_clip {
+            let world_bb = node.world_transform.transform_aabb(&node.bounds);
+            let node_clip = ClipRect::new(
+                world_bb.x,
+                world_bb.y,
+                world_bb.x + world_bb.width,
+                world_bb.y + world_bb.height,
+            );
+            match clip_mode {
+                ClipMode::Scissor => {
+                    self.clip_stack.push_scissor(node_clip);
+                    self.render_order.push(RenderOrderEntry::PushScissor {
+                        clip_rect: self
+                            .clip_stack
+                            .current_scissor()
+                            .copied()
+                            .unwrap_or(node_clip),
+                    });
+                }
+                ClipMode::Stencil => {
+                    // Create stencil write instance for the clip shape.
+                    if let Some(inst) =
+                        create_stencil_rect_instance(node, self.clip_stack.current_shader_rect())
+                    {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let write_start = self.rect_batch.ordered_len() as u32;
+                        self.rect_batch.push_ordered(inst);
+                        self.clip_stack.push_stencil(node_id);
+                        let new_ref = self.clip_stack.stencil_ref();
+                        self.render_order.push(RenderOrderEntry::PushStencil {
+                            write_instance_start: write_start,
+                            write_instance_count: 1,
+                            new_stencil_ref: new_ref,
+                        });
+                    }
+                }
+                ClipMode::ShaderRect => {
+                    self.clip_stack.push_shader_rect(node_clip);
+                }
+                ClipMode::None => unreachable!(),
+            }
+        }
+
+        // Process node content: create instances or record pending ranges.
+        let resolved = self.clip_stack.resolve();
+        match &node.kind {
+            SceneNodeKind::Frame { .. } | SceneNodeKind::Group => {
+                if !node.bounds.is_empty() {
+                    if let Some(mut inst) = RectInstance::from_scene_node(node) {
+                        inst.clip_rect = resolved.shader_clip_rect.to_array();
+                        #[allow(clippy::cast_possible_truncation)]
+                        let start = self.rect_batch.ordered_len() as u32;
+                        self.rect_batch.push_ordered(inst);
+                        self.render_order.push(RenderOrderEntry::Rect {
+                            instance_start: start,
+                            instance_count: 1,
+                            blend: blend_mode,
+                            stencil_test: resolved.stencil_ref > 0,
+                        });
+                    }
+                }
+            }
+            SceneNodeKind::Text { content, font_size } => {
+                #[allow(clippy::cast_possible_truncation)]
+                let pending_start = self.text_batch.pending_len() as u32;
+                if let Err(e) = self.text_system.prepare_text_node(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    node,
+                    content,
+                    *font_size,
+                    &mut self.text_batch,
+                ) {
+                    warn!(?e, node_id = %node.id, "Failed to prepare text node");
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                let pending_count = self.text_batch.pending_len() as u32 - pending_start;
+                if pending_count > 0 {
+                    self.render_order.push(RenderOrderEntry::Text {
+                        pending_start,
+                        pending_count,
+                        blend: blend_mode,
+                        stencil_test: resolved.stencil_ref > 0,
+                        shader_clip_rect: resolved.shader_clip_rect,
+                    });
+                }
+            }
+            SceneNodeKind::Image { asset_ref } => {
+                #[allow(clippy::cast_possible_truncation)]
+                let pending_start = self.image_batch.pending_len() as u32;
+                if let Err(e) = self.image_system.prepare_image_node(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mut self.image_atlas,
+                    node,
+                    asset_ref,
+                    &mut self.image_batch,
+                ) {
+                    warn!(?e, node_id = %node.id, "Failed to prepare image node");
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                let pending_count = self.image_batch.pending_len() as u32 - pending_start;
+                if pending_count > 0 {
+                    self.render_order.push(RenderOrderEntry::Image {
+                        pending_start,
+                        pending_count,
+                        blend: blend_mode,
+                        stencil_test: resolved.stencil_ref > 0,
+                        shader_clip_rect: resolved.shader_clip_rect,
+                    });
+                }
+            }
+            SceneNodeKind::Vector { path_data } => {
+                #[allow(clippy::cast_possible_truncation)]
+                let pending_start = self.vector_batch.pending_len() as u32;
+                if let Err(e) = self.vector_system.prepare_vector_node(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mut self.image_atlas,
+                    node,
+                    path_data,
+                    &mut self.vector_batch,
+                ) {
+                    warn!(?e, node_id = %node.id, "Failed to prepare vector node");
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                let pending_count = self.vector_batch.pending_len() as u32 - pending_start;
+                if pending_count > 0 {
+                    self.render_order.push(RenderOrderEntry::Vector {
+                        pending_start,
+                        pending_count,
+                        blend: blend_mode,
+                        stencil_test: resolved.stencil_ref > 0,
+                        shader_clip_rect: resolved.shader_clip_rect,
+                    });
+                }
+            }
+        }
+
+        // Recurse into children (depth-first, back-to-front order).
+        let children = scene.children(node_id).unwrap_or(&[]).to_vec();
+        for child_id in children {
+            self.dfs_visit(scene, child_id);
+        }
+
+        // Exit clip: emit pop entry and pop the clip stack.
+        if is_clip {
+            match clip_mode {
+                ClipMode::Scissor => {
+                    self.clip_stack.pop_scissor();
+                    self.render_order
+                        .push(RenderOrderEntry::PopScissor { parent_scissor });
+                }
+                ClipMode::Stencil => {
+                    // Create decrement instance (same shape as write).
+                    if let Some(node) = scene.get(node_id) {
+                        if let Some(inst) = create_stencil_rect_instance(
+                            node,
+                            self.clip_stack.current_shader_rect(),
+                        ) {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let dec_start = self.rect_batch.ordered_len() as u32;
+                            self.rect_batch.push_ordered(inst);
+                            self.clip_stack.pop_stencil();
+                            let restored_ref = self.clip_stack.stencil_ref();
+                            self.render_order.push(RenderOrderEntry::PopStencil {
+                                decrement_instance_start: dec_start,
+                                decrement_instance_count: 1,
+                                restored_stencil_ref: restored_ref,
+                            });
+                        }
+                    }
+                }
+                ClipMode::ShaderRect => {
+                    self.clip_stack.pop_shader_rect();
+                }
+                ClipMode::None => unreachable!(),
+            }
+        }
+    }
+
+    /// Phase 2b: Iterate render order entries, patch clip rects on ordered
+    /// instances, and emit draw commands to the draw list.
+    #[allow(clippy::too_many_lines)]
+    fn build_draw_list(&mut self) {
+        let (viewport_w, viewport_h) = self.camera.viewport_size();
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let vp_size = (viewport_w as u32, viewport_h as u32);
+
+        // Take render_order temporarily to avoid borrow conflict with self.draw_list.
+        let render_order = std::mem::take(&mut self.render_order);
+
+        for entry in &render_order {
+            match entry {
+                RenderOrderEntry::Rect {
+                    instance_start,
+                    instance_count,
+                    blend,
+                    stencil_test,
+                } => {
+                    self.draw_list.push(DrawCommand::DrawRects {
+                        instance_start: *instance_start,
+                        instance_count: *instance_count,
+                        blend: *blend,
+                        stencil_test: *stencil_test,
+                    });
+                }
+                RenderOrderEntry::Text {
+                    pending_start,
+                    pending_count,
+                    blend,
+                    stencil_test,
+                    shader_clip_rect,
+                } => {
+                    // Patch clip rects on ordered text instances.
+                    let start = *pending_start as usize;
+                    let count = *pending_count as usize;
+                    let clip_arr = shader_clip_rect.to_array();
+                    let instances = self.text_batch.ordered_instances_mut();
+                    for inst in instances.iter_mut().skip(start).take(count) {
+                        inst.clip_rect = clip_arr;
+                    }
+                    self.draw_list.push(DrawCommand::DrawGlyphs {
+                        instance_start: *pending_start,
+                        instance_count: *pending_count,
+                        blend: *blend,
+                        stencil_test: *stencil_test,
+                    });
+                }
+                RenderOrderEntry::Image {
+                    pending_start,
+                    pending_count,
+                    blend,
+                    stencil_test,
+                    shader_clip_rect,
+                } => {
+                    let start = *pending_start as usize;
+                    let count = *pending_count as usize;
+                    let clip_arr = shader_clip_rect.to_array();
+                    let instances = self.image_batch.ordered_instances_mut();
+                    for inst in instances.iter_mut().skip(start).take(count) {
+                        inst.clip_rect = clip_arr;
+                    }
+                    self.draw_list.push(DrawCommand::DrawImages {
+                        instance_start: *pending_start,
+                        instance_count: *pending_count,
+                        blend: *blend,
+                        stencil_test: *stencil_test,
+                    });
+                }
+                RenderOrderEntry::Vector {
+                    pending_start,
+                    pending_count,
+                    blend,
+                    stencil_test,
+                    shader_clip_rect,
+                } => {
+                    let start = *pending_start as usize;
+                    let count = *pending_count as usize;
+                    let clip_arr = shader_clip_rect.to_array();
+                    let instances = self.vector_batch.ordered_instances_mut();
+                    for inst in instances.iter_mut().skip(start).take(count) {
+                        inst.clip_rect = clip_arr;
+                    }
+                    self.draw_list.push(DrawCommand::DrawVectors {
+                        instance_start: *pending_start,
+                        instance_count: *pending_count,
+                        blend: *blend,
+                        stencil_test: *stencil_test,
+                    });
+                }
+                RenderOrderEntry::PushScissor { clip_rect } => {
+                    if let Some((x, y, w, h)) = clip_rect.to_scissor_rect(vp_size.0, vp_size.1) {
+                        self.draw_list.push(DrawCommand::SetScissor {
+                            x,
+                            y,
+                            width: w,
+                            height: h,
+                        });
+                    }
+                }
+                RenderOrderEntry::PopScissor { parent_scissor } => {
+                    if let Some(parent) = parent_scissor {
+                        if let Some((x, y, w, h)) = parent.to_scissor_rect(vp_size.0, vp_size.1) {
+                            self.draw_list.push(DrawCommand::SetScissor {
+                                x,
+                                y,
+                                width: w,
+                                height: h,
+                            });
+                        } else {
+                            self.draw_list.push(DrawCommand::ResetScissor);
+                        }
+                    } else {
+                        self.draw_list.push(DrawCommand::ResetScissor);
+                    }
+                }
+                RenderOrderEntry::PushStencil {
+                    write_instance_start,
+                    write_instance_count,
+                    new_stencil_ref,
+                } => {
+                    self.draw_list.push(DrawCommand::StencilWrite {
+                        instance_start: *write_instance_start,
+                        instance_count: *write_instance_count,
+                    });
+                    self.draw_list
+                        .push(DrawCommand::SetStencilRef(*new_stencil_ref));
+                }
+                RenderOrderEntry::PopStencil {
+                    decrement_instance_start,
+                    decrement_instance_count,
+                    restored_stencil_ref,
+                } => {
+                    self.draw_list.push(DrawCommand::StencilDecrement {
+                        instance_start: *decrement_instance_start,
+                        instance_count: *decrement_instance_count,
+                    });
+                    self.draw_list
+                        .push(DrawCommand::SetStencilRef(*restored_stencil_ref));
+                }
+            }
+        }
+
+        // Restore render_order for next frame reuse.
+        self.render_order = render_order;
+    }
+
+    /// Executes the draw list in a single render pass.
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    fn execute_draw_list(&self, view: &wgpu::TextureView) {
         let mut encoder = self
             .gpu
             .device
@@ -408,57 +778,167 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // 1. Draw rectangles (furthest back).
-            self.rect_pipeline.draw(
-                &mut pass,
-                &self.rect_batch,
-                &self.rect_instance_buf,
-                &self.shared,
-            );
+            let (vp_w, vp_h) = self.camera.viewport_size();
+            let index_count = QUAD_INDICES.len() as u32;
+            let mut current_stencil_ref: u32 = 0;
 
-            // 2. Draw images.
-            self.textured_quad_pipeline.draw(
-                &mut pass,
-                &self.image_batch,
-                &self.image_instance_buf,
-                &self.image_atlas,
-                &self.shared,
-            );
-
-            // 3. Draw vectors.
-            self.textured_quad_pipeline.draw(
-                &mut pass,
-                &self.vector_batch,
-                &self.vector_instance_buf,
-                &self.image_atlas,
-                &self.shared,
-            );
-
-            // 4. Draw text on top.
-            self.text_pipeline.draw(
-                &mut pass,
-                &self.text_batch,
-                &self.text_instance_buf,
-                self.text_system.atlas(),
-                &self.shared,
-            );
+            for cmd in self.draw_list.commands() {
+                match cmd {
+                    DrawCommand::SetScissor {
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => {
+                        pass.set_scissor_rect(*x, *y, *width, *height);
+                    }
+                    DrawCommand::ResetScissor => {
+                        #[allow(clippy::cast_sign_loss)]
+                        pass.set_scissor_rect(0, 0, vp_w as u32, vp_h as u32);
+                    }
+                    DrawCommand::SetStencilRef(ref_val) => {
+                        current_stencil_ref = *ref_val;
+                    }
+                    DrawCommand::StencilWrite {
+                        instance_start,
+                        instance_count,
+                    } => {
+                        pass.set_pipeline(self.rect_pipeline.stencil_write_pipeline());
+                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                        pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
+                        pass.set_index_buffer(
+                            self.shared.index_buffer().slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        pass.set_stencil_reference(current_stencil_ref);
+                        pass.draw_indexed(
+                            0..index_count,
+                            0,
+                            *instance_start..*instance_start + *instance_count,
+                        );
+                    }
+                    DrawCommand::StencilDecrement {
+                        instance_start,
+                        instance_count,
+                    } => {
+                        pass.set_pipeline(self.rect_pipeline.stencil_decrement_pipeline());
+                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                        pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
+                        pass.set_index_buffer(
+                            self.shared.index_buffer().slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        pass.set_stencil_reference(current_stencil_ref);
+                        pass.draw_indexed(
+                            0..index_count,
+                            0,
+                            *instance_start..*instance_start + *instance_count,
+                        );
+                    }
+                    DrawCommand::DrawRects {
+                        instance_start,
+                        instance_count,
+                        blend,
+                        stencil_test,
+                    } => {
+                        pass.set_pipeline(
+                            self.rect_pipeline.select_pipeline(*blend, *stencil_test),
+                        );
+                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                        pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
+                        pass.set_index_buffer(
+                            self.shared.index_buffer().slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        pass.set_stencil_reference(current_stencil_ref);
+                        pass.draw_indexed(
+                            0..index_count,
+                            0,
+                            *instance_start..*instance_start + *instance_count,
+                        );
+                    }
+                    DrawCommand::DrawGlyphs {
+                        instance_start,
+                        instance_count,
+                        blend,
+                        stencil_test,
+                    } => {
+                        pass.set_pipeline(
+                            self.text_pipeline.select_pipeline(*blend, *stencil_test),
+                        );
+                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                        pass.set_bind_group(1, self.text_system.atlas().bind_group(), &[]);
+                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                        pass.set_vertex_buffer(1, self.text_instance_buf.buffer().slice(..));
+                        pass.set_index_buffer(
+                            self.shared.index_buffer().slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        pass.set_stencil_reference(current_stencil_ref);
+                        pass.draw_indexed(
+                            0..index_count,
+                            0,
+                            *instance_start..*instance_start + *instance_count,
+                        );
+                    }
+                    DrawCommand::DrawImages {
+                        instance_start,
+                        instance_count,
+                        blend,
+                        stencil_test,
+                    } => {
+                        pass.set_pipeline(
+                            self.textured_quad_pipeline
+                                .select_pipeline(*blend, *stencil_test),
+                        );
+                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                        pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
+                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                        pass.set_vertex_buffer(1, self.image_instance_buf.buffer().slice(..));
+                        pass.set_index_buffer(
+                            self.shared.index_buffer().slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        pass.set_stencil_reference(current_stencil_ref);
+                        pass.draw_indexed(
+                            0..index_count,
+                            0,
+                            *instance_start..*instance_start + *instance_count,
+                        );
+                    }
+                    DrawCommand::DrawVectors {
+                        instance_start,
+                        instance_count,
+                        blend,
+                        stencil_test,
+                    } => {
+                        pass.set_pipeline(
+                            self.textured_quad_pipeline
+                                .select_pipeline(*blend, *stencil_test),
+                        );
+                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                        pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
+                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                        pass.set_vertex_buffer(1, self.vector_instance_buf.buffer().slice(..));
+                        pass.set_index_buffer(
+                            self.shared.index_buffer().slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        pass.set_stencil_reference(current_stencil_ref);
+                        pass.draw_indexed(
+                            0..index_count,
+                            0,
+                            *instance_start..*instance_start + *instance_count,
+                        );
+                    }
+                }
+            }
         }
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
-    }
-
-    /// Convenience method: prepares and renders a frame in one call.
-    ///
-    /// # Arguments
-    /// * `visible_nodes` — Iterator of scene nodes within the viewport.
-    /// * `view` — The texture view to render into.
-    pub fn render_frame<'a>(
-        &mut self,
-        visible_nodes: impl Iterator<Item = &'a SceneNode>,
-        view: &wgpu::TextureView,
-    ) {
-        self.prepare(visible_nodes);
-        self.render(view);
     }
 }
 
@@ -484,17 +964,41 @@ impl Renderer {
     #[must_use]
     pub fn frame_stats(&self) -> FrameStats {
         FrameStats {
-            rect_count: self.rect_batch.len(),
-            glyph_count: self.text_batch.len(),
-            image_count: self.image_batch.len(),
-            vector_count: self.vector_batch.len(),
-            draw_calls: self.rect_batch.draw_call_count()
-                + self.text_batch.draw_call_count()
-                + self.image_batch.draw_call_count()
-                + self.vector_batch.draw_call_count(),
+            rect_count: self.rect_batch.ordered_len(),
+            glyph_count: self.text_batch.ordered_len(),
+            image_count: self.image_batch.ordered_len(),
+            vector_count: self.vector_batch.ordered_len(),
+            draw_calls: self.draw_list.len(),
             total_nodes_processed: 0,
         }
     }
+}
+
+/// Creates a `RectInstance` suitable for stencil write/decrement operations.
+///
+/// The instance represents the clip shape: fill area with no stroke, full opacity,
+/// and the given shader clip rect. Color values are irrelevant since stencil
+/// pipelines use `ColorWrites::empty()`.
+fn create_stencil_rect_instance(
+    node: &SceneNode,
+    shader_clip_rect: ClipRect,
+) -> Option<RectInstance> {
+    let corner_radii = match &node.kind {
+        SceneNodeKind::Frame { corner_radius } => *corner_radius,
+        SceneNodeKind::Group => [0.0; 4],
+        _ => return None,
+    };
+
+    Some(RectInstance {
+        pos: [node.bounds.x, node.bounds.y],
+        size: [node.bounds.width, node.bounds.height],
+        fill_color: [1.0, 1.0, 1.0, 1.0],
+        stroke_color: [0.0, 0.0, 0.0, 0.0],
+        stroke_width_opacity: [0.0, 1.0],
+        corner_radii,
+        transform: node.world_transform.to_gpu_columns(),
+        clip_rect: shader_clip_rect.to_array(),
+    })
 }
 
 #[cfg(test)]

@@ -36,6 +36,8 @@ struct RectInstance {
     @location(8) transform_c0: vec2<f32>,
     @location(9) transform_c1: vec2<f32>,
     @location(10) transform_c2: vec2<f32>,
+    // Clip rectangle: [min_x, min_y, max_x, max_y]. Fragments outside are discarded.
+    @location(11) clip_rect: vec4<f32>,
 };
 
 // --- Vertex input/output ---
@@ -61,6 +63,10 @@ struct VertexOutput {
     @location(4) stroke_width_opacity: vec2<f32>,
     // Corner radii.
     @location(5) corner_radii: vec4<f32>,
+    // World-space position for clip rect testing.
+    @location(6) world_pos: vec2<f32>,
+    // Clip rectangle passthrough.
+    @location(7) clip_rect: vec4<f32>,
 };
 
 // --- Vertex shader ---
@@ -87,6 +93,8 @@ fn vs_main(vert: VertexInput, inst: RectInstance) -> VertexOutput {
     out.stroke_color = inst.stroke_color;
     out.stroke_width_opacity = inst.stroke_width_opacity;
     out.corner_radii = inst.corner_radii;
+    out.world_pos = world_pos;
+    out.clip_rect = inst.clip_rect;
 
     return out;
 }
@@ -126,6 +134,12 @@ fn select_corner_radius(local_pos: vec2<f32>, rect_size: vec2<f32>, radii: vec4<
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // ShaderRect clip: discard fragments outside the clip rectangle.
+    if (in.world_pos.x < in.clip_rect.x || in.world_pos.x > in.clip_rect.z ||
+        in.world_pos.y < in.clip_rect.y || in.world_pos.y > in.clip_rect.w) {
+        discard;
+    }
+
     let half_size = in.rect_size * 0.5;
     let center_pos = in.local_pos - half_size;
     let stroke_w = in.stroke_width_opacity.x;
@@ -143,6 +157,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Anti-aliasing: smooth transition over ~1 pixel at edges.
     let aa = fwidth(dist_outer);
     let outer_alpha = 1.0 - smoothstep(-aa, aa, dist_outer);
+
+    // Discard fully transparent fragments. Makes stencil writes respect
+    // rounded corners: fragments outside the SDF shape are discarded and
+    // do not trigger stencil increment. Harmless for normal rendering.
+    if (outer_alpha <= 0.0) {
+        discard;
+    }
 
     // If no stroke, just render fill.
     if stroke_w <= 0.0 {

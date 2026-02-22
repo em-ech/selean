@@ -4,6 +4,10 @@
 //! and draw call batching for the Selean canvas.
 
 mod camera;
+/// Hierarchical clip state stack for DFS scene traversal.
+pub mod clip_stack;
+/// Draw command list for the hierarchical rendering pipeline.
+pub mod draw_list;
 mod gpu;
 mod pipeline;
 mod quad;
@@ -15,13 +19,15 @@ pub mod texture_atlas;
 pub mod textured_quad;
 
 pub use camera::{Camera, CameraUniform};
+pub use clip_stack::{ClipStack, ResolvedClipState};
+pub use draw_list::{DrawCommand, DrawList};
 pub use gpu::{GpuContext, GpuContextDescriptor};
 pub use pipeline::{FrameStats, Renderer, RendererDescriptor};
 pub use quad::{QUAD_INDICES, QUAD_VERTICES, QuadVertex};
 pub use rect_pipeline::{RectBatch, RectInstance, RectPipeline};
 pub use shared::{
-    BLEND_STATE_ADD, PersistentInstanceBuffer, STENCIL_NOOP, SharedPipelineResources,
-    create_pipeline_with_blend, create_stencil_texture,
+    BLEND_STATE_ADD, PersistentInstanceBuffer, STENCIL_DECREMENT, STENCIL_NOOP, STENCIL_TEST,
+    STENCIL_WRITE, SharedPipelineResources, create_pipeline_with_blend, create_stencil_texture,
 };
 pub use texture_atlas::{AtlasRegion, GlyphAtlas, ImageAtlas, TextureAtlas};
 pub use textured_quad::{TexturedQuadBatch, TexturedQuadInstance, TexturedQuadPipeline};
