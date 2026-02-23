@@ -141,6 +141,37 @@ impl Camera {
         )
     }
 
+    /// Converts screen-space pixel coordinates to world-space coordinates.
+    ///
+    /// Screen origin is top-left `(0, 0)`, with `(viewport_width, viewport_height)`
+    /// at the bottom-right. The viewport is centered on `(pan_x, pan_y)` in world space.
+    #[must_use]
+    pub fn screen_to_world(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
+        let world_x = (screen_x - self.viewport_width / 2.0) / self.zoom + self.pan_x;
+        let world_y = (screen_y - self.viewport_height / 2.0) / self.zoom + self.pan_y;
+        (world_x, world_y)
+    }
+
+    /// Converts world-space coordinates to screen-space pixel coordinates.
+    #[must_use]
+    pub fn world_to_screen(&self, world_x: f32, world_y: f32) -> (f32, f32) {
+        let screen_x = (world_x - self.pan_x) * self.zoom + self.viewport_width / 2.0;
+        let screen_y = (world_y - self.pan_y) * self.zoom + self.viewport_height / 2.0;
+        (screen_x, screen_y)
+    }
+
+    /// Zooms by `factor` while keeping the given screen-space point stationary.
+    ///
+    /// Adjusts pan so that the world point under `(screen_x, screen_y)` remains
+    /// fixed after the zoom change.
+    pub fn zoom_at(&mut self, factor: f32, screen_x: f32, screen_y: f32) {
+        let (world_x, world_y) = self.screen_to_world(screen_x, screen_y);
+        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        // Solve for new pan so screen_to_world(screen_x, screen_y) == (world_x, world_y).
+        self.pan_x = world_x - (screen_x - self.viewport_width / 2.0) / self.zoom;
+        self.pan_y = world_y - (screen_y - self.viewport_height / 2.0) / self.zoom;
+    }
+
     /// Builds the GPU-compatible uniform data for this camera.
     ///
     /// The resulting matrix maps world-space coordinates to clip space using
@@ -354,6 +385,124 @@ mod tests {
     fn camera_uniform_size_is_64_bytes() {
         // 4x4 matrix of f32 = 16 * 4 = 64 bytes.
         assert_eq!(CameraUniform::size(), 64);
+    }
+
+    // --- Coordinate conversion tests ---
+
+    #[test]
+    fn screen_to_world_identity() {
+        // No pan, zoom=1. Screen center (400, 300) maps to world origin (0, 0).
+        let cam = Camera::new(800.0, 600.0);
+        let (wx, wy) = cam.screen_to_world(400.0, 300.0);
+        assert_eq!((wx, wy), (0.0, 0.0));
+        // Top-left corner maps to visible_rect top-left.
+        let (wx, wy) = cam.screen_to_world(0.0, 0.0);
+        assert_eq!((wx, wy), (-400.0, -300.0));
+    }
+
+    #[test]
+    fn screen_to_world_with_pan() {
+        let mut cam = Camera::new(800.0, 600.0);
+        cam.set_pan(100.0, 50.0);
+        // Screen center maps to the pan point.
+        let (wx, wy) = cam.screen_to_world(400.0, 300.0);
+        assert_eq!((wx, wy), (100.0, 50.0));
+    }
+
+    #[test]
+    fn screen_to_world_with_zoom() {
+        let mut cam = Camera::new(800.0, 600.0);
+        cam.set_zoom(2.0);
+        // Screen center still maps to world origin.
+        let (wx, wy) = cam.screen_to_world(400.0, 300.0);
+        assert_eq!((wx, wy), (0.0, 0.0));
+        // Bottom-right maps to half the distance at 2x zoom.
+        let (wx, wy) = cam.screen_to_world(800.0, 600.0);
+        assert_eq!((wx, wy), (200.0, 150.0));
+    }
+
+    #[test]
+    fn screen_to_world_with_pan_and_zoom() {
+        let mut cam = Camera::new(800.0, 600.0);
+        cam.set_pan(100.0, 50.0);
+        cam.set_zoom(2.0);
+        // Screen center maps to pan point.
+        let (wx, wy) = cam.screen_to_world(400.0, 300.0);
+        assert_eq!((wx, wy), (100.0, 50.0));
+        // Top-left of screen.
+        let (wx, wy) = cam.screen_to_world(0.0, 0.0);
+        assert_eq!((wx, wy), (-100.0, -100.0));
+    }
+
+    #[test]
+    fn world_to_screen_identity() {
+        let cam = Camera::new(800.0, 600.0);
+        // World origin maps to screen center.
+        let (sx, sy) = cam.world_to_screen(0.0, 0.0);
+        assert_eq!((sx, sy), (400.0, 300.0));
+    }
+
+    #[test]
+    fn world_to_screen_roundtrip() {
+        let mut cam = Camera::new(800.0, 600.0);
+        cam.set_pan(77.0, -33.0);
+        cam.set_zoom(3.5);
+        let screen = (123.4, 567.8);
+        let (wx, wy) = cam.screen_to_world(screen.0, screen.1);
+        let (sx, sy) = cam.world_to_screen(wx, wy);
+        assert!(
+            (sx - screen.0).abs() < 1e-3,
+            "x: expected {}, got {}",
+            screen.0,
+            sx
+        );
+        assert!(
+            (sy - screen.1).abs() < 1e-3,
+            "y: expected {}, got {}",
+            screen.1,
+            sy
+        );
+    }
+
+    #[test]
+    fn zoom_at_center_only_changes_zoom() {
+        let mut cam = Camera::new(800.0, 600.0);
+        cam.zoom_at(2.0, 400.0, 300.0);
+        assert_eq!(cam.zoom(), 2.0);
+        assert_eq!(cam.pan(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn zoom_at_corner_adjusts_pan() {
+        let mut cam = Camera::new(800.0, 600.0);
+        // Before: world under screen (0,0) = (-400, -300).
+        cam.zoom_at(2.0, 0.0, 0.0);
+        assert_eq!(cam.zoom(), 2.0);
+        // After: screen (0,0) should still map to world (-400, -300).
+        let (wx, wy) = cam.screen_to_world(0.0, 0.0);
+        assert!((wx - (-400.0)).abs() < 1e-3, "x: expected -400, got {}", wx);
+        assert!((wy - (-300.0)).abs() < 1e-3, "y: expected -300, got {}", wy);
+    }
+
+    #[test]
+    fn zoom_at_clamps_to_bounds() {
+        let mut cam = Camera::new(800.0, 600.0);
+        // Zoom to extremely large factor.
+        cam.zoom_at(1000.0, 400.0, 300.0);
+        assert_eq!(cam.zoom(), MAX_ZOOM);
+        // Zoom to extremely small factor.
+        cam.zoom_at(0.0001, 400.0, 300.0);
+        assert_eq!(cam.zoom(), MIN_ZOOM);
+    }
+
+    #[test]
+    fn zoom_clamp_existing_methods() {
+        let mut cam = Camera::new(800.0, 600.0);
+        cam.set_zoom(0.001);
+        assert_eq!(cam.zoom(), MIN_ZOOM);
+        cam.set_zoom(1.0);
+        cam.zoom_by(0.001);
+        assert_eq!(cam.zoom(), MIN_ZOOM);
     }
 
     /// Helper: multiply a 4x4 column-major matrix by a 2D point (z=0, w=1).

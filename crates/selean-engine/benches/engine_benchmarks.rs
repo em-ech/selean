@@ -21,7 +21,8 @@ use rand::rngs::StdRng;
 
 use selean_common::types::NodeId;
 use selean_engine::image::{decode_image, decode_image_resized};
-use selean_engine::renderer::{RectBatch, TexturedQuadBatch};
+use selean_engine::input::{InputEvent, InputHandler, Modifiers, PointerButton};
+use selean_engine::renderer::{Camera, RectBatch, TexturedQuadBatch};
 use selean_engine::scene::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind, Transform2D};
 use selean_engine::text::{
     AtlasRegion, FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, TextBatch,
@@ -1255,6 +1256,149 @@ fn build_bench_cache(font: &FontData, runs: &[&ShapedRun]) -> GlyphCache {
     cache
 }
 
+// ---------------------------------------------------------------------------
+// Group 18: Input handling
+// ---------------------------------------------------------------------------
+
+fn bench_input_handling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("input_handling");
+
+    for &count in TIERS {
+        let config = SceneConfig {
+            node_count: count,
+            transform_fraction: 0.2,
+            ..SceneConfig::default()
+        };
+
+        // Hit test with camera coordinate conversion.
+        group.bench_with_input(
+            BenchmarkId::new("hit_test_with_camera", count),
+            &count,
+            |b, _| {
+                let mut scene = generate_scene(&config);
+                let camera = Camera::new(1920.0, 1080.0);
+                let mut rng = StdRng::seed_from_u64(99);
+                b.iter(|| {
+                    let sx: f32 = rng.gen_range(0.0..1920.0);
+                    let sy: f32 = rng.gen_range(0.0..1080.0);
+                    let (wx, wy) = camera.screen_to_world(sx, sy);
+                    black_box(scene.hit_test(wx, wy));
+                });
+            },
+        );
+
+        // Hover sweep: 100 PointerMove events across the canvas.
+        group.bench_with_input(BenchmarkId::new("hover_sweep", count), &count, |b, _| {
+            let scene = generate_scene(&config);
+            b.iter_batched(
+                || {
+                    (
+                        scene.clone(),
+                        Camera::new(1920.0, 1080.0),
+                        InputHandler::new(),
+                    )
+                },
+                |(mut scene, mut camera, mut handler)| {
+                    for i in 0..100_u32 {
+                        #[allow(clippy::cast_precision_loss)]
+                        let x = (i as f32) * 19.2;
+                        let event = InputEvent::PointerMove {
+                            x,
+                            y: 540.0,
+                            modifiers: Modifiers::default(),
+                        };
+                        black_box(handler.handle_event(&event, &mut scene, &mut camera));
+                    }
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+
+        // Drag sequence: PointerDown + 50 PointerMoves + PointerUp.
+        group.bench_with_input(BenchmarkId::new("drag_sequence", count), &count, |b, _| {
+            let scene = generate_scene(&config);
+            b.iter_batched(
+                || {
+                    (
+                        scene.clone(),
+                        Camera::new(1920.0, 1080.0),
+                        InputHandler::new(),
+                    )
+                },
+                |(mut scene, mut camera, mut handler)| {
+                    // Press at center of canvas.
+                    let down = InputEvent::PointerDown {
+                        x: 960.0,
+                        y: 540.0,
+                        button: PointerButton::Left,
+                        modifiers: Modifiers::default(),
+                    };
+                    handler.handle_event(&down, &mut scene, &mut camera);
+
+                    // 50 moves.
+                    for i in 1..=50_u32 {
+                        #[allow(clippy::cast_precision_loss)]
+                        let x = 960.0 + (i as f32) * 2.0;
+                        let mv = InputEvent::PointerMove {
+                            x,
+                            y: 540.0,
+                            modifiers: Modifiers::default(),
+                        };
+                        black_box(handler.handle_event(&mv, &mut scene, &mut camera));
+                    }
+
+                    // Release.
+                    let up = InputEvent::PointerUp {
+                        x: 1060.0,
+                        y: 540.0,
+                        button: PointerButton::Left,
+                        modifiers: Modifiers::default(),
+                    };
+                    black_box(handler.handle_event(&up, &mut scene, &mut camera));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+
+        // Scroll routing with scroll containers.
+        let scroll_config = SceneConfig {
+            node_count: count,
+            scroll_fraction: 0.30,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(BenchmarkId::new("scroll_routing", count), &count, |b, _| {
+            let scene = generate_scene(&scroll_config);
+            b.iter_batched(
+                || {
+                    (
+                        scene.clone(),
+                        Camera::new(1920.0, 1080.0),
+                        InputHandler::new(),
+                    )
+                },
+                |(mut scene, mut camera, mut handler)| {
+                    let mut rng = StdRng::seed_from_u64(123);
+                    for _ in 0..100_u32 {
+                        let x: f32 = rng.gen_range(0.0..1920.0);
+                        let y: f32 = rng.gen_range(0.0..1080.0);
+                        let event = InputEvent::ScrollDelta {
+                            x,
+                            y,
+                            dx: 0.0,
+                            dy: 20.0,
+                            modifiers: Modifiers::default(),
+                        };
+                        black_box(handler.handle_event(&event, &mut scene, &mut camera));
+                    }
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_scene_mutation,
@@ -1274,5 +1418,6 @@ criterion_group!(
     bench_blend_mode_batching,
     bench_clip_traversal,
     bench_scroll_containers,
+    bench_input_handling,
 );
 criterion_main!(benches);

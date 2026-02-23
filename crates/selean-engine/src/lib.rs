@@ -7,6 +7,7 @@
 //! - SDF text rendering with `HarfBuzz` shaping
 
 pub mod image;
+pub mod input;
 pub mod renderer;
 pub mod scene;
 pub mod spatial;
