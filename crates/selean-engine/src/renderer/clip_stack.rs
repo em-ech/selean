@@ -150,7 +150,7 @@ impl Default for ClipStack {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp)]
+    #![allow(clippy::float_cmp, clippy::unwrap_used)]
 
     use super::*;
 

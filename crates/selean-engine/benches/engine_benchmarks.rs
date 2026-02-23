@@ -1010,6 +1010,99 @@ fn bench_blend_mode_batching(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Group 16: Clip traversal
+// ---------------------------------------------------------------------------
+
+fn bench_clip_traversal(c: &mut Criterion) {
+    let mut group = c.benchmark_group("clip_traversal");
+
+    for &count in TIERS {
+        // Baseline: no clip nodes at all (clip_fraction = 0).
+        let no_clip_config = SceneConfig {
+            node_count: count,
+            clip_fraction: 0.0,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(
+            BenchmarkId::new("no_clip", count),
+            &count,
+            |b, _| {
+                let scene = generate_scene(&no_clip_config);
+                b.iter_batched(
+                    || scene.clone(),
+                    |mut scene| {
+                        black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        // 10% of groups have a random clip mode.
+        let clip_10_config = SceneConfig {
+            node_count: count,
+            clip_fraction: 0.10,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(
+            BenchmarkId::new("clip_10pct", count),
+            &count,
+            |b, _| {
+                let scene = generate_scene(&clip_10_config);
+                b.iter_batched(
+                    || scene.clone(),
+                    |mut scene| {
+                        black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        // Nested clips: deeper hierarchy (max_depth 4) with 50% clip fraction.
+        let nested_config = SceneConfig {
+            node_count: count,
+            max_depth: 4,
+            clip_fraction: 0.50,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(
+            BenchmarkId::new("nested_depth4", count),
+            &count,
+            |b, _| {
+                let scene = generate_scene(&nested_config);
+                b.iter_batched(
+                    || scene.clone(),
+                    |mut scene| {
+                        black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        // Hit testing with clip nodes: measures clip chain walk cost.
+        let clip_hit_config = SceneConfig {
+            node_count: count,
+            clip_fraction: 0.20,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(
+            BenchmarkId::new("hit_test_clipped", count),
+            &count,
+            |b, _| {
+                let mut scene = generate_scene(&clip_hit_config);
+                b.iter(|| {
+                    black_box(scene.hit_test(5000.0, 5000.0));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Creates a minimal valid RGBA PNG for benchmarking.
 fn make_test_png(width: u32, height: u32) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -1092,5 +1185,6 @@ criterion_group!(
     bench_transforms,
     bench_hit_testing,
     bench_blend_mode_batching,
+    bench_clip_traversal,
 );
 criterion_main!(benches);

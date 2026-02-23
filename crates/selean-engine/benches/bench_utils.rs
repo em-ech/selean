@@ -17,7 +17,7 @@ use rand::rngs::StdRng;
 
 use selean_common::types::NodeId;
 use selean_engine::scene::{
-    BlendMode, BoundingBox, Color, SceneGraph, SceneNode, SceneNodeKind, Transform2D,
+    BlendMode, BoundingBox, ClipMode, Color, SceneGraph, SceneNode, SceneNodeKind, Transform2D,
 };
 
 /// Distribution of node types in the synthetic scene.
@@ -66,6 +66,8 @@ pub struct SceneConfig {
     pub transform_fraction: f32,
     /// Fraction of leaf nodes that use `BlendMode::Add` instead of `Normal` (0.0–1.0).
     pub add_blend_fraction: f32,
+    /// Fraction of group nodes that get a random clip mode (0.0–1.0).
+    pub clip_fraction: f32,
 }
 
 impl Default for SceneConfig {
@@ -79,6 +81,7 @@ impl Default for SceneConfig {
             max_depth: 4,
             transform_fraction: 0.2,
             add_blend_fraction: 0.05,
+            clip_fraction: 0.0,
         }
     }
 }
@@ -145,6 +148,16 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
                 graph.add_child(parent_id, node);
                 group_ids.push((node_id, parent_depth + 1));
             }
+        }
+
+        // Apply a random clip mode to a fraction of group nodes.
+        if config.clip_fraction > 0.0 && rng.gen_bool(f64::from(config.clip_fraction)) {
+            let mode = match rng.gen_range(0_u8..3) {
+                0 => ClipMode::Scissor,
+                1 => ClipMode::Stencil,
+                _ => ClipMode::ShaderRect,
+            };
+            graph.set_clip_mode(node_id, mode);
         }
     }
 

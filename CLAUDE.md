@@ -75,17 +75,25 @@ Commit: `ebb3aaa` pushed to origin/main
 - Updated `renderer/mod.rs` exports for `ClipStack`, `ResolvedClipState`, `DrawCommand`, `DrawList`
 - 412 tests passing (16 common + 396 engine), zero clippy warnings
 
-### Remaining Steps
+**Step 7: Benchmarks + final verification** (done)
 
-**Step 7: Benchmarks + final verification**
+- Added `clip_fraction: f32` field to `SceneConfig` (default 0.0, backward compatible)
+- `generate_scene()` applies random clip modes (Scissor/Stencil/ShaderRect) to `clip_fraction` of group nodes
+- Added `bench_clip_traversal` benchmark group (Group 16) with 4 benchmarks per tier:
+  - `no_clip`: baseline DFS with zero clip nodes
+  - `clip_10pct`: 10% of groups have random clip mode
+  - `nested_depth4`: 50% clip fraction with depth-4 hierarchy
+  - `hit_test_clipped`: hit testing with 20% clipped groups (measures clip chain walk cost)
+- Registered in `criterion_group!` (now 16 groups total)
+- Final verification: 412 tests pass, zero clippy warnings, benchmarks compile
 
-- Add `clip_fraction` to `SceneConfig`, random clip modes on generated nodes
-- Add `bench_clip_traversal` group
-- Final: `cargo test --workspace && cargo clippy --workspace && cargo bench --no-run`
+### Phase 5 Complete
+
+All 7 steps of Phase 5 (Clipping & Masking) are done.
 
 ### Test Count
 
-- 412 tests passing (16 common + 396 engine) as of step 6 completion
+- 412 tests passing (16 common + 396 engine)
 
 ### Key Architecture Notes
 
