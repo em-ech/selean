@@ -1,6 +1,6 @@
 # Selean Engine Session Notes
 
-## Current Phase: 6 Complete (Scroll Containers)
+## Current Phase: 8 Complete (Undo/Redo System)
 
 ### Completed Phases
 
@@ -10,6 +10,60 @@
 - Phase 4: Scene graph, R-tree spatial index, dirty flags, 2D affine transforms, blend modes
 - Phase 5: Clipping and masking (Scissor, Stencil, ShaderRect)
 - Phase 6: Scroll containers
+- Phase 7: Input handling
+- Phase 8: Undo/redo system
+
+### Phase 8 Summary (Undo/Redo System)
+
+**What was added:**
+
+- `command/` module with 6 files: `mod.rs`, `traits.rs`, `property.rs`, `hierarchy.rs`, `batch.rs`, `history.rs`
+- `Command` trait: `execute(&mut self, &mut SceneGraph) -> bool`, `undo(&mut self, &mut SceneGraph) -> bool`, `description(&self) -> &str`. Debug supertrait, object-safe.
+- 11 macro-generated property commands via `define_property_command!`: `SetBoundsCommand`, `SetFillCommand`, `SetStrokeCommand`, `SetStrokeWidthCommand`, `SetOpacityCommand`, `SetVisibleCommand`, `SetNameCommand`, `SetBlendModeCommand`, `SetClipModeCommand`, `SetTransformCommand`
+- 1 macro-generated scroll command via `define_scroll_offset_command!`: `SetScrollOffsetCommand`
+- 4 manual kind-specific commands: `SetTextContentCommand`, `SetFontSizeCommand`, `SetPathDataCommand`, `SetAssetRefCommand`
+- 5 hierarchy commands: `AddRootCommand`, `AddChildCommand`, `RemoveNodeCommand` (full subtree DFS snapshot), `ReparentCommand`, `ReorderChildrenCommand`
+- `CommandGroup`: vec of `Box<dyn Command>`, executes forward, undoes in reverse, rollback on partial failure
+- `CommandHistory`: undo/redo stacks, `execute()`, `undo()`, `redo()`, `begin_group()`/`end_group()`/`cancel_group()`, configurable max size (default 100)
+- `SceneGraph::insert_root_at(node, index)`, `insert_child_at(parent_id, child, index)`, `reparent_to_root(node_id, index)` helper methods
+- 45 tests across the command module (2 traits + 17 property + 14 hierarchy + 4 batch + 8 history)
+
+**Design decisions:**
+
+- Command pattern with per-mutation old-state capture. No `redo()` method: redo calls `execute()` again, which re-captures old state.
+- Camera and selection excluded from undo (viewport concern and ephemeral UI state, not document state).
+- `RemoveNodeCommand` uses DFS to capture `Vec<NodeSnapshot>` (node clone + parent_id + child_index) on execute. Undo re-inserts top-down via `insert_root_at`/`insert_child_at` to restore exact positions.
+- `reparent_to_root()` added to SceneGraph (not in original plan) to support undoing a reparent that moved a root node into a subtree.
+- `CommandGroup` rolls back already-executed commands on partial execute failure.
+- `CommandHistory` blocks undo/redo during active group. New execute clears redo stack (no branching history).
+- No new dependencies added.
+
+### Phase 7 Summary (Input Handling)
+
+**What was added:**
+
+- `input/` module with 4 files: `mod.rs`, `event.rs`, `state.rs`, `handler.rs`
+- `PointerButton` enum (Left, Right, Middle) and `Modifiers` struct (shift, ctrl, alt, meta)
+- `InputEvent` enum: `PointerMove`, `PointerDown`, `PointerUp`, `ScrollDelta` (platform-agnostic, screen-space coordinates)
+- `InteractionEvent` enum: `HoverChanged`, `Clicked`, `ClickedCanvas`, `SelectionChanged`, `DragStarted`, `DragMoved`, `DragEnded`, `ScrollApplied`, `CameraPanned`, `CameraZoomed`
+- `SelectionSet` with `select_one()`, `toggle()`, `clear()`, `contains()`, `ids()`, `is_empty()`, `len()`
+- `DragPhase` (tracks node, start positions, threshold state), `CameraPanPhase` (tracks start screen/pan)
+- `InteractionState`: `hover_target`, `selection`, `drag`, `camera_pan`, `drag_threshold` (default 4.0px)
+- `InputHandler` with `new()`, `with_drag_threshold()`, `handle_event()`, `state()`, `state_mut()`
+- `Camera::pan_by(dx, dy)` for delta-based viewport translation
+- `Camera::zoom_at(factor, screen_x, screen_y)` for focus-aware zoom
+- `SceneGraph::parent(id)` for ancestor walking in scroll routing
+- 38 tests across the input module (6 event + 12 state + 20 handler)
+
+**Design decisions:**
+
+- Platform-agnostic boundary: `InputEvent` types carry no platform API references. Consumers translate from winit/SDL/web.
+- Stateful handler: `InputHandler` owns `InteractionState` to track gestures across event frames. Purely reactive, no event queuing.
+- Borrowing pattern: `handle_event()` requires `&mut SceneGraph` + `&mut Camera` to prevent stale references.
+- Priority ordering: camera pan (middle-button) > active drag > hover detection. Scroll routing walks ancestors via `parent()`, consuming delta at each scrollable container, then falls back to camera pan.
+- Drag gesture recognition: threshold-based (configurable). Below threshold = click, above = drag. Tracks screen-space for threshold check, world-space for delta computation.
+- Selection: Shift-click toggles individual nodes. Plain click replaces selection. Canvas click deselects all (only emits `SelectionChanged` if selection was non-empty).
+- No new dependencies added.
 
 ### Phase 6 Summary (Scroll Containers)
 
@@ -34,7 +88,7 @@
 
 ### Test Count
 
-- 458 tests passing (16 common + 442 engine)
+- 535 tests passing (16 common + 519 engine)
 - 17 benchmark groups
 
 ### Key Architecture Notes
@@ -95,6 +149,18 @@ crates/
         parser.rs          # parse_path_data (SVG path commands)
         rasterizer.rs      # rasterize_path (tiny-skia)
         cache.rs           # VectorCache
+      input/               # Input handling
+        mod.rs             # Module re-exports
+        event.rs           # InputEvent, InteractionEvent, PointerButton, Modifiers
+        state.rs           # SelectionSet, DragPhase, CameraPanPhase, InteractionState
+        handler.rs         # InputHandler (event processing, hit testing, scroll routing)
+      command/             # Undo/redo system
+        mod.rs             # Module declarations and re-exports
+        traits.rs          # Command trait
+        property.rs        # 15 property commands (11 macro + 4 manual)
+        hierarchy.rs       # 5 hierarchy commands (add, remove, reparent, reorder)
+        batch.rs           # CommandGroup (multi-command undo unit)
+        history.rs         # CommandHistory (undo/redo stacks, grouping)
       spatial/             # Spatial indexing
         index.rs           # SpatialIndex (R-tree via rstar)
     benches/

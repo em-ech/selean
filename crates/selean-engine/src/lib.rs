@@ -6,6 +6,7 @@
 //! - R-tree spatial index for viewport virtualization
 //! - SDF text rendering with `HarfBuzz` shaping
 
+pub mod command;
 pub mod image;
 pub mod input;
 pub mod renderer;

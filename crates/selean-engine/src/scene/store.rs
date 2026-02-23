@@ -186,6 +186,53 @@ impl SceneGraph {
         true
     }
 
+    /// Adds a new root node at a specific index in the roots list.
+    ///
+    /// Same as [`add_root`] but inserts at `index` instead of appending.
+    /// The index is clamped to `roots.len()`.
+    pub fn insert_root_at(&mut self, node: SceneNode, index: usize) -> NodeId {
+        let id = node.id;
+        let world_aabb = node.world_transform.transform_aabb(&node.bounds);
+        self.spatial.insert_node(id, &world_aabb);
+        self.nodes.insert(id, node);
+        let clamped = index.min(self.roots.len());
+        self.roots.insert(clamped, id);
+        self.z_dirty = true;
+        id
+    }
+
+    /// Adds a child node at a specific index in the parent's children list.
+    ///
+    /// Same as [`add_child`] but inserts at `index` instead of appending.
+    /// The index is clamped to `children.len()`.
+    /// Returns `false` if the parent doesn't exist.
+    pub fn insert_child_at(
+        &mut self,
+        parent_id: NodeId,
+        mut child: SceneNode,
+        index: usize,
+    ) -> bool {
+        if !self.nodes.contains_key(&parent_id) {
+            return false;
+        }
+
+        let child_id = child.id;
+        child.parent = Some(parent_id);
+
+        self.spatial.insert_node(child_id, &child.bounds);
+        self.nodes.insert(child_id, child);
+
+        if let Some(parent) = self.nodes.get_mut(&parent_id) {
+            let clamped = index.min(parent.children.len());
+            parent.children.insert(clamped, child_id);
+        }
+
+        self.propagate_transform_dirty_down(child_id);
+        self.propagate_dirty_up(parent_id, DirtyFlags::CHILDREN);
+        self.z_dirty = true;
+        true
+    }
+
     /// Removes a node and all its descendants from the graph.
     ///
     /// The node is removed from its parent's children list. All descendants
@@ -272,6 +319,40 @@ impl SceneGraph {
         // New parent means new world transform for the reparented node and its descendants.
         self.propagate_transform_dirty_down(node_id);
         self.propagate_dirty_up(new_parent_id, DirtyFlags::CHILDREN);
+        self.z_dirty = true;
+        true
+    }
+
+    /// Moves a child node to be a root at a specific index.
+    ///
+    /// Detaches the node from its current parent and inserts it into the roots
+    /// list at `index` (clamped to `roots.len()`). The node keeps its children.
+    /// Returns `false` if the node doesn't exist or is already a root.
+    pub fn reparent_to_root(&mut self, node_id: NodeId, index: usize) -> bool {
+        let Some(node) = self.nodes.get(&node_id) else {
+            return false;
+        };
+
+        let Some(old_parent_id) = node.parent else {
+            return false; // Already a root.
+        };
+
+        // Remove from old parent's children list.
+        if let Some(parent) = self.nodes.get_mut(&old_parent_id) {
+            parent.children.retain(|c| *c != node_id);
+        }
+        self.propagate_dirty_up(old_parent_id, DirtyFlags::CHILDREN);
+
+        // Clear parent on node.
+        if let Some(node) = self.nodes.get_mut(&node_id) {
+            node.parent = None;
+        }
+
+        // Insert into roots at index.
+        let clamped = index.min(self.roots.len());
+        self.roots.insert(clamped, node_id);
+
+        self.propagate_transform_dirty_down(node_id);
         self.z_dirty = true;
         true
     }
