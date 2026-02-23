@@ -1024,20 +1024,16 @@ fn bench_clip_traversal(c: &mut Criterion) {
             clip_fraction: 0.0,
             ..SceneConfig::default()
         };
-        group.bench_with_input(
-            BenchmarkId::new("no_clip", count),
-            &count,
-            |b, _| {
-                let scene = generate_scene(&no_clip_config);
-                b.iter_batched(
-                    || scene.clone(),
-                    |mut scene| {
-                        black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
-                    },
-                    criterion::BatchSize::SmallInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("no_clip", count), &count, |b, _| {
+            let scene = generate_scene(&no_clip_config);
+            b.iter_batched(
+                || scene.clone(),
+                |mut scene| {
+                    black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
 
         // 10% of groups have a random clip mode.
         let clip_10_config = SceneConfig {
@@ -1045,20 +1041,16 @@ fn bench_clip_traversal(c: &mut Criterion) {
             clip_fraction: 0.10,
             ..SceneConfig::default()
         };
-        group.bench_with_input(
-            BenchmarkId::new("clip_10pct", count),
-            &count,
-            |b, _| {
-                let scene = generate_scene(&clip_10_config);
-                b.iter_batched(
-                    || scene.clone(),
-                    |mut scene| {
-                        black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
-                    },
-                    criterion::BatchSize::SmallInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("clip_10pct", count), &count, |b, _| {
+            let scene = generate_scene(&clip_10_config);
+            b.iter_batched(
+                || scene.clone(),
+                |mut scene| {
+                    black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
 
         // Nested clips: deeper hierarchy (max_depth 4) with 50% clip fraction.
         let nested_config = SceneConfig {
@@ -1067,20 +1059,16 @@ fn bench_clip_traversal(c: &mut Criterion) {
             clip_fraction: 0.50,
             ..SceneConfig::default()
         };
-        group.bench_with_input(
-            BenchmarkId::new("nested_depth4", count),
-            &count,
-            |b, _| {
-                let scene = generate_scene(&nested_config);
-                b.iter_batched(
-                    || scene.clone(),
-                    |mut scene| {
-                        black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
-                    },
-                    criterion::BatchSize::SmallInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("nested_depth4", count), &count, |b, _| {
+            let scene = generate_scene(&nested_config);
+            b.iter_batched(
+                || scene.clone(),
+                |mut scene| {
+                    black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
 
         // Hit testing with clip nodes: measures clip chain walk cost.
         let clip_hit_config = SceneConfig {
