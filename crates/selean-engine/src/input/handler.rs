@@ -5,8 +5,6 @@
 //! events. It performs hit testing via the scene graph and coordinate
 //! conversion via the camera.
 
-use selean_common::types::NodeId;
-
 use super::event::{InputEvent, InteractionEvent, Modifiers, PointerButton};
 use super::state::{CameraPanPhase, DragPhase, InteractionState};
 use crate::renderer::Camera;
@@ -263,6 +261,7 @@ impl InputHandler {
         events
     }
 
+    #[allow(clippy::too_many_arguments, clippy::similar_names, clippy::unused_self)]
     fn handle_scroll(
         &mut self,
         x: f32,
@@ -353,6 +352,8 @@ impl Default for InputHandler {
 mod tests {
     #![allow(clippy::float_cmp)]
 
+    use selean_common::types::NodeId;
+
     use super::*;
     use crate::scene::{BoundingBox, SceneNode, SceneNodeKind};
 
@@ -369,7 +370,7 @@ mod tests {
     }
 
     /// Creates a scene with one node at (100, 100, 50, 50) and a camera at origin.
-    /// Returns (scene, camera, node_id).
+    /// Returns (scene, camera, `node_id`).
     fn setup_single_node() -> (SceneGraph, Camera, NodeId) {
         let mut scene = SceneGraph::new();
         let node = frame_node("Node", 100.0, 100.0, 50.0, 50.0);

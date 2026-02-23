@@ -480,8 +480,8 @@ mod tests {
         assert_eq!(cam.zoom(), 2.0);
         // After: screen (0,0) should still map to world (-400, -300).
         let (wx, wy) = cam.screen_to_world(0.0, 0.0);
-        assert!((wx - (-400.0)).abs() < 1e-3, "x: expected -400, got {}", wx);
-        assert!((wy - (-300.0)).abs() < 1e-3, "y: expected -300, got {}", wy);
+        assert!((wx - (-400.0)).abs() < 1e-3, "x: expected -400, got {wx}");
+        assert!((wy - (-300.0)).abs() < 1e-3, "y: expected -300, got {wy}");
     }
 
     #[test]

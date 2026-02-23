@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn interaction_state_drag_threshold_default_is_4() {
         let state = InteractionState::default();
-        assert_eq!(state.drag_threshold, 4.0);
+        assert!((state.drag_threshold - 4.0).abs() < f32::EPSILON);
     }
 
     #[test]
