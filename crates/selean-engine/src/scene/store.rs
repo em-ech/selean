@@ -548,6 +548,79 @@ impl SceneGraph {
         })
     }
 
+    // --- Scroll offset ---
+
+    /// Sets the scroll offset for a node.
+    ///
+    /// Children of this node will be translated by `(-x, -y)` in the node's
+    /// coordinate space. The node itself renders at its normal position.
+    /// Marks the node and all descendants with `TRANSFORM` dirty (same as
+    /// `set_transform`) and propagates `CHILDREN` up.
+    /// Returns `false` if the node does not exist.
+    pub fn set_scroll_offset(&mut self, id: NodeId, x: f32, y: f32) -> bool {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.scroll_offset = [x, y];
+            node.dirty |= DirtyFlags::TRANSFORM;
+        } else {
+            return false;
+        }
+
+        self.propagate_transform_dirty_down(id);
+        self.propagate_dirty_up_from_child(id);
+        true
+    }
+
+    /// Returns the scroll offset for a node, or `None` if the node does not exist.
+    #[must_use]
+    pub fn scroll_offset(&self, id: NodeId) -> Option<[f32; 2]> {
+        self.nodes.get(&id).map(|n| n.scroll_offset)
+    }
+
+    /// Computes the bounding box enclosing all direct children of a node.
+    ///
+    /// Each child's bounds are transformed by its `local_transform` before
+    /// being unioned. Returns `None` if the node does not exist. Returns an
+    /// empty bounding box if the node has no children.
+    #[must_use]
+    pub fn compute_content_bounds(&self, id: NodeId) -> Option<BoundingBox> {
+        let node = self.nodes.get(&id)?;
+        let mut result = BoundingBox::new(0.0, 0.0, 0.0, 0.0);
+        for &child_id in &node.children {
+            if let Some(child) = self.nodes.get(&child_id) {
+                let transformed = child.local_transform.transform_aabb(&child.bounds);
+                result = result.union(&transformed);
+            }
+        }
+        Some(result)
+    }
+
+    /// Returns the maximum scroll offset for a node.
+    ///
+    /// This is `[max(0, content_right - node_width), max(0, content_bottom - node_height)]`.
+    /// Content smaller than the container yields `[0.0, 0.0]`.
+    /// Returns `None` if the node does not exist.
+    #[must_use]
+    pub fn max_scroll(&self, id: NodeId) -> Option<[f32; 2]> {
+        let node = self.nodes.get(&id)?;
+        let content = self.compute_content_bounds(id)?;
+        let max_x = (content.right() - node.bounds.width).max(0.0);
+        let max_y = (content.bottom() - node.bounds.height).max(0.0);
+        Some([max_x, max_y])
+    }
+
+    /// Sets the scroll offset, clamped to `[0..max_x, 0..max_y]`.
+    ///
+    /// Computes `max_scroll` and clamps the requested offset. Negative values
+    /// are clamped to zero. Returns `false` if the node does not exist.
+    pub fn set_scroll_offset_clamped(&mut self, id: NodeId, x: f32, y: f32) -> bool {
+        let Some(max) = self.max_scroll(id) else {
+            return false;
+        };
+        let clamped_x = x.clamp(0.0, max[0]);
+        let clamped_y = y.clamp(0.0, max[1]);
+        self.set_scroll_offset(id, clamped_x, clamped_y)
+    }
+
     // --- World transform recomputation ---
 
     /// Recomputes world transforms for all dirty nodes.
@@ -583,8 +656,15 @@ impl SceneGraph {
         let mut current = id;
         while let Some(parent_id) = self.parent(current) {
             if let Some(node) = self.nodes.get(&parent_id) {
-                if node.clip_mode != ClipMode::None {
-                    result.push((parent_id, node.clip_mode));
+                let effective = if node.clip_mode != ClipMode::None {
+                    Some(node.clip_mode)
+                } else if node.scroll_offset != [0.0, 0.0] {
+                    Some(ClipMode::Scissor)
+                } else {
+                    None
+                };
+                if let Some(mode) = effective {
+                    result.push((parent_id, mode));
                 }
             }
             current = parent_id;
@@ -594,16 +674,25 @@ impl SceneGraph {
 
     /// Tests whether a world-space point passes the clip region of a clip node.
     ///
+    /// The `effective_mode` parameter is the clip mode to test against, which may
+    /// differ from `node.clip_mode` for implicit scroll clips.
+    ///
     /// For `Scissor` and `ShaderRect` clips, tests against the world-space AABB.
     /// For `Stencil` clips on `Frame` nodes with corner radii, tests using the
     /// SDF distance to the rounded rect in local space.
     #[must_use]
-    pub fn point_passes_clip(&self, x: f32, y: f32, clip_node_id: NodeId) -> bool {
+    pub fn point_passes_clip(
+        &self,
+        x: f32,
+        y: f32,
+        clip_node_id: NodeId,
+        effective_mode: ClipMode,
+    ) -> bool {
         let Some(node) = self.nodes.get(&clip_node_id) else {
             return true;
         };
 
-        match node.clip_mode {
+        match effective_mode {
             ClipMode::None => true,
             ClipMode::Scissor | ClipMode::ShaderRect => {
                 // Test against world-space AABB.
@@ -733,7 +822,7 @@ impl SceneGraph {
                 let clip_chain = self.ancestor_clip_chain(id);
                 clip_chain
                     .iter()
-                    .all(|&(clip_id, _)| self.point_passes_clip(x, y, clip_id))
+                    .all(|&(clip_id, mode)| self.point_passes_clip(x, y, clip_id, mode))
             })
             .collect();
 
@@ -960,7 +1049,7 @@ impl SceneGraph {
     /// Only recomputes nodes that have the `TRANSFORM` flag set.
     fn recompute_world_transform_recursive(&mut self, id: NodeId, parent_world: Transform2D) {
         // Compute new world transform and collect data needed for spatial update.
-        let (world_transform, children, spatial_update) = {
+        let (world_transform, scroll_offset, children, spatial_update) = {
             let Some(node) = self.nodes.get_mut(&id) else {
                 return;
             };
@@ -969,10 +1058,16 @@ impl SceneGraph {
                 node.world_transform = parent_world.compose(&node.local_transform);
                 let world_aabb = node.world_transform.transform_aabb(&node.bounds);
                 let wt = node.world_transform;
+                let so = node.scroll_offset;
                 node.dirty = node.dirty.without(DirtyFlags::TRANSFORM);
-                (wt, node.children.clone(), Some(world_aabb))
+                (wt, so, node.children.clone(), Some(world_aabb))
             } else {
-                (node.world_transform, node.children.clone(), None)
+                (
+                    node.world_transform,
+                    node.scroll_offset,
+                    node.children.clone(),
+                    None,
+                )
             }
         };
 
@@ -981,8 +1076,18 @@ impl SceneGraph {
             self.spatial.update_node(id, &world_aabb);
         }
 
+        // If this node has a scroll offset, children see a shifted parent transform.
+        let children_parent = if scroll_offset == [0.0, 0.0] {
+            world_transform
+        } else {
+            world_transform.compose(&Transform2D::translation(
+                -scroll_offset[0],
+                -scroll_offset[1],
+            ))
+        };
+
         for child_id in children {
-            self.recompute_world_transform_recursive(child_id, world_transform);
+            self.recompute_world_transform_recursive(child_id, children_parent);
         }
     }
 
@@ -1044,7 +1149,7 @@ impl std::fmt::Debug for SceneGraph {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::scene::SceneNodeKind;
@@ -2684,5 +2789,429 @@ mod tests {
         // Inside child but outside parent clip.
         let hits = graph.hit_test(120.0, 120.0);
         assert!(!hits.contains(&child_id));
+    }
+
+    // --- Scroll offset tests ---
+
+    #[test]
+    fn default_scroll_offset_is_zero() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        assert_eq!(graph.scroll_offset(id), Some([0.0, 0.0]));
+    }
+
+    #[test]
+    fn set_scroll_offset_stores_value() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        assert!(graph.set_scroll_offset(id, 50.0, 30.0));
+        assert_eq!(graph.scroll_offset(id), Some([50.0, 30.0]));
+    }
+
+    #[test]
+    fn set_scroll_offset_marks_transform_dirty() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        graph.set_scroll_offset(id, 10.0, 20.0);
+        let node = graph.get(id).expect("node exists");
+        assert!(node.dirty.contains(DirtyFlags::TRANSFORM));
+    }
+
+    #[test]
+    fn set_scroll_offset_propagates_to_descendants() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+
+        let child = frame_node("Child", 10.0, 10.0, 50.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        let grandchild = frame_node("Grandchild", 5.0, 5.0, 20.0, 20.0);
+        let grandchild_id = grandchild.id;
+        graph.add_child(child_id, grandchild);
+
+        graph.recompute_world_transforms();
+        graph.clear_all_dirty();
+
+        graph.set_scroll_offset(parent_id, 10.0, 10.0);
+
+        let child_node = graph.get(child_id).expect("child exists");
+        assert!(child_node.dirty.contains(DirtyFlags::TRANSFORM));
+
+        let gc_node = graph.get(grandchild_id).expect("grandchild exists");
+        assert!(gc_node.dirty.contains(DirtyFlags::TRANSFORM));
+    }
+
+    #[test]
+    fn set_scroll_offset_on_nonexistent_returns_false() {
+        let mut graph = SceneGraph::new();
+        assert!(!graph.set_scroll_offset(NodeId::new(), 10.0, 10.0));
+    }
+
+    // --- Scroll transform injection tests ---
+
+    #[test]
+    fn scroll_offset_translates_children_world_transform() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+
+        let child = frame_node("Child", 50.0, 50.0, 40.0, 40.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        graph.set_scroll_offset(parent_id, 20.0, 10.0);
+        graph.recompute_world_transforms();
+
+        let child_wt = graph.get(child_id).expect("child").world_transform;
+        // Child's world_transform should include the scroll translation.
+        // With identity parent transform and scroll (20, 10), child position becomes
+        // local (50, 50) shifted by (-20, -10) = world (30, 40).
+        let (wx, wy) = child_wt.transform_point(50.0, 50.0);
+        assert!((wx - 30.0).abs() < 0.001);
+        assert!((wy - 40.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn scroll_offset_does_not_affect_parent_world_transform() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 100.0, 100.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+
+        graph.set_scroll_offset(parent_id, 50.0, 50.0);
+        graph.recompute_world_transforms();
+
+        // Parent's own world transform should be unaffected by scroll.
+        let parent_wt = graph.get(parent_id).expect("parent").world_transform;
+        assert!(parent_wt.is_identity());
+    }
+
+    #[test]
+    fn scroll_offset_cascades_to_grandchildren() {
+        let mut graph = SceneGraph::new();
+        let root = frame_node("Root", 0.0, 0.0, 500.0, 500.0);
+        let root_id = graph.add_root(root);
+
+        let child = frame_node("Child", 100.0, 100.0, 200.0, 200.0);
+        let child_id = child.id;
+        graph.add_child(root_id, child);
+
+        let grandchild = frame_node("Grandchild", 10.0, 10.0, 30.0, 30.0);
+        let grandchild_id = grandchild.id;
+        graph.add_child(child_id, grandchild);
+
+        graph.set_scroll_offset(root_id, 30.0, 20.0);
+        graph.recompute_world_transforms();
+
+        // Grandchild should also be shifted by root's scroll offset.
+        let gc_wt = graph.get(grandchild_id).expect("gc").world_transform;
+        let (wx, wy) = gc_wt.transform_point(10.0, 10.0);
+        // grandchild local (10,10) => child local (10,10) with identity child transform
+        // child is shifted by root scroll (-30, -20)
+        assert!((wx - (-20.0)).abs() < 0.001);
+        assert!((wy - (-10.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn scroll_offset_composes_with_parent_transform() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+        // Set a translation transform on the parent.
+        graph.set_transform(parent_id, Transform2D::translation(100.0, 50.0));
+
+        let child = frame_node("Child", 0.0, 0.0, 40.0, 40.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        graph.set_scroll_offset(parent_id, 10.0, 5.0);
+        graph.recompute_world_transforms();
+
+        let child_wt = graph.get(child_id).expect("child").world_transform;
+        // Parent world = identity * translation(100,50) = translation(100,50)
+        // Scroll shifts children by (-10, -5) in parent's space.
+        // So child world = translation(100,50) * translation(-10,-5) = translation(90,45)
+        let (wx, wy) = child_wt.transform_point(0.0, 0.0);
+        assert!((wx - 90.0).abs() < 0.001);
+        assert!((wy - 45.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn nested_scroll_containers_compose() {
+        let mut graph = SceneGraph::new();
+        let outer = frame_node("Outer", 0.0, 0.0, 400.0, 400.0);
+        let outer_id = graph.add_root(outer);
+
+        let inner = frame_node("Inner", 0.0, 0.0, 200.0, 200.0);
+        let inner_id = inner.id;
+        graph.add_child(outer_id, inner);
+
+        let leaf = frame_node("Leaf", 0.0, 0.0, 50.0, 50.0);
+        let leaf_id = leaf.id;
+        graph.add_child(inner_id, leaf);
+
+        graph.set_scroll_offset(outer_id, 10.0, 20.0);
+        graph.set_scroll_offset(inner_id, 5.0, 3.0);
+        graph.recompute_world_transforms();
+
+        let leaf_wt = graph.get(leaf_id).expect("leaf").world_transform;
+        // Outer scroll shifts inner by (-10, -20).
+        // Inner scroll shifts leaf by (-5, -3).
+        // Total shift on leaf: (-15, -23).
+        let (wx, wy) = leaf_wt.transform_point(0.0, 0.0);
+        assert!((wx - (-15.0)).abs() < 0.001);
+        assert!((wy - (-23.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn scroll_offset_updates_spatial_index() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 300.0, 300.0);
+        let parent_id = graph.add_root(parent);
+
+        // Child at (200, 200, 50, 50) — initially visible in spatial index.
+        let child = frame_node("Child", 200.0, 200.0, 50.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+        graph.recompute_world_transforms();
+
+        // Child should be at (200,200)-(250,250) in world space.
+        let hits = graph.spatial().query_point(225.0, 225.0);
+        assert!(hits.contains(&child_id));
+
+        // Scroll right by 200. Child world position becomes (0, 200).
+        graph.set_scroll_offset(parent_id, 200.0, 0.0);
+        graph.recompute_world_transforms();
+
+        // Old position should miss.
+        let hits = graph.spatial().query_point(225.0, 225.0);
+        assert!(!hits.contains(&child_id));
+
+        // New position (0, 200)-(50, 250) should hit.
+        let hits = graph.spatial().query_point(25.0, 225.0);
+        assert!(hits.contains(&child_id));
+    }
+
+    #[test]
+    fn zero_scroll_offset_is_noop() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+
+        let child = frame_node("Child", 50.0, 50.0, 40.0, 40.0);
+        let child_id = child.id;
+        graph.add_child(parent_id, child);
+
+        // Explicitly set zero scroll offset.
+        graph.set_scroll_offset(parent_id, 0.0, 0.0);
+        graph.recompute_world_transforms();
+
+        let child_wt = graph.get(child_id).expect("child").world_transform;
+        // Child should have identity world transform (no parent transform, no scroll).
+        assert!(child_wt.is_identity());
+    }
+
+    // --- Implicit scroll clip tests ---
+
+    #[test]
+    fn scroll_container_blocks_hit_outside_bounds() {
+        let mut graph = SceneGraph::new();
+        // Scroll container at (0,0,100,100).
+        let container = frame_node("Container", 0.0, 0.0, 100.0, 100.0);
+        let container_id = graph.add_root(container);
+
+        // Child at (0,0,100,50) — fully inside container before scroll.
+        let child = frame_node("Child", 0.0, 0.0, 100.0, 50.0);
+        let child_id = child.id;
+        graph.add_child(container_id, child);
+
+        // Scroll down by 60. Child shifts from (0,0) to (0,-60) in world space.
+        // The implicit scissor clip should hide the portion outside container bounds.
+        graph.set_scroll_offset(container_id, 0.0, 60.0);
+        graph.recompute_world_transforms();
+
+        // Point at (50, -30) is where the child moved but outside container bounds (y=0..100).
+        // This point is outside the container, so it should not hit.
+        let hits = graph.hit_test(50.0, -30.0);
+        assert!(!hits.contains(&child_id));
+    }
+
+    #[test]
+    fn scroll_container_hit_inside_bounds() {
+        let mut graph = SceneGraph::new();
+        // Scroll container at (0,0,200,200).
+        let container = frame_node("Container", 0.0, 0.0, 200.0, 200.0);
+        let container_id = graph.add_root(container);
+
+        // Child at (50,150,80,80) — partially visible.
+        let child = frame_node("Child", 50.0, 150.0, 80.0, 80.0);
+        let child_id = child.id;
+        graph.add_child(container_id, child);
+
+        // Scroll down by 100. Child shifts to (50, 50) in world space.
+        graph.set_scroll_offset(container_id, 0.0, 100.0);
+        graph.recompute_world_transforms();
+
+        // Point at (90, 90) should be inside both child and container bounds.
+        let hits = graph.hit_test(90.0, 90.0);
+        assert!(hits.contains(&child_id));
+    }
+
+    #[test]
+    fn scroll_container_with_explicit_clip_uses_explicit() {
+        let mut graph = SceneGraph::new();
+        let container = frame_node("Container", 0.0, 0.0, 100.0, 100.0);
+        let container_id = graph.add_root(container);
+        // Set explicit Stencil clip mode.
+        graph.set_clip_mode(container_id, ClipMode::Stencil);
+        graph.set_scroll_offset(container_id, 10.0, 10.0);
+
+        let child = frame_node("Child", 5.0, 5.0, 20.0, 20.0);
+        let child_id = child.id;
+        graph.add_child(container_id, child);
+
+        graph.recompute_world_transforms();
+
+        // The ancestor_clip_chain should report Stencil (explicit), not Scissor (implicit).
+        let chain = graph.ancestor_clip_chain(child_id);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].1, ClipMode::Stencil);
+    }
+
+    // --- Content bounds + scroll clamping tests ---
+
+    #[test]
+    fn compute_content_bounds_no_children() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Empty", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        let bounds = graph.compute_content_bounds(id).expect("node exists");
+        assert!(bounds.is_empty());
+    }
+
+    #[test]
+    fn compute_content_bounds_single_child() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+
+        let child = frame_node("Child", 10.0, 20.0, 80.0, 60.0);
+        graph.add_child(parent_id, child);
+
+        let bounds = graph.compute_content_bounds(parent_id).expect("exists");
+        assert_eq!(bounds.x, 10.0);
+        assert_eq!(bounds.y, 20.0);
+        assert_eq!(bounds.width, 80.0);
+        assert_eq!(bounds.height, 60.0);
+    }
+
+    #[test]
+    fn compute_content_bounds_multiple_children() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+
+        let c1 = frame_node("C1", 0.0, 0.0, 50.0, 50.0);
+        graph.add_child(parent_id, c1);
+
+        let c2 = frame_node("C2", 100.0, 100.0, 150.0, 80.0);
+        graph.add_child(parent_id, c2);
+
+        let bounds = graph.compute_content_bounds(parent_id).expect("exists");
+        assert_eq!(bounds.x, 0.0);
+        assert_eq!(bounds.y, 0.0);
+        assert_eq!(bounds.width, 250.0);
+        assert_eq!(bounds.height, 180.0);
+    }
+
+    #[test]
+    fn compute_content_bounds_nonexistent() {
+        let graph = SceneGraph::new();
+        assert!(graph.compute_content_bounds(NodeId::new()).is_none());
+    }
+
+    #[test]
+    fn compute_content_bounds_with_transformed_child() {
+        let mut graph = SceneGraph::new();
+        let parent = frame_node("Parent", 0.0, 0.0, 200.0, 200.0);
+        let parent_id = graph.add_root(parent);
+
+        let mut child = frame_node("Child", 0.0, 0.0, 50.0, 50.0);
+        child.local_transform = Transform2D::translation(100.0, 100.0);
+        graph.add_child(parent_id, child);
+
+        let bounds = graph.compute_content_bounds(parent_id).expect("exists");
+        // Child at (0,0,50,50) translated by (100,100) => AABB at (100,100,50,50).
+        assert_eq!(bounds.x, 100.0);
+        assert_eq!(bounds.y, 100.0);
+        assert_eq!(bounds.width, 50.0);
+        assert_eq!(bounds.height, 50.0);
+    }
+
+    #[test]
+    fn max_scroll_basic() {
+        let mut graph = SceneGraph::new();
+        // Container is 100x100.
+        let container = frame_node("Container", 0.0, 0.0, 100.0, 100.0);
+        let container_id = graph.add_root(container);
+
+        // Content extends to (200, 300).
+        let child = frame_node("Child", 0.0, 0.0, 200.0, 300.0);
+        graph.add_child(container_id, child);
+
+        let max = graph.max_scroll(container_id).expect("exists");
+        assert_eq!(max[0], 100.0); // 200 - 100
+        assert_eq!(max[1], 200.0); // 300 - 100
+    }
+
+    #[test]
+    fn max_scroll_content_smaller_than_container() {
+        let mut graph = SceneGraph::new();
+        let container = frame_node("Container", 0.0, 0.0, 200.0, 200.0);
+        let container_id = graph.add_root(container);
+
+        let child = frame_node("Child", 0.0, 0.0, 50.0, 50.0);
+        graph.add_child(container_id, child);
+
+        let max = graph.max_scroll(container_id).expect("exists");
+        assert_eq!(max, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn set_scroll_offset_clamped_basic() {
+        let mut graph = SceneGraph::new();
+        let container = frame_node("Container", 0.0, 0.0, 100.0, 100.0);
+        let container_id = graph.add_root(container);
+
+        let child = frame_node("Child", 0.0, 0.0, 300.0, 250.0);
+        graph.add_child(container_id, child);
+
+        // Request scroll beyond max.
+        assert!(graph.set_scroll_offset_clamped(container_id, 500.0, 400.0));
+        let offset = graph.scroll_offset(container_id).expect("exists");
+        assert_eq!(offset[0], 200.0); // max = 300 - 100
+        assert_eq!(offset[1], 150.0); // max = 250 - 100
+    }
+
+    #[test]
+    fn set_scroll_offset_clamped_negative_clamped_to_zero() {
+        let mut graph = SceneGraph::new();
+        let container = frame_node("Container", 0.0, 0.0, 100.0, 100.0);
+        let container_id = graph.add_root(container);
+
+        let child = frame_node("Child", 0.0, 0.0, 200.0, 200.0);
+        graph.add_child(container_id, child);
+
+        assert!(graph.set_scroll_offset_clamped(container_id, -50.0, -30.0));
+        let offset = graph.scroll_offset(container_id).expect("exists");
+        assert_eq!(offset, [0.0, 0.0]);
     }
 }

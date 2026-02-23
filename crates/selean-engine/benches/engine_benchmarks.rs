@@ -1091,6 +1091,105 @@ fn bench_clip_traversal(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Group 17: Scroll containers
+// ---------------------------------------------------------------------------
+
+fn bench_scroll_containers(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scroll_containers");
+
+    for &count in TIERS {
+        // Baseline: no scroll offset.
+        let no_scroll_config = SceneConfig {
+            node_count: count,
+            scroll_fraction: 0.0,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(BenchmarkId::new("no_scroll", count), &count, |b, _| {
+            let scene = generate_scene(&no_scroll_config);
+            b.iter_batched(
+                || scene.clone(),
+                |mut scene| {
+                    black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+
+        // 10% of groups have a random scroll offset.
+        let scroll_10_config = SceneConfig {
+            node_count: count,
+            scroll_fraction: 0.10,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(BenchmarkId::new("scroll_10pct", count), &count, |b, _| {
+            let scene = generate_scene(&scroll_10_config);
+            b.iter_batched(
+                || scene.clone(),
+                |mut scene| {
+                    black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+
+        // Nested scroll: deeper hierarchy with 50% scroll fraction.
+        let nested_config = SceneConfig {
+            node_count: count,
+            max_depth: 4,
+            scroll_fraction: 0.50,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(
+            BenchmarkId::new("scroll_50pct_nested", count),
+            &count,
+            |b, _| {
+                let scene = generate_scene(&nested_config);
+                b.iter_batched(
+                    || scene.clone(),
+                    |mut scene| {
+                        black_box(scene.visible_nodes_sorted(0.0, 0.0, 10_000.0, 10_000.0));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        // Content bounds computation.
+        let scroll_config = SceneConfig {
+            node_count: count,
+            scroll_fraction: 0.30,
+            ..SceneConfig::default()
+        };
+        group.bench_with_input(
+            BenchmarkId::new("content_bounds_computation", count),
+            &count,
+            |b, _| {
+                let scene = generate_scene(&scroll_config);
+                // Collect group node IDs that have children.
+                let group_ids: Vec<NodeId> = scene
+                    .roots()
+                    .iter()
+                    .copied()
+                    .filter(|&id| {
+                        scene
+                            .children(id)
+                            .is_some_and(|children| !children.is_empty())
+                    })
+                    .take(100)
+                    .collect();
+                b.iter(|| {
+                    for &id in &group_ids {
+                        black_box(scene.compute_content_bounds(id));
+                    }
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Creates a minimal valid RGBA PNG for benchmarking.
 fn make_test_png(width: u32, height: u32) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -1174,5 +1273,6 @@ criterion_group!(
     bench_hit_testing,
     bench_blend_mode_batching,
     bench_clip_traversal,
+    bench_scroll_containers,
 );
 criterion_main!(benches);

@@ -1,107 +1,103 @@
 # Selean Engine Session Notes
 
-## Current Phase: 5 (Clipping & Masking)
+## Current Phase: 6 Complete (Scroll Containers)
 
-Full plan file: `~/.claude/plans/cheeky-stirring-aurora.md`
+### Completed Phases
 
-### Completed Steps
+- Phase 1: Rect rendering (SDF rounded corners)
+- Phase 2: SDF text rendering
+- Phase 3: Image and vector rendering
+- Phase 4: Scene graph, R-tree spatial index, dirty flags, 2D affine transforms, blend modes
+- Phase 5: Clipping and masking (Scissor, Stencil, ShaderRect)
+- Phase 6: Scroll containers
 
-**Step 1: ClipMode + ClipRect + DirtyFlags** (done)
+### Phase 6 Summary (Scroll Containers)
 
-- Created `scene/clip.rs` with `ClipMode` enum (None/Scissor/Stencil/ShaderRect) and `ClipRect` struct
-- Added `CLIP = 0x80` dirty flag, updated `ALL` to `0xFF`
-- Added `clip_mode: ClipMode` field to `SceneNode`, default `None`
-- Added `set_clip_mode()` to `SceneGraph`
-- 22 tests for ClipRect math
+**What was added:**
 
-**Step 2: Clip-aware hit testing** (done)
+- `scroll_offset: [f32; 2]` field on `SceneNode` (default `[0.0, 0.0]`)
+- `BoundingBox::union()` for computing content bounds
+- `set_scroll_offset()`, `scroll_offset()` accessors on `SceneGraph`
+- `compute_content_bounds()`, `max_scroll()`, `set_scroll_offset_clamped()` on `SceneGraph`
+- Scroll translation injection in `recompute_world_transform_recursive`: children see `parent_world * translation(-offset_x, -offset_y)`
+- Implicit scissor clipping: scroll containers with `ClipMode::None` get an automatic `Scissor` clip in DFS and hit testing
+- `ancestor_clip_chain()` and `point_passes_clip()` updated for implicit scroll clips
+- `dfs_visit()` computes effective clip mode: explicit clip takes precedence, scroll implies Scissor, otherwise None
+- `scroll_fraction` config in benchmarks, Group 17 `bench_scroll_containers` with 4 benchmarks across 3 tiers
 
-- Added `ancestor_clip_chain()`, `point_passes_clip()`, `point_inside_rounded_rect()` to SceneGraph
-- Modified `hit_test()` to walk ancestor clip chain and reject clipped points
-- SDF rounded-rect check for stencil clips on Frame nodes
-- 12 new tests for clip-aware hit testing
+**Design decisions:**
 
-**Step 3: Stencil texture + DepthStencilState infrastructure** (done)
-
-- Added `STENCIL_NOOP` constant to `shared.rs`
-- Modified `create_pipeline_with_blend()` to accept `depth_stencil` and `color_writes` params
-- Added `create_stencil_texture()` helper (Depth24PlusStencil8 format)
-- Stencil texture created on `Renderer::new()`, recreated on `resize()`
-- Render pass attaches stencil with `Clear(0)` / `Discard`
-- All pipelines use no-op stencil state (rendering unchanged)
-
-**CI fixes** (done, committed with step 3)
-
-- Fixed `cargo fmt`, clippy pedantic lints across all modules
-
-Commit: `ebb3aaa` pushed to origin/main
-
-**Step 4: Stencil pipeline variants** (done)
-
-- Added `STENCIL_TEST`, `STENCIL_WRITE`, `STENCIL_DECREMENT` constants to `shared.rs`
-- `RectPipeline`: 4 new variants (normal/add stencil test, stencil write, stencil decrement)
-- `TextPipeline`: 2 new variants (normal/add stencil test)
-- `TexturedQuadPipeline`: 2 new variants (normal/add stencil test)
-- Added `select_pipeline(blend, stencil_test) -> &RenderPipeline` to all 3 pipeline structs
-- Added `stencil_write_pipeline()` and `stencil_decrement_pipeline()` to `RectPipeline`
-- Exported new constants from `renderer/mod.rs`
-- 400 tests passing, zero clippy warnings
-
-**Step 5: Shader + instance data for ShaderRect clip** (done)
-
-- Added `clip_rect: [f32; 4]` to all 3 instance types (RectInstance 96->112, GlyphInstance 88->104, TexturedQuadInstance 88->104)
-- Added `@location(N) clip_rect: vec4<f32>` to all 3 WGSL instance structs
-- Added `world_pos: vec2<f32>` and `clip_rect: vec4<f32>` to all 3 VertexOutput structs
-- Added `out.world_pos = world_pos` and `out.clip_rect = inst.clip_rect` passthrough in all 3 vertex shaders
-- Added discard logic at start of all 3 fragment shaders
-- All construction sites use `ClipRect::INFINITE.to_array()` sentinel (no discard)
-- Updated size assertions, added clip_rect value assertions to existing tests
-- 400 tests passing, zero clippy warnings
-
-**Step 6: ClipStack + DrawList + hierarchical DFS** (done)
-
-- Created `renderer/clip_stack.rs`: `ClipStack` with push/pop for scissor, stencil, shader_rect modes; `ResolvedClipState` snapshot type; 15 tests
-- Created `renderer/draw_list.rs`: `DrawCommand` enum (9 variants), `DrawList` with `merge_adjacent()` coalescing; 12 tests
-- Added alpha discard to `rect.wgsl` (`if outer_alpha <= 0.0 { discard }`) so stencil writes respect rounded corners
-- Added `ordered_instances` vec + methods to `RectBatch`, `TextBatch`, `TexturedQuadBatch` for hierarchical instance ordering
-- Added `finalize_uvs_ordered()` to `TextBatch` and `TexturedQuadBatch` for ordered UV finalization
-- Replaced flat `prepare()`/`render()` with hierarchical DFS in `pipeline.rs`:
-  - `RenderOrderEntry` enum bridges DFS traversal and draw list construction
-  - `dfs_visit()` walks scene graph depth-first, pushes/pops clip state, populates atlases, builds render order
-  - `build_draw_list()` patches `clip_rect` on instances, emits `DrawCommand`s
-  - `execute_draw_list()` iterates draw commands sequentially in render pass
-- Viewport culling during DFS (skip subtrees outside effective clip rect)
-- `merge_adjacent()` ensures no-clip scenes have identical draw call count to previous flat approach
-- Updated `renderer/mod.rs` exports for `ClipStack`, `ResolvedClipState`, `DrawCommand`, `DrawList`
-- 412 tests passing (16 common + 396 engine), zero clippy warnings
-
-**Step 7: Benchmarks + final verification** (done)
-
-- Added `clip_fraction: f32` field to `SceneConfig` (default 0.0, backward compatible)
-- `generate_scene()` applies random clip modes (Scissor/Stencil/ShaderRect) to `clip_fraction` of group nodes
-- Added `bench_clip_traversal` benchmark group (Group 16) with 4 benchmarks per tier:
-  - `no_clip`: baseline DFS with zero clip nodes
-  - `clip_10pct`: 10% of groups have random clip mode
-  - `nested_depth4`: 50% clip fraction with depth-4 hierarchy
-  - `hit_test_clipped`: hit testing with 20% clipped groups (measures clip chain walk cost)
-- Registered in `criterion_group!` (now 16 groups total)
-- Final verification: 412 tests pass, zero clippy warnings, benchmarks compile
-
-### Phase 5 Complete
-
-All 7 steps of Phase 5 (Clipping & Masking) are done.
+- Scroll offset is a transform injection, not a separate coordinate space. Composes naturally with existing transforms and nested scroll containers.
+- No new dirty flag. Scroll offset changes reuse `TRANSFORM` since they require world transform recomputation on all descendants.
+- Content bounds computed on demand via `compute_content_bounds()`. No per-frame overhead.
+- No event/input handling. The caller sets scroll offset directly.
 
 ### Test Count
 
-- 412 tests passing (16 common + 396 engine)
+- 458 tests passing (16 common + 442 engine)
+- 17 benchmark groups
 
 ### Key Architecture Notes
 
-- Rendering uses hierarchical DFS traversal (replaced flat draw order in step 6)
-- Two-phase pipeline: Phase 1 (DFS: atlas population, render order), Phase 2 (UV finalization, clip patching, DrawList construction)
+- Rendering uses hierarchical DFS traversal (replaced flat draw order in Phase 5)
+- Three-phase pipeline: Phase 1 (DFS: atlas population, render order), Phase 2 (UV finalization, clip patching, DrawList construction), Phase 3 (render pass execution)
 - `DrawList::merge_adjacent()` coalesces contiguous same-type draw commands for minimal draw calls
 - Stencil nesting uses IncrementClamp/DecrementClamp (max 255 depth)
 - ShaderRect uses per-instance `clip_rect` with fragment discard
 - Scissor uses GPU `set_scissor_rect()` (zero overhead, no rounded corners)
-- Pipeline variant table in plan file covers all blend x stencil combinations
+- Scroll containers inject translation into child world transforms and auto-clip via implicit Scissor
 - `render_frame()` is the single entry point: takes `&mut SceneGraph` + `&TextureView`
+
+### File Layout
+
+```
+crates/
+  selean-common/           # Shared types and errors
+    src/
+      error/mod.rs         # SeleanError, EngineError
+      types/id.rs          # NodeId, TokenId, ProjectId, etc.
+  selean-engine/           # Core rendering engine
+    src/
+      scene/               # Scene graph
+        node.rs            # SceneNode, SceneNodeKind, BoundingBox, Color, BlendMode
+        store.rs           # SceneGraph (central store, transforms, hit testing, scroll)
+        transform.rs       # Transform2D (3x2 affine matrix)
+        dirty.rs           # DirtyFlags (8-bit bitmask)
+        clip.rs            # ClipMode, ClipRect
+      renderer/            # GPU rendering
+        pipeline.rs        # Renderer (top-level orchestrator, DFS traversal)
+        rect_pipeline.rs   # RectPipeline, RectInstance, RectBatch
+        textured_quad.rs   # TexturedQuadPipeline, TexturedQuadInstance, TexturedQuadBatch
+        shared.rs          # SharedPipelineResources, PersistentInstanceBuffer
+        clip_stack.rs      # ClipStack, ResolvedClipState
+        draw_list.rs       # DrawCommand, DrawList
+        camera.rs          # Camera, CameraUniform
+        texture_atlas.rs   # TextureAtlas<CHANNELS>
+        gpu.rs             # GpuContext, GpuContextDescriptor
+        quad.rs            # Unit quad vertices/indices
+        shaders/           # WGSL shaders (rect, text, textured_quad)
+      text/                # Text subsystem
+        mod.rs             # TextSystem (coordinator)
+        font.rs            # FontData (Inter Regular embedded)
+        shaper.rs          # shape_text (rustybuzz)
+        layout.rs          # layout_text, PositionedGlyph
+        sdf.rs             # generate_glyph_sdf (Felzenszwalb EDT)
+        cache.rs           # GlyphCache
+        atlas.rs           # GlyphAtlas (TextureAtlas<1>)
+        packer.rs          # ShelfPacker
+        pipeline.rs        # TextPipeline, GlyphInstance, TextBatch
+      image/               # Image subsystem
+        mod.rs             # ImageSystem (coordinator)
+        loader.rs          # decode_image, decode_image_resized
+        cache.rs           # ImageCache
+      vector/              # Vector subsystem
+        mod.rs             # VectorSystem (coordinator)
+        parser.rs          # parse_path_data (SVG path commands)
+        rasterizer.rs      # rasterize_path (tiny-skia)
+        cache.rs           # VectorCache
+      spatial/             # Spatial indexing
+        index.rs           # SpatialIndex (R-tree via rstar)
+    benches/
+      bench_utils.rs       # SceneConfig, generate_scene
+      engine_benchmarks.rs # 17 Criterion benchmark groups
+```

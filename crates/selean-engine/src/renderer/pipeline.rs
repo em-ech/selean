@@ -411,9 +411,16 @@ impl Renderer {
             return;
         }
 
-        let clip_mode = node.clip_mode;
+        let is_scroll = node.scroll_offset != [0.0, 0.0];
+        let effective_clip = if node.clip_mode != ClipMode::None {
+            node.clip_mode
+        } else if is_scroll {
+            ClipMode::Scissor
+        } else {
+            ClipMode::None
+        };
         let blend_mode = node.blend_mode;
-        let is_clip = clip_mode != ClipMode::None;
+        let is_clip = effective_clip != ClipMode::None;
 
         // Enter clip: push clip state and emit render order entry.
         let parent_scissor = self.clip_stack.current_scissor().copied();
@@ -425,7 +432,7 @@ impl Renderer {
                 world_bb.x + world_bb.width,
                 world_bb.y + world_bb.height,
             );
-            match clip_mode {
+            match effective_clip {
                 ClipMode::Scissor => {
                     self.clip_stack.push_scissor(node_clip);
                     self.render_order.push(RenderOrderEntry::PushScissor {
@@ -564,7 +571,7 @@ impl Renderer {
 
         // Exit clip: emit pop entry and pop the clip stack.
         if is_clip {
-            match clip_mode {
+            match effective_clip {
                 ClipMode::Scissor => {
                     self.clip_stack.pop_scissor();
                     self.render_order

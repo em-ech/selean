@@ -68,6 +68,8 @@ pub struct SceneConfig {
     pub add_blend_fraction: f32,
     /// Fraction of group nodes that get a random clip mode (0.0–1.0).
     pub clip_fraction: f32,
+    /// Fraction of group nodes that get a random scroll offset (0.0–1.0).
+    pub scroll_fraction: f32,
 }
 
 impl Default for SceneConfig {
@@ -82,6 +84,7 @@ impl Default for SceneConfig {
             transform_fraction: 0.2,
             add_blend_fraction: 0.05,
             clip_fraction: 0.0,
+            scroll_fraction: 0.0,
         }
     }
 }
@@ -158,6 +161,13 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
                 _ => ClipMode::ShaderRect,
             };
             graph.set_clip_mode(node_id, mode);
+        }
+
+        // Apply a random scroll offset to a fraction of group nodes.
+        if config.scroll_fraction > 0.0 && rng.gen_bool(f64::from(config.scroll_fraction)) {
+            let sx = rng.gen_range(0.0_f32..200.0);
+            let sy = rng.gen_range(0.0_f32..200.0);
+            graph.set_scroll_offset(node_id, sx, sy);
         }
     }
 

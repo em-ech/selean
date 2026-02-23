@@ -107,6 +107,25 @@ impl BoundingBox {
     pub fn is_empty(&self) -> bool {
         self.width == 0.0 || self.height == 0.0
     }
+
+    /// Returns the smallest AABB enclosing both bounding boxes.
+    ///
+    /// If either box is empty, returns the other. If both are empty, returns
+    /// an empty box at the origin.
+    #[must_use]
+    pub fn union(&self, other: &Self) -> Self {
+        if self.is_empty() {
+            return *other;
+        }
+        if other.is_empty() {
+            return *self;
+        }
+        let min_x = self.x.min(other.x);
+        let min_y = self.y.min(other.y);
+        let max_x = self.right().max(other.right());
+        let max_y = self.bottom().max(other.bottom());
+        Self::new(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
 }
 
 /// RGBA color with linear (non-premultiplied) components in [0.0, 1.0].
@@ -237,6 +256,10 @@ pub struct SceneNode {
     pub blend_mode: BlendMode,
     /// Clipping mode. When not `None`, children are clipped to this node's bounds.
     pub clip_mode: ClipMode,
+    /// Scroll offset applied to children. Children are translated by
+    /// `(-scroll_offset[0], -scroll_offset[1])` in the node's coordinate space.
+    /// The node itself renders at its normal position.
+    pub scroll_offset: [f32; 2],
     /// IDs of child nodes, in render order (back to front).
     pub children: Vec<NodeId>,
     /// ID of the parent node, if any. Root nodes have `None`.
@@ -266,6 +289,7 @@ impl SceneNode {
             world_transform: Transform2D::identity(),
             blend_mode: BlendMode::Normal,
             clip_mode: ClipMode::None,
+            scroll_offset: [0.0, 0.0],
             children: Vec::new(),
             parent: None,
             dirty: DirtyFlags::ALL,
@@ -382,6 +406,65 @@ mod tests {
         assert!(!BoundingBox::new(0.0, 0.0, 1.0, 1.0).is_empty());
     }
 
+    // --- BoundingBox::union tests ---
+
+    #[test]
+    fn bounding_box_union_overlapping() {
+        let a = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
+        let b = BoundingBox::new(50.0, 50.0, 100.0, 100.0);
+        let u = a.union(&b);
+        assert_eq!(u.x, 0.0);
+        assert_eq!(u.y, 0.0);
+        assert_eq!(u.width, 150.0);
+        assert_eq!(u.height, 150.0);
+    }
+
+    #[test]
+    fn bounding_box_union_disjoint() {
+        let a = BoundingBox::new(0.0, 0.0, 50.0, 50.0);
+        let b = BoundingBox::new(200.0, 200.0, 30.0, 30.0);
+        let u = a.union(&b);
+        assert_eq!(u.x, 0.0);
+        assert_eq!(u.y, 0.0);
+        assert_eq!(u.width, 230.0);
+        assert_eq!(u.height, 230.0);
+    }
+
+    #[test]
+    fn bounding_box_union_contained() {
+        let outer = BoundingBox::new(0.0, 0.0, 200.0, 200.0);
+        let inner = BoundingBox::new(50.0, 50.0, 30.0, 30.0);
+        let u = outer.union(&inner);
+        assert_eq!(u.x, 0.0);
+        assert_eq!(u.y, 0.0);
+        assert_eq!(u.width, 200.0);
+        assert_eq!(u.height, 200.0);
+    }
+
+    #[test]
+    fn bounding_box_union_empty_left() {
+        let empty = BoundingBox::new(0.0, 0.0, 0.0, 0.0);
+        let b = BoundingBox::new(10.0, 20.0, 50.0, 60.0);
+        let u = empty.union(&b);
+        assert_eq!(u, b);
+    }
+
+    #[test]
+    fn bounding_box_union_empty_right() {
+        let a = BoundingBox::new(10.0, 20.0, 50.0, 60.0);
+        let empty = BoundingBox::new(0.0, 0.0, 0.0, 0.0);
+        let u = a.union(&empty);
+        assert_eq!(u, a);
+    }
+
+    #[test]
+    fn bounding_box_union_both_empty() {
+        let a = BoundingBox::new(0.0, 0.0, 0.0, 0.0);
+        let b = BoundingBox::new(0.0, 0.0, 0.0, 0.0);
+        let u = a.union(&b);
+        assert!(u.is_empty());
+    }
+
     // --- Color tests ---
 
     #[test]
@@ -463,6 +546,7 @@ mod tests {
         assert!(node.world_transform.is_identity());
         assert_eq!(node.blend_mode, BlendMode::Normal);
         assert_eq!(node.clip_mode, ClipMode::None);
+        assert_eq!(node.scroll_offset, [0.0, 0.0]);
         assert!(node.children.is_empty());
         assert!(node.parent.is_none());
     }

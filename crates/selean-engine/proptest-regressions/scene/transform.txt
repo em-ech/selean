@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 733b275d2b18a1e9d2189ff12f05034265eb67ec1cfe88d9eb4317521b1265ad # shrinks to a = Transform2D { m: [-7.368544, -5.3188944, 6.4177957, -6.1068487, 0.0, 0.0] }, b = Transform2D { m: [5.9186654, 5.167786, -6.3952756, 4.782655, 386.03107, 884.3772] }, c = Transform2D { m: [0.1, 0.0, 0.0, 0.1, -42.939846, 984.635] }
