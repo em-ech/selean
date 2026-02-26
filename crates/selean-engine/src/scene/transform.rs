@@ -11,6 +11,7 @@
 //! This representation uses 6 floats (24 bytes), saving 12 bytes over a full `mat3x3`.
 
 use bytemuck::{Pod, Zeroable};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::node::BoundingBox;
 
@@ -237,6 +238,19 @@ impl Transform2D {
 impl Default for Transform2D {
     fn default() -> Self {
         Self::IDENTITY
+    }
+}
+
+impl Serialize for Transform2D {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.raw().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Transform2D {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let m = <[f32; 6]>::deserialize(deserializer)?;
+        Ok(Self::from_raw(m))
     }
 }
 

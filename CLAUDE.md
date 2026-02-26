@@ -1,6 +1,6 @@
 # Selean Engine Session Notes
 
-## Current Phase: 8 Complete (Undo/Redo System)
+## Current Phase: 9 Complete (Serialization / Persistence)
 
 ### Completed Phases
 
@@ -12,6 +12,29 @@
 - Phase 6: Scroll containers
 - Phase 7: Input handling
 - Phase 8: Undo/redo system
+- Phase 9: Serialization / Persistence
+
+### Phase 9 Summary (Serialization / Persistence)
+
+**What was added:**
+
+- `Serialize`/`Deserialize` derives on all scene types: `BlendMode`, `BoundingBox`, `Color`, `SceneNodeKind`, `ClipMode`, `SceneNode`
+- Manual `Serialize`/`Deserialize` impl for `Transform2D` using `raw()`/`from_raw()`
+- `#[serde(skip)]` on transient fields: `dirty` (defaults to `ALL`), `world_transform` (defaults to identity)
+- `SceneGraph::from_document_state(nodes, roots)` constructor that rebuilds spatial index and recomputes world transforms
+- `SceneGraph::nodes()` accessor for the internal node map
+- `persistence/format.rs`: `DocumentFormat`, `SceneGraphData` with `from_graph()`, `validate()` (7 rules), `into_graph()`
+- `persistence/mod.rs`: `PersistenceError` (UnsupportedVersion, InvalidScene, Json), `save()`, `save_pretty()`, `load()`
+- `FORMAT_VERSION = 1`, timestamps via `std::time::SystemTime`
+- 36 tests: 18 in format.rs (10 roundtrip + 8 validation rejection), 18 in mod.rs (10 save/load roundtrip + 4 field checks + 4 rejection)
+
+**Design decisions:**
+
+- JSON format chosen for human readability and debugging. Binary format can be added later behind the same `DocumentFormat` abstraction.
+- Transient state (spatial index, world transforms, dirty flags, z-indices) is excluded from serialization and rebuilt on load.
+- `validate()` checks 7 structural invariants before `into_graph()`: roots exist, children exist, parent consistency, root parent is None, no root in children, no cycles (DFS), no orphans.
+- `from_document_state` sets `z_dirty` and `has_any_transform_dirty` to trigger full recomputation on first frame.
+- No new dependencies (serde_json and thiserror were added in steps 1-4).
 
 ### Phase 8 Summary (Undo/Redo System)
 
@@ -88,7 +111,7 @@
 
 ### Test Count
 
-- 535 tests passing (16 common + 519 engine)
+- 571 tests passing (16 common + 555 engine)
 - 17 benchmark groups
 
 ### Key Architecture Notes
@@ -161,6 +184,9 @@ crates/
         hierarchy.rs       # 5 hierarchy commands (add, remove, reparent, reorder)
         batch.rs           # CommandGroup (multi-command undo unit)
         history.rs         # CommandHistory (undo/redo stacks, grouping)
+      persistence/         # Document save/load
+        mod.rs             # PersistenceError, save(), save_pretty(), load()
+        format.rs          # DocumentFormat, SceneGraphData, validate(), FORMAT_VERSION
       spatial/             # Spatial indexing
         index.rs           # SpatialIndex (R-tree via rstar)
     benches/

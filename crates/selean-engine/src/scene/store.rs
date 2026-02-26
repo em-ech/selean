@@ -57,7 +57,34 @@ impl SceneGraph {
         }
     }
 
+    /// Reconstructs a scene graph from deserialized document state.
+    ///
+    /// Takes ownership of the node map and root list. After construction,
+    /// rebuilds the spatial index from scratch and recomputes all world
+    /// transforms so the graph is ready for rendering.
+    #[must_use]
+    pub fn from_document_state(nodes: HashMap<NodeId, SceneNode>, roots: Vec<NodeId>) -> Self {
+        let mut graph = Self {
+            nodes,
+            spatial: SpatialIndex::new(),
+            roots,
+            z_indices: HashMap::new(),
+            z_dirty: true,
+            has_any_transform_dirty: true,
+            visible_ids_buf: Vec::new(),
+        };
+        graph.rebuild_spatial_index();
+        graph.recompute_world_transforms();
+        graph
+    }
+
     // --- Accessors ---
+
+    /// Returns a reference to the internal node map.
+    #[must_use]
+    pub fn nodes(&self) -> &HashMap<NodeId, SceneNode> {
+        &self.nodes
+    }
 
     /// Returns the number of nodes in the graph.
     #[must_use]

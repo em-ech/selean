@@ -7,12 +7,14 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Clipping mode for a scene node.
 ///
 /// When a node has a clip mode other than `None`, all descendants are clipped
 /// to the node's bounds (or a shape derived from them). The mode determines
 /// which GPU mechanism is used for clipping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ClipMode {
     /// No clipping. Children render their full content regardless of parent bounds.
     #[default]

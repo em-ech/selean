@@ -4,6 +4,8 @@
 //! Nodes carry their visual properties, bounding box, and dirty flags for
 //! incremental rendering.
 
+use serde::{Deserialize, Serialize};
+
 use selean_common::types::NodeId;
 
 use super::DirtyFlags;
@@ -11,7 +13,7 @@ use super::clip::ClipMode;
 use super::transform::Transform2D;
 
 /// The visual type of a scene node, determining how it is rendered.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SceneNodeKind {
     /// A rectangular frame, potentially with fill, stroke, and corner radius.
     Frame {
@@ -40,7 +42,7 @@ pub enum SceneNodeKind {
 }
 
 /// An axis-aligned bounding box in logical (pre-transform) coordinates.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoundingBox {
     /// Left edge x coordinate.
     pub x: f32,
@@ -129,7 +131,7 @@ impl BoundingBox {
 }
 
 /// RGBA color with linear (non-premultiplied) components in [0.0, 1.0].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Color {
     /// Red component.
     pub r: f32,
@@ -182,7 +184,7 @@ impl Color {
 /// Only `Normal` and `Add` can be rendered with a single wgpu blend state.
 /// Other modes require multi-pass rendering with intermediate render targets
 /// and are defined here for API completeness; they fall back to `Normal` with a warning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum BlendMode {
     /// Standard alpha blending (source-over).
     #[default]
@@ -223,11 +225,19 @@ impl BlendMode {
     }
 }
 
+fn dirty_all() -> DirtyFlags {
+    DirtyFlags::ALL
+}
+
+fn identity_transform() -> Transform2D {
+    Transform2D::identity()
+}
+
 /// A node in the scene graph.
 ///
 /// Holds its identity, visual type, spatial bounds, styling, hierarchy info,
 /// and dirty flags for incremental rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneNode {
     /// Unique identifier for this node.
     pub id: NodeId,
@@ -251,6 +261,7 @@ pub struct SceneNode {
     pub local_transform: Transform2D,
     /// Cached world transform (`parent.world_transform * local_transform`).
     /// Recomputed lazily during the prepare phase when `TRANSFORM` is dirty.
+    #[serde(skip, default = "identity_transform")]
     pub world_transform: Transform2D,
     /// Compositing blend mode.
     pub blend_mode: BlendMode,
@@ -265,6 +276,7 @@ pub struct SceneNode {
     /// ID of the parent node, if any. Root nodes have `None`.
     pub parent: Option<NodeId>,
     /// Dirty flags indicating which properties have changed.
+    #[serde(skip, default = "dirty_all")]
     pub dirty: DirtyFlags,
 }
 

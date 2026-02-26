@@ -9,6 +9,7 @@
 pub mod command;
 pub mod image;
 pub mod input;
+pub mod persistence;
 pub mod renderer;
 pub mod scene;
 pub mod spatial;
