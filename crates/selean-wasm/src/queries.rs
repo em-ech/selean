@@ -1,0 +1,392 @@
+//! Scene graph query functions for the WASM boundary.
+//!
+//! These functions serialize scene state to JSON for consumption by the
+//! React frontend. All return `String` (JSON) to cross the WASM FFI boundary.
+
+use selean_common::types::NodeId;
+use selean_engine::scene::{SceneGraph, SceneNode};
+use serde::{Deserialize, Serialize};
+
+/// Serializable representation of a node for the frontend.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NodeInfo {
+    /// Node ID as a string.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Node kind tag ("Frame", "Text", "Image", "Vector", "Group").
+    pub kind: String,
+    /// Left edge x coordinate.
+    pub x: f32,
+    /// Top edge y coordinate.
+    pub y: f32,
+    /// Width in logical pixels.
+    pub width: f32,
+    /// Height in logical pixels.
+    pub height: f32,
+    /// Fill color (RGBA), if set.
+    pub fill: Option<[f32; 4]>,
+    /// Stroke color (RGBA), if set.
+    pub stroke: Option<[f32; 4]>,
+    /// Stroke width.
+    pub stroke_width: f32,
+    /// Opacity.
+    pub opacity: f32,
+    /// Visibility.
+    pub visible: bool,
+    /// Blend mode name.
+    pub blend_mode: String,
+    /// Clip mode name.
+    pub clip_mode: String,
+    /// Local transform as `[a, b, c, d, tx, ty]`.
+    pub transform: [f32; 6],
+    /// Scroll offset `[x, y]`.
+    pub scroll_offset: [f32; 2],
+    /// Corner radius `[tl, tr, br, bl]` (Frame kind only, zeros otherwise).
+    pub corner_radius: [f32; 4],
+    /// Text content (Text kind only).
+    pub text_content: Option<String>,
+    /// Font size (Text kind only).
+    pub font_size: Option<f32>,
+    /// Asset reference (Image kind only).
+    pub asset_ref: Option<String>,
+    /// SVG path data (Vector kind only).
+    pub path_data: Option<String>,
+    /// Child node IDs.
+    pub children: Vec<String>,
+    /// Parent node ID, if any.
+    pub parent: Option<String>,
+}
+
+impl From<&SceneNode> for NodeInfo {
+    fn from(node: &SceneNode) -> Self {
+        use selean_engine::scene::SceneNodeKind;
+
+        let kind = node.kind.kind_tag();
+        let (corner_radius, text_content, font_size, asset_ref, path_data) = match &node.kind {
+            SceneNodeKind::Frame { corner_radius } => {
+                (*corner_radius, None, None, None, None)
+            }
+            SceneNodeKind::Text { content, font_size } => (
+                [0.0; 4],
+                Some(content.clone()),
+                Some(*font_size),
+                None,
+                None,
+            ),
+            SceneNodeKind::Image { asset_ref } => (
+                [0.0; 4],
+                None,
+                None,
+                Some(asset_ref.clone()),
+                None,
+            ),
+            SceneNodeKind::Vector { path_data } => (
+                [0.0; 4],
+                None,
+                None,
+                None,
+                Some(path_data.clone()),
+            ),
+            SceneNodeKind::Group => ([0.0; 4], None, None, None, None),
+        };
+
+        Self {
+            id: node.id.to_string(),
+            name: node.name.clone(),
+            kind: kind.to_string(),
+            x: node.bounds.x,
+            y: node.bounds.y,
+            width: node.bounds.width,
+            height: node.bounds.height,
+            fill: node.fill.map(|c| [c.r, c.g, c.b, c.a]),
+            stroke: node.stroke.map(|c| [c.r, c.g, c.b, c.a]),
+            stroke_width: node.stroke_width,
+            opacity: node.opacity,
+            visible: node.visible,
+            blend_mode: format!("{:?}", node.blend_mode),
+            clip_mode: format!("{:?}", node.clip_mode),
+            transform: *node.local_transform.raw(),
+            scroll_offset: node.scroll_offset,
+            corner_radius,
+            text_content,
+            font_size,
+            asset_ref,
+            path_data,
+            children: node.children.iter().map(ToString::to_string).collect(),
+            parent: node.parent.map(|id| id.to_string()),
+        }
+    }
+}
+
+/// Serializable representation of the entire scene for the frontend.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SceneInfo {
+    /// All nodes in the scene.
+    pub nodes: Vec<NodeInfo>,
+    /// Root node IDs in order.
+    pub roots: Vec<String>,
+    /// Total node count.
+    pub node_count: usize,
+}
+
+/// Returns JSON representation of a single node, or `null` if not found.
+pub fn get_node_json(scene: &SceneGraph, node_id_str: &str) -> String {
+    let Ok(uuid) = uuid::Uuid::parse_str(node_id_str) else {
+        return "null".to_string();
+    };
+    let node_id = NodeId::from_uuid(uuid);
+    match scene.get(node_id) {
+        Some(node) => {
+            let info = NodeInfo::from(node);
+            serde_json::to_string(&info).unwrap_or_else(|_| "null".to_string())
+        }
+        None => "null".to_string(),
+    }
+}
+
+/// Returns JSON array of selected node ID strings.
+pub fn get_selected_ids_json(selected: &[NodeId]) -> String {
+    let ids: Vec<String> = selected.iter().map(ToString::to_string).collect();
+    serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Returns JSON representation of the entire scene graph.
+pub fn get_scene_json(scene: &SceneGraph) -> String {
+    let nodes: Vec<NodeInfo> = scene
+        .nodes()
+        .values()
+        .map(NodeInfo::from)
+        .collect();
+    let roots: Vec<String> = scene.roots().iter().map(ToString::to_string).collect();
+    let info = SceneInfo {
+        node_count: nodes.len(),
+        nodes,
+        roots,
+    };
+    serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::float_cmp)]
+mod tests {
+    use super::*;
+    use selean_engine::scene::{BoundingBox, Color, SceneNode, SceneNodeKind};
+
+    fn make_frame(name: &str, x: f32, y: f32, w: f32, h: f32) -> SceneNode {
+        SceneNode::new(
+            NodeId::new(),
+            name.to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(x, y, w, h),
+        )
+    }
+
+    #[test]
+    fn node_info_from_scene_node() {
+        let mut node = make_frame("Test", 10.0, 20.0, 100.0, 50.0);
+        node.fill = Some(Color::new(1.0, 0.0, 0.0, 1.0));
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.name, "Test");
+        assert_eq!(info.kind, "Frame");
+        assert!((info.x - 10.0).abs() < f32::EPSILON);
+        assert!(info.fill.is_some());
+        let fill = info.fill.unwrap();
+        assert!((fill[0] - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn get_node_json_returns_valid_json() {
+        let mut scene = SceneGraph::new();
+        let node = make_frame("A", 0.0, 0.0, 50.0, 50.0);
+        let id = node.id;
+        scene.add_root(node);
+
+        let json = get_node_json(&scene, &id.to_string());
+        assert!(json.contains("\"name\":\"A\""));
+        assert!(json.contains("\"kind\":\"Frame\""));
+    }
+
+    #[test]
+    fn get_node_json_invalid_id_returns_null() {
+        let scene = SceneGraph::new();
+        let json = get_node_json(&scene, "not-a-uuid");
+        assert_eq!(json, "null");
+    }
+
+    #[test]
+    fn get_node_json_missing_id_returns_null() {
+        let scene = SceneGraph::new();
+        let id = NodeId::new();
+        let json = get_node_json(&scene, &id.to_string());
+        assert_eq!(json, "null");
+    }
+
+    #[test]
+    fn get_selected_ids_json_empty() {
+        let json = get_selected_ids_json(&[]);
+        assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn get_selected_ids_json_with_ids() {
+        let ids = vec![NodeId::new(), NodeId::new()];
+        let json = get_selected_ids_json(&ids);
+        let parsed: Vec<String> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn get_scene_json_empty_scene() {
+        let scene = SceneGraph::new();
+        let json = get_scene_json(&scene);
+        let parsed: SceneInfo = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed.node_count, 0);
+        assert!(parsed.nodes.is_empty());
+        assert!(parsed.roots.is_empty());
+    }
+
+    #[test]
+    fn get_scene_json_with_nodes() {
+        let mut scene = SceneGraph::new();
+        scene.add_root(make_frame("A", 0.0, 0.0, 50.0, 50.0));
+        scene.add_root(make_frame("B", 100.0, 0.0, 50.0, 50.0));
+
+        let json = get_scene_json(&scene);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed["node_count"], 2);
+        assert_eq!(parsed["roots"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn node_info_group_kind() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Group1".to_string(),
+            SceneNodeKind::Group,
+            BoundingBox::new(0.0, 0.0, 0.0, 0.0),
+        );
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.kind, "Group");
+    }
+
+    #[test]
+    fn node_info_text_kind() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Hello".to_string(),
+                font_size: 16.0,
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 20.0),
+        );
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.kind, "Text");
+    }
+
+    #[test]
+    fn node_info_no_fill_stroke() {
+        let node = make_frame("Empty", 0.0, 0.0, 50.0, 50.0);
+        let info = NodeInfo::from(&node);
+        assert!(info.fill.is_none());
+        assert!(info.stroke.is_none());
+    }
+
+    #[test]
+    fn node_info_frame_corner_radius() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Rounded".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [4.0, 8.0, 12.0, 16.0],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.corner_radius, [4.0, 8.0, 12.0, 16.0]);
+        assert!(info.text_content.is_none());
+        assert!(info.font_size.is_none());
+    }
+
+    #[test]
+    fn node_info_text_content_and_font_size() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Hello World".to_string(),
+                font_size: 24.0,
+            },
+            BoundingBox::new(0.0, 0.0, 200.0, 30.0),
+        );
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.text_content.as_deref(), Some("Hello World"));
+        assert_eq!(info.font_size, Some(24.0));
+        assert_eq!(info.corner_radius, [0.0; 4]);
+    }
+
+    #[test]
+    fn node_info_image_asset_ref() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Photo".to_string(),
+            SceneNodeKind::Image {
+                asset_ref: "assets/photo.png".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 200.0, 150.0),
+        );
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.asset_ref.as_deref(), Some("assets/photo.png"));
+        assert!(info.path_data.is_none());
+    }
+
+    #[test]
+    fn node_info_vector_path_data() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Arrow".to_string(),
+            SceneNodeKind::Vector {
+                path_data: "M 0 0 L 50 50".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 50.0, 50.0),
+        );
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.path_data.as_deref(), Some("M 0 0 L 50 50"));
+        assert!(info.asset_ref.is_none());
+    }
+
+    #[test]
+    fn node_info_blend_and_clip_mode() {
+        use selean_engine::scene::{BlendMode, ClipMode};
+        let mut node = make_frame("Clipped", 0.0, 0.0, 100.0, 100.0);
+        node.blend_mode = BlendMode::Multiply;
+        node.clip_mode = ClipMode::Stencil;
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.blend_mode, "Multiply");
+        assert_eq!(info.clip_mode, "Stencil");
+    }
+
+    #[test]
+    fn node_info_default_transform_and_scroll() {
+        let node = make_frame("Default", 0.0, 0.0, 100.0, 100.0);
+        let info = NodeInfo::from(&node);
+        assert_eq!(info.transform, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(info.scroll_offset, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn node_info_serializes_new_fields() {
+        let mut node = make_frame("Full", 10.0, 20.0, 100.0, 50.0);
+        node.fill = Some(Color::new(1.0, 0.0, 0.0, 1.0));
+        node.scroll_offset = [5.0, 10.0];
+        let info = NodeInfo::from(&node);
+        let json = serde_json::to_string(&info).expect("serialize");
+        assert!(json.contains("\"blend_mode\":\"Normal\""));
+        assert!(json.contains("\"clip_mode\":\"None\""));
+        assert!(json.contains("\"scroll_offset\":[5.0,10.0]"));
+        assert!(json.contains("\"corner_radius\":[0.0,0.0,0.0,0.0]"));
+    }
+}

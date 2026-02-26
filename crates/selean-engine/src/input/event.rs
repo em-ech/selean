@@ -5,9 +5,10 @@
 //! [`InteractionEvent`] values describing semantic interactions.
 
 use selean_common::types::NodeId;
+use serde::Serialize;
 
 /// Mouse/touch button identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum PointerButton {
     /// Primary (left) button.
     Left,
@@ -19,7 +20,7 @@ pub enum PointerButton {
 
 /// Active keyboard modifiers at the time of an input event.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct Modifiers {
     /// Shift key held.
     pub shift: bool,
@@ -84,7 +85,7 @@ pub enum InputEvent {
 }
 
 /// Semantic interaction produced by [`super::InputHandler`] after processing raw events.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum InteractionEvent {
     /// Hover target changed. `old` is `None` if nothing was hovered before.
     HoverChanged {

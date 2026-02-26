@@ -1,0 +1,22 @@
+[package]
+name = "selean-llm"
+version = "0.1.0"
+description = "LLM tool definitions and execution mapping for the Selean design platform"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+selean-common = { path = "../selean-common" }
+selean-engine = { path = "../selean-engine" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
