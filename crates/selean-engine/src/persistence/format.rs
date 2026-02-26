@@ -186,6 +186,16 @@ impl SceneGraphData {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::float_cmp,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::cast_precision_loss,
+        clippy::similar_names,
+        clippy::items_after_statements,
+        clippy::unreadable_literal
+    )]
+
     use super::*;
     use crate::scene::{BoundingBox, ClipMode, SceneNodeKind, Transform2D};
 
