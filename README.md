@@ -1,77 +1,59 @@
 # Selean
 
-A GPU-accelerated 2D rendering engine for design tools, written in Rust.
-
-Selean provides the core rendering and scene management layer for a design platform. It uses WebGPU (via `wgpu`) for hardware-accelerated rendering with SDF-based text and shape rendering, a scene graph with dirty flag tracking for incremental updates, and an R-tree spatial index for viewport culling and hit testing.
+A GPU-accelerated design platform built in Rust with a browser-based editor. Combines a WebGPU rendering engine, an LLM chat assistant (Claude), and a React frontend into a unified design tool where manual edits, AI-driven modifications, and file imports all flow through the same mutation pipeline.
 
 ## Architecture
 
 ```
-                        +--------------------+
-                        |   Host Application |
-                        |  (winit/SDL/web)   |
-                        +---------+----------+
-                                  |
-                    InputEvent    |    save()/load()
-                   (platform     |    (JSON persistence)
-                    agnostic)    |
-                                 v
-              +------------------+------------------+
-              |            selean-engine             |
-              |                                     |
-              |  +-----------+    +--------------+  |
-              |  |   Input   |--->|   Command    |  |
-              |  |  Handler  |    |   History    |  |
-              |  +-----------+    |  (undo/redo) |  |
-              |       |           +--------------+  |
-              |       v                |             |
-              |  +---------+    +------v---------+  |
-              |  | Camera  |    |  Scene Graph   |  |
-              |  | (pan,   |    |  +----------+  |  |
-              |  |  zoom)  |    |  | SceneNode|  |  |
-              |  +---------+    |  | DirtyFlags|  |  |
-              |       |         |  | Transform |  |  |
-              |       |         |  +----------+  |  |
-              |       |         |       |        |  |
-              |       |         | +------------+ |  |
-              |       |         | |Spatial Index| |  |
-              |       |         | |  (R-tree)   | |  |
-              |       |         | +------------+ |  |
-              |       |         +----------------+  |
-              |       |                |             |
-              |       v                v             |
-              |  +------------------------------+   |
-              |  |      Renderer (3-phase)       |   |
-              |  |                               |   |
-              |  |  Phase 1: DFS traversal       |   |
-              |  |    atlas population           |   |
-              |  |    render order                |   |
-              |  |    clip stack                  |   |
-              |  |                               |   |
-              |  |  Phase 2: Draw list           |   |
-              |  |    UV finalization            |   |
-              |  |    clip patching              |   |
-              |  |    merge_adjacent()           |   |
-              |  |                               |   |
-              |  |  Phase 3: Render pass         |   |
-              |  |    wgpu command submission    |   |
-              |  +------------------------------+   |
-              |       |          |          |        |
-              |  +----v---+ +---v----+ +---v-----+  |
-              |  |  Rect  | |  Text  | |Textured |  |
-              |  |Pipeline| |Pipeline| |  Quad   |  |
-              |  | (SDF)  | | (SDF)  | |Pipeline |  |
-              |  +--------+ +--------+ +---------+  |
-              |                                     |
-              +------------------+------------------+
-                                 |
-                                 v
-                        +--------+--------+
-                        |      wgpu       |
-                        | (Vulkan/Metal/  |
-                        |  DX12/WebGPU)   |
-                        +-----------------+
++---------------------------+
+|   React Frontend (Vite)   |
+|                           |
+|  Canvas  Chat  Inspector  |
+|  (WebGPU) (SSE)  (Props)  |
++-----------+---------------+
+            |
+            | wasm-bindgen FFI
+            v
++-----------+---------------+      +------------------+
+|       selean-wasm         |      |   selean-server   |
+|                           |      |     (Axum)        |
+|  SeleanEditor (WASM)      |      |                   |
+|  EditorState (native)     |      |  POST /api/chat   |
+|  Event forwarding         |      |  GET  /api/tools  |
++-----------+---------------+      |  GET  /api/health |
+            |                      +--------+----------+
+            | CommandDescriptor (JSON)       |
+            v                                | Claude API
++-----------+---------------+      +--------v----------+
+|       selean-engine       |      |    selean-llm      |
+|                           |      |                    |
+|  Scene Graph              |      |  Tool definitions  |
+|  Renderer (3-phase)       |      |  map_tool_call()   |
+|  Input Handler            |      |  is_read_only()    |
+|  Command History          |      +--------------------+
+|  CommandDescriptor        |
+|  Persistence              |
++---------------------------+
+            |
+            v
+    +-------+--------+
+    |      wgpu      |
+    | (Vulkan/Metal/ |
+    |  DX12/WebGPU)  |
+    +----------------+
 ```
+
+### Mutation Pipeline
+
+All mutation sources converge on a single wire format:
+
+```
+[React UI edits]  --\
+[LLM tool calls]  ----> CommandDescriptor (JSON) --> Box<dyn Command> --> CommandHistory --> SceneGraph
+[File imports]    --/
+```
+
+`CommandDescriptor` is a `#[serde(tag = "type")]` enum in `selean-engine` mirroring every `Command` type. Adding a new command requires: (1) engine `Command` impl, (2) descriptor variant. Nothing else changes in LLM/import/export.
 
 ### Render Pipeline
 
@@ -98,7 +80,11 @@ The input system translates platform-agnostic `InputEvent` types into high-level
 
 ### Command System
 
-An undo/redo system built on the Command pattern. Each mutation captures its previous state on execute, enabling undo without a separate `redo()` method (redo simply re-executes). Supports batched operations via `CommandGroup` with automatic rollback on partial failure.
+An undo/redo system built on the Command pattern. Each mutation captures its previous state on execute, enabling undo without a separate `redo()` method (redo simply re-executes). Supports batched operations via `CommandGroup` with automatic rollback on partial failure. 20 command types covering property, hierarchy, and kind-specific mutations.
+
+### LLM Integration
+
+`selean-llm` defines 13 Claude API tools (3 read-only queries, 10 write mutations). `selean-server` proxies chat to the Claude API with tool definitions and scene context, streaming responses via SSE. The frontend executes tool calls through the same `CommandDescriptor` pipeline, so LLM mutations participate in undo/redo.
 
 ### Persistence
 
@@ -117,10 +103,21 @@ crates/
       image/           Image decoding and caching
       vector/          SVG path parsing, tiny-skia rasterization
       input/           Platform-agnostic input and interaction handling
-      command/         Undo/redo command history
+      command/         Undo/redo history, CommandDescriptor wire format
       persistence/     JSON document save/load with validation
       spatial/         R-tree spatial index
     benches/           Criterion benchmarks (17 groups)
+  selean-wasm/         WASM binding layer (SeleanEditor, EditorState, queries)
+  selean-llm/          LLM tool definitions and execution mapping
+  selean-server/       Axum HTTP server (Claude API proxy, SSE streaming)
+
+web/
+  selean-app/          React + TypeScript frontend (Vite)
+    src/
+      components/      Canvas, ChatSidebar, PropertyInspector
+      hooks/           useSeleanEditor, useSelection
+      wasm/            TypeScript type stubs for WASM bindings
+      theme.ts         Shared design tokens (colors, font sizes)
 ```
 
 ## Building
@@ -129,13 +126,28 @@ crates/
 cargo build
 ```
 
+For the frontend:
+
+```sh
+cd web/selean-app
+npm install
+npm run dev
+```
+
 ## Testing
 
 ```sh
 cargo test
 ```
 
-571 tests across both crates, covering unit, integration, and property-based testing (via `proptest`).
+702 tests across 5 crates, covering unit, integration, and property-based testing (via `proptest`).
+
+Frontend type checking:
+
+```sh
+cd web/selean-app
+npx tsc --noEmit
+```
 
 ## Benchmarks
 
@@ -148,7 +160,9 @@ cargo bench -p selean-engine
 ## Requirements
 
 - Rust 1.85+
+- Node.js 18+ (for the frontend)
 - GPU with Vulkan, Metal, DX12, or WebGPU support (via `wgpu`)
+- Chrome 113+ or Edge 113+ for the browser editor (WebGPU required)
 
 ## License
 

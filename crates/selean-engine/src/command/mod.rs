@@ -9,6 +9,7 @@
 #![allow(clippy::unnecessary_literal_bound)]
 
 mod batch;
+pub mod descriptor;
 mod hierarchy;
 mod property;
 mod traits;
@@ -16,6 +17,7 @@ mod traits;
 pub mod history;
 
 pub use batch::CommandGroup;
+pub use descriptor::{CommandDescriptor, create_frame_node};
 pub use hierarchy::{
     AddChildCommand, AddRootCommand, RemoveNodeCommand, ReorderChildrenCommand, ReparentCommand,
 };

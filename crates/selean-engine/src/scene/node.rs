@@ -41,6 +41,20 @@ pub enum SceneNodeKind {
     Group,
 }
 
+impl SceneNodeKind {
+    /// Returns the kind as a static string tag.
+    #[must_use]
+    pub fn kind_tag(&self) -> &'static str {
+        match self {
+            Self::Frame { .. } => "Frame",
+            Self::Text { .. } => "Text",
+            Self::Image { .. } => "Image",
+            Self::Vector { .. } => "Vector",
+            Self::Group => "Group",
+        }
+    }
+}
+
 /// An axis-aligned bounding box in logical (pre-transform) coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoundingBox {
@@ -225,6 +239,49 @@ impl BlendMode {
     }
 }
 
+impl std::fmt::Display for BlendMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Normal => "Normal",
+            Self::Add => "Add",
+            Self::Multiply => "Multiply",
+            Self::Screen => "Screen",
+            Self::Overlay => "Overlay",
+            Self::Darken => "Darken",
+            Self::Lighten => "Lighten",
+            Self::ColorDodge => "ColorDodge",
+            Self::ColorBurn => "ColorBurn",
+            Self::HardLight => "HardLight",
+            Self::SoftLight => "SoftLight",
+            Self::Difference => "Difference",
+            Self::Exclusion => "Exclusion",
+        })
+    }
+}
+
+impl std::str::FromStr for BlendMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Normal" => Ok(Self::Normal),
+            "Add" => Ok(Self::Add),
+            "Multiply" => Ok(Self::Multiply),
+            "Screen" => Ok(Self::Screen),
+            "Overlay" => Ok(Self::Overlay),
+            "Darken" => Ok(Self::Darken),
+            "Lighten" => Ok(Self::Lighten),
+            "ColorDodge" => Ok(Self::ColorDodge),
+            "ColorBurn" => Ok(Self::ColorBurn),
+            "HardLight" => Ok(Self::HardLight),
+            "SoftLight" => Ok(Self::SoftLight),
+            "Difference" => Ok(Self::Difference),
+            "Exclusion" => Ok(Self::Exclusion),
+            _ => Err(format!("unknown blend mode: {s}")),
+        }
+    }
+}
+
 fn dirty_all() -> DirtyFlags {
     DirtyFlags::ALL
 }
@@ -237,7 +294,7 @@ fn identity_transform() -> Transform2D {
 ///
 /// Holds its identity, visual type, spatial bounds, styling, hierarchy info,
 /// and dirty flags for incremental rendering.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneNode {
     /// Unique identifier for this node.
     pub id: NodeId,
@@ -331,7 +388,7 @@ impl SceneNode {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp)] // Exact float comparisons are intentional in tests with known values.
+    #![allow(clippy::float_cmp, clippy::unwrap_used)]
 
     use super::*;
 
@@ -570,5 +627,67 @@ mod tests {
         parent.children.push(child_id);
         assert_eq!(parent.children.len(), 1);
         assert_eq!(parent.children[0], child_id);
+    }
+
+    // --- SceneNodeKind::kind_tag tests ---
+
+    #[test]
+    fn kind_tag_frame() {
+        let kind = SceneNodeKind::Frame { corner_radius: [0.0; 4] };
+        assert_eq!(kind.kind_tag(), "Frame");
+    }
+
+    #[test]
+    fn kind_tag_text() {
+        let kind = SceneNodeKind::Text { content: String::new(), font_size: 16.0 };
+        assert_eq!(kind.kind_tag(), "Text");
+    }
+
+    #[test]
+    fn kind_tag_image() {
+        let kind = SceneNodeKind::Image { asset_ref: String::new() };
+        assert_eq!(kind.kind_tag(), "Image");
+    }
+
+    #[test]
+    fn kind_tag_vector() {
+        let kind = SceneNodeKind::Vector { path_data: String::new() };
+        assert_eq!(kind.kind_tag(), "Vector");
+    }
+
+    #[test]
+    fn kind_tag_group() {
+        assert_eq!(SceneNodeKind::Group.kind_tag(), "Group");
+    }
+
+    // --- BlendMode::FromStr tests ---
+
+    #[test]
+    fn blend_mode_from_str_all_variants() {
+        let modes = [
+            "Normal", "Add", "Multiply", "Screen", "Overlay", "Darken",
+            "Lighten", "ColorDodge", "ColorBurn", "HardLight", "SoftLight",
+            "Difference", "Exclusion",
+        ];
+        for mode_str in &modes {
+            let parsed: BlendMode = mode_str.parse().unwrap();
+            assert_eq!(parsed.to_string(), *mode_str);
+        }
+    }
+
+    #[test]
+    fn blend_mode_from_str_invalid() {
+        let result: Result<BlendMode, _> = "NotAMode".parse();
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.contains("unknown blend mode"));
+    }
+
+    #[test]
+    fn blend_mode_display_roundtrip() {
+        let mode = BlendMode::ColorDodge;
+        let s = mode.to_string();
+        let back: BlendMode = s.parse().unwrap();
+        assert_eq!(back, mode);
     }
 }
