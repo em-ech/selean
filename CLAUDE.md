@@ -1,8 +1,55 @@
-# Selean Engine Session Notes
+# Selean
 
-## Current Phase: 9 Complete (Serialization / Persistence)
+## Business Requirements
+
+Selean is a design tool that combines the capabilities of Canva, Figma, and Adobe InDesign into a single platform with AI-native design workflows.
+
+### Core Capabilities
+
+1. **AI Chat-Prompted Design**: Users can start a design from scratch via chat prompts. The LLM interprets intent and generates scene graph operations (add nodes, set properties, arrange layouts) to produce a complete design.
+
+2. **Import/Export Interoperability**: Full bidirectional support for:
+   - PowerPoint (.pptx)
+   - Adobe InDesign (.indd / .idml)
+   - Figma (.fig / API)
+   - Native Selean format
+
+   Users bring existing work into Selean from any tool and export back to any format.
+
+3. **AI-Assisted Editing**: A working designer spends more time editing than creating from scratch. Users can prompt modifications to an existing design ("make the heading larger", "change the color scheme to dark mode", "swap the layout to two columns") and the LLM applies targeted changes via the command system.
+
+4. **Manual Direct Manipulation**: Full Canva/InDesign-style visual editing: drag to move/resize, property inspector panels, click-to-select, multi-select, alignment tools, layer management. The manual editing path must be as capable as the AI path.
+
+5. **Hybrid Workflow**: AI and manual editing are interleaved freely. A user can prompt a layout, manually fine-tune positions, prompt a color change, manually adjust text, and undo/redo across both AI and manual actions seamlessly.
+
+### Design Principles
+
+- Import fidelity matters: a PPTX or Figma file should look as close to the original as possible on import.
+- Export fidelity matters equally: round-tripping a file through Selean should not degrade it.
+- The AI chat is not a separate mode. It operates on the same document, same undo stack, same scene graph.
+- Performance targets: 60fps rendering, sub-100ms command execution, real-time collaborative editing (future).
+
+# Engine Session Notes
+
+## Current Phase: 11 Complete (End-to-End Editor Wiring)
+
+### Phase 11 Summary (End-to-End Editor Wiring)
+
+**What was added:**
+
+- WASM rendering wired: `SeleanEditor` stores `surface` + `surface_config`, `render()` acquires texture and calls `render_frame()`, `resize()` reconfigures the surface
+- `execute_tool_call(name, args_json)` on `EditorState` and `SeleanEditor`: routes LLM tool calls through `selean_llm::map_tool_call()` in Rust, handles read-only tools (`get_scene_summary`, `get_node`, `query_nodes`) and mutation tools, wraps multi-descriptor calls in command groups
+- `query_nodes_json()` in queries.rs: filters nodes by optional name pattern (case-insensitive) and optional kind, returns `NodeSummary` array
+- Client-driven chat tool loop in `ChatSidebar.tsx`: detects `stop_reason: "tool_use"`, executes tools via `execute_tool_call`, sends tool_result messages back to server, loops up to 10 iterations
+- Complete property inspector: added editable fields for `stroke_width`, `corner_radius`, `blend_mode` (dropdown), `clip_mode` (dropdown), `font_family`, `font_weight`, `font_style` (dropdown), `text_align` (dropdown), `line_height`, `text_color` (color picker)
+- Event-driven selection: `Canvas.tsx` parses interaction events from WASM pointer handlers and propagates via `onInteractionEvents` callback, `App.tsx` triggers `refresh()` on `SelectionChanged`/`Clicked`/`ClickedCanvas`
+- Undo/redo refresh: button handlers and keyboard shortcuts call `refresh()` after undo/redo, `can_undo()`/`can_redo()` exposed via `#[wasm_bindgen]` for button disabled state
+- `uuid` crate `js` feature added for WASM target
+- 13 new tests (5 `query_nodes_json` + 8 `execute_tool_call`) bringing total to 828
 
 ### Completed Phases
+
+- Phase 11: End-to-end editor wiring (WASM rendering, chat tool loop, tool call bridge, property inspector, event-driven selection, undo/redo refresh)
 
 - Phase 1: Rect rendering (SDF rounded corners)
 - Phase 2: SDF text rendering
@@ -13,6 +60,30 @@
 - Phase 7: Input handling
 - Phase 8: Undo/redo system
 - Phase 9: Serialization / Persistence
+- Phase 10: Multi-page documents, PPTX import/export, extended text properties
+- Phase 11: End-to-end editor wiring
+
+### Phase 10 Summary (Multi-page Documents, PPTX, Extended Text Properties)
+
+**What was added (in progress):**
+
+- `FontStyle` enum (Normal, Italic) and `TextAlign` enum (Left, Center, Right, Justify) on `SceneNodeKind::Text`
+- 6 new text fields: `font_family`, `font_weight`, `font_style`, `text_align`, `line_height`, `text_color`
+- 7 new property commands + descriptors for the new text fields, plus `SetCornerRadiusCommand`
+- `Document` struct (multi-page container) and `Page` struct (owns a SceneGraph)
+- v2 persistence format with `PageData`, backward-compatible v1 loading
+- `save_document()` / `load_document()` for full multi-page persistence
+- `selean-pptx` crate: bidirectional PPTX import/export (EMU conversion, shape/text parsing, OOXML ZIP)
+- 9 new LLM tool definitions (total 22 tools)
+- Server routes: `POST /api/import/pptx`, `POST /api/export/pptx`
+- TypeScript types: `PageInfo`, `TreeNode`, new editor methods
+
+**What remains (not yet built):**
+
+- InDesign (.indd/.idml) import/export
+- Figma (.fig / API) import/export
+- WASM-side implementations for page management methods declared in TypeScript types
+- Full manual editing UI (drag handles, alignment tools, property inspector bindings)
 
 ### Phase 9 Summary (Serialization / Persistence)
 
@@ -111,7 +182,7 @@
 
 ### Test Count
 
-- 571 tests passing (16 common + 555 engine)
+- 828 tests passing (16 common + 650 engine + 46 llm + 58 pptx + 16 server + 42 wasm)
 - 17 benchmark groups
 
 ### Key Architecture Notes
@@ -185,11 +256,24 @@ crates/
         batch.rs           # CommandGroup (multi-command undo unit)
         history.rs         # CommandHistory (undo/redo stacks, grouping)
       persistence/         # Document save/load
-        mod.rs             # PersistenceError, save(), save_pretty(), load()
-        format.rs          # DocumentFormat, SceneGraphData, validate(), FORMAT_VERSION
+        mod.rs             # PersistenceError, save(), save_pretty(), load(), save_document(), load_document()
+        format.rs          # DocumentFormat, SceneGraphData, PageData, validate(), FORMAT_VERSION=2
+        document.rs        # Document (multi-page container, active page tracking)
+        page.rs            # Page (id, name, dimensions, owns SceneGraph)
       spatial/             # Spatial indexing
         index.rs           # SpatialIndex (R-tree via rstar)
     benches/
       bench_utils.rs       # SceneConfig, generate_scene
       engine_benchmarks.rs # 17 Criterion benchmark groups
+  selean-pptx/             # PPTX import/export
+    src/
+      lib.rs               # PptxError, import_pptx(), export_pptx()
+      coord.rs             # EMU/pixel conversion, OOXML color parsing, font size conversion
+      import/
+        mod.rs             # ZIP reading, slide parsing, Page creation
+        shape.rs           # <p:sp> to SceneNode conversion
+        text.rs            # <a:txBody> run parsing (font, color, alignment)
+      export/
+        mod.rs             # OOXML ZIP building (Content_Types, rels, presentation, slides)
+        shape.rs           # SceneNode to <p:sp> XML conversion
 ```

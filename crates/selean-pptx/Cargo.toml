@@ -1,0 +1,24 @@
+[package]
+name = "selean-pptx"
+version = "0.1.0"
+description = "PPTX import/export for the Selean design platform"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+selean-engine = { path = "../selean-engine" }
+selean-common = { path = "../selean-common" }
+zip.workspace = true
+quick-xml.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -20,11 +20,11 @@ impl AppState {
     ///
     /// Returns an error if `ANTHROPIC_API_KEY` is not set.
     pub fn from_env() -> Result<Self, AppStateError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| AppStateError::MissingApiKey)?;
+        let api_key =
+            std::env::var("ANTHROPIC_API_KEY").map_err(|_| AppStateError::MissingApiKey)?;
 
-        let model = std::env::var("ANTHROPIC_MODEL")
-            .unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
+        let model =
+            std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
 
         Ok(Self {
             api_key: Arc::from(api_key),

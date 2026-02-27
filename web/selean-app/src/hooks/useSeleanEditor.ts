@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorStatus, SeleanEditor } from "../wasm/types";
 
 /**
@@ -6,11 +6,16 @@ import type { EditorStatus, SeleanEditor } from "../wasm/types";
  *
  * Loads the WASM module, initializes the editor on the given canvas,
  * and sets up the keyboard handler for undo/redo.
+ *
+ * @param canvasId - The HTML canvas element ID.
+ * @param onSceneChanged - Optional callback fired after keyboard undo/redo.
  */
-export function useSeleanEditor(canvasId: string) {
+export function useSeleanEditor(canvasId: string, onSceneChanged?: () => void) {
   const editorRef = useRef<SeleanEditor | null>(null);
   const [status, setStatus] = useState<EditorStatus>("loading");
   const [error, setError] = useState<string | null>(null);
+  const onSceneChangedRef = useRef(onSceneChanged);
+  onSceneChangedRef.current = onSceneChanged;
 
   useEffect(() => {
     let cancelled = false;
@@ -29,7 +34,7 @@ export function useSeleanEditor(canvasId: string) {
 
         if (cancelled) return;
 
-        const editor = await new wasm.SeleanEditor(canvasId);
+        const editor = await wasm.SeleanEditor.create(canvasId);
         editorRef.current = editor;
         setStatus("ready");
       } catch (err) {
@@ -48,28 +53,30 @@ export function useSeleanEditor(canvasId: string) {
   }, [canvasId]);
 
   // Keyboard handler for undo/redo
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      const editor = editorRef.current;
-      if (!editor) return;
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    const editor = editorRef.current;
+    if (!editor) return;
 
-      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+    const isCtrlOrMeta = e.ctrlKey || e.metaKey;
 
-      if (isCtrlOrMeta && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        editor.undo();
-      } else if (
-        (isCtrlOrMeta && e.key === "z" && e.shiftKey) ||
-        (isCtrlOrMeta && e.key === "y")
-      ) {
-        e.preventDefault();
-        editor.redo();
-      }
+    if (isCtrlOrMeta && e.key === "z" && !e.shiftKey) {
+      e.preventDefault();
+      editor.undo();
+      onSceneChangedRef.current?.();
+    } else if (
+      (isCtrlOrMeta && e.key === "z" && e.shiftKey) ||
+      (isCtrlOrMeta && e.key === "y")
+    ) {
+      e.preventDefault();
+      editor.redo();
+      onSceneChangedRef.current?.();
     }
+  }, []);
 
+  useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [handleKeyDown]);
 
   return { editorRef, status, error };
 }

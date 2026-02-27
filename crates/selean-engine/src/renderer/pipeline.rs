@@ -486,7 +486,9 @@ impl Renderer {
                     }
                 }
             }
-            SceneNodeKind::Text { content, font_size } => {
+            SceneNodeKind::Text {
+                content, font_size, ..
+            } => {
                 #[allow(clippy::cast_possible_truncation)]
                 let pending_start = self.text_batch.pending_len() as u32;
                 if let Err(e) = self.text_system.prepare_text_node(

@@ -4,8 +4,8 @@
 //! processing the response. The actual SSE streaming to the client is
 //! handled in [`super::routes`].
 
-use serde::{Deserialize, Serialize};
 use selean_llm::{ToolDefinition, all_tools};
+use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 
@@ -109,10 +109,7 @@ Colors are specified as RGBA values from 0.0 to 1.0. Positions and sizes are in 
 logical pixels.";
 
 /// Builds the Claude API request body.
-pub fn build_claude_request(
-    state: &AppState,
-    request: &ChatRequest,
-) -> serde_json::Value {
+pub fn build_claude_request(state: &AppState, request: &ChatRequest) -> serde_json::Value {
     let tools: Vec<ToolDefinition> = all_tools();
 
     let mut system = SYSTEM_PROMPT.to_string();

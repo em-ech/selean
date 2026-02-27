@@ -1,16 +1,25 @@
-//! Document persistence: save and load scene graphs as JSON.
+//! Document persistence: save and load scene graphs and documents as JSON.
 //!
-//! The `save()` function serializes a `SceneGraph` to a JSON string.
-//! The `load()` function deserializes and validates the JSON, rebuilding
-//! transient state (spatial index, world transforms, dirty flags).
+//! The `save()` / `load()` functions work with a single `SceneGraph` for
+//! backward compatibility. The `save_document()` / `load_document()` functions
+//! handle the full multi-page `Document` model.
+//!
+//! All save functions produce v2 format. `load_document()` accepts both v1
+//! (single scene) and v2 (multi-page) formats transparently.
 
+pub mod document;
 pub mod format;
+pub mod page;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use selean_common::types::PageId;
+
 use crate::scene::SceneGraph;
 
-pub use format::{DocumentFormat, FORMAT_VERSION, SceneGraphData};
+pub use document::Document;
+pub use format::{DocumentFormat, FORMAT_VERSION, PageData, SceneGraphData};
+pub use page::Page;
 
 /// Errors that can occur during save or load.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +44,7 @@ pub enum PersistenceError {
 
 /// Serializes a scene graph to a JSON string.
 ///
+/// The graph is wrapped in a single-page v2 document for forward compatibility.
 /// The output includes a format version and timestamp for compatibility
 /// checking on load. The JSON is not pretty-printed; use `save_pretty()`
 /// if human readability is needed.
@@ -51,7 +61,14 @@ pub fn save(graph: &SceneGraph) -> Result<String, PersistenceError> {
     let doc = DocumentFormat {
         version: FORMAT_VERSION,
         saved_at,
-        scene: SceneGraphData::from_graph(graph),
+        scene: None,
+        pages: Some(vec![PageData {
+            id: PageId::new(),
+            name: "Page 1".to_string(),
+            width: 1920.0,
+            height: 1080.0,
+            scene: SceneGraphData::from_graph(graph),
+        }]),
     };
 
     serde_json::to_string(&doc).map_err(PersistenceError::Json)
@@ -71,7 +88,14 @@ pub fn save_pretty(graph: &SceneGraph) -> Result<String, PersistenceError> {
     let doc = DocumentFormat {
         version: FORMAT_VERSION,
         saved_at,
-        scene: SceneGraphData::from_graph(graph),
+        scene: None,
+        pages: Some(vec![PageData {
+            id: PageId::new(),
+            name: "Page 1".to_string(),
+            width: 1920.0,
+            height: 1080.0,
+            scene: SceneGraphData::from_graph(graph),
+        }]),
     };
 
     serde_json::to_string_pretty(&doc).map_err(PersistenceError::Json)
@@ -79,29 +103,85 @@ pub fn save_pretty(graph: &SceneGraph) -> Result<String, PersistenceError> {
 
 /// Deserializes a JSON string into a live `SceneGraph`.
 ///
-/// Validates the format version and structural integrity before rebuilding
-/// transient state (spatial index, world transforms).
+/// Supports both v1 (single scene) and v2 (multi-page) formats.
+/// For v2 documents, returns the active (first) page's scene graph.
 ///
 /// # Errors
 ///
 /// Returns `PersistenceError::Json` on parse failure,
-/// `PersistenceError::UnsupportedVersion` if the format version doesn't match,
+/// `PersistenceError::UnsupportedVersion` if the format version is newer than supported,
 /// or `PersistenceError::InvalidScene` if structural validation fails.
 pub fn load(json: &str) -> Result<SceneGraph, PersistenceError> {
-    let doc: DocumentFormat = serde_json::from_str(json)?;
+    let doc = load_document(json)?;
+    Ok(doc.active_page().scene.clone())
+}
 
-    if doc.version != FORMAT_VERSION {
+/// Serializes a document to a JSON string.
+///
+/// # Errors
+///
+/// Returns `PersistenceError::Json` if serialization fails.
+pub fn save_document(doc: &Document) -> Result<String, PersistenceError> {
+    let saved_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let pages: Vec<PageData> = doc.pages().iter().map(PageData::from_page).collect();
+
+    let doc_format = DocumentFormat {
+        version: FORMAT_VERSION,
+        saved_at,
+        scene: None,
+        pages: Some(pages),
+    };
+
+    serde_json::to_string(&doc_format).map_err(PersistenceError::Json)
+}
+
+/// Deserializes a JSON string into a `Document`.
+///
+/// Supports both v1 (single scene) and v2 (multi-page) formats.
+/// A v1 document is migrated to a single-page `Document` transparently.
+///
+/// # Errors
+///
+/// Returns `PersistenceError::Json` on parse failure,
+/// `PersistenceError::UnsupportedVersion` if the format version is newer than supported,
+/// or `PersistenceError::InvalidScene` if structural validation fails.
+pub fn load_document(json: &str) -> Result<Document, PersistenceError> {
+    let doc_format: DocumentFormat = serde_json::from_str(json)?;
+
+    if doc_format.version > FORMAT_VERSION {
         return Err(PersistenceError::UnsupportedVersion {
-            found: doc.version,
+            found: doc_format.version,
             expected: FORMAT_VERSION,
         });
     }
 
-    doc.scene
+    doc_format
         .validate()
         .map_err(PersistenceError::InvalidScene)?;
 
-    Ok(doc.scene.into_graph())
+    if let Some(pages_data) = doc_format.pages {
+        // v2 format
+        let pages: Vec<Page> = pages_data.into_iter().map(PageData::into_page).collect();
+        if pages.is_empty() {
+            return Err(PersistenceError::InvalidScene(
+                "document has no pages".to_string(),
+            ));
+        }
+        Ok(Document::from_pages(pages))
+    } else if let Some(scene_data) = doc_format.scene {
+        // v1 backward compat: wrap single scene in one page
+        let graph = scene_data.into_graph();
+        let page = Page::with_scene(PageId::new(), "Page 1", 1920.0, 1080.0, graph);
+        Ok(Document::from_pages(vec![page]))
+    } else {
+        Err(PersistenceError::InvalidScene(
+            "document has neither pages nor scene".to_string(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -118,7 +198,8 @@ mod tests {
 
     use super::*;
     use crate::scene::{
-        BlendMode, BoundingBox, ClipMode, Color, SceneGraph, SceneNode, SceneNodeKind, Transform2D,
+        BlendMode, BoundingBox, ClipMode, Color, FontStyle, SceneGraph, SceneNode, SceneNodeKind,
+        TextAlign, Transform2D,
     };
     use selean_common::types::NodeId;
 
@@ -211,6 +292,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "hello".to_string(),
                 font_size: 14.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 100.0, 20.0),
         );
@@ -410,7 +497,7 @@ mod tests {
                 err,
                 PersistenceError::UnsupportedVersion {
                     found: 999,
-                    expected: 1
+                    expected: 2
                 }
             ),
             "got: {err}"
@@ -425,7 +512,7 @@ mod tests {
 
     #[test]
     fn load_rejects_invalid_scene() {
-        // Valid JSON, valid version, but orphan node.
+        // Valid JSON, valid version, but orphan node in a page.
         let mut nodes_map = std::collections::HashMap::new();
         let orphan = make_node("Orphan");
         let oid = orphan.id;
@@ -434,10 +521,17 @@ mod tests {
         let doc = DocumentFormat {
             version: FORMAT_VERSION,
             saved_at: 0,
-            scene: SceneGraphData {
-                nodes: nodes_map,
-                roots: vec![],
-            },
+            scene: None,
+            pages: Some(vec![PageData {
+                id: PageId::new(),
+                name: "Bad Page".to_string(),
+                width: 1920.0,
+                height: 1080.0,
+                scene: SceneGraphData {
+                    nodes: nodes_map,
+                    roots: vec![],
+                },
+            }]),
         };
         let json = serde_json::to_string(&doc).expect("serialize");
         let err = load(&json).unwrap_err();
@@ -466,10 +560,15 @@ mod tests {
     }
 
     #[test]
-    fn load_rejects_missing_fields() {
-        let json = r#"{"version":1,"saved_at":0}"#;
+    fn load_rejects_missing_scene_and_pages() {
+        // v2 allows scene and pages to be absent, but load should reject
+        // a document that has neither.
+        let json = r#"{"version":2,"saved_at":0}"#;
         let err = load(json).unwrap_err();
-        assert!(matches!(err, PersistenceError::Json(_)), "got: {err}");
+        assert!(
+            matches!(err, PersistenceError::InvalidScene(_)),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -488,5 +587,98 @@ mod tests {
         let json = save(&graph).expect("save");
         let restored = load(&json).expect("load");
         assert_eq!(restored.len(), 51);
+    }
+
+    // --- Document save/load tests ---
+
+    #[test]
+    fn save_load_document_roundtrip() {
+        let mut doc = Document::new();
+        doc.active_page_mut().scene.add_root(make_node("Node1"));
+        let page2_id = doc.add_page("Page 2", 800.0, 600.0);
+        doc.page_mut(page2_id)
+            .unwrap()
+            .scene
+            .add_root(make_node("Node2"));
+
+        let json = save_document(&doc).expect("save");
+        let restored = load_document(&json).expect("load");
+
+        assert_eq!(restored.page_count(), 2);
+        assert_eq!(restored.active_page().scene.len(), 1);
+        assert_eq!(restored.page(page2_id).unwrap().scene.len(), 1);
+    }
+
+    #[test]
+    fn load_v1_format_as_single_page() {
+        // Simulate a v1 format document.
+        let mut graph = SceneGraph::new();
+        graph.add_root(make_node("OldNode"));
+
+        let v1_json = serde_json::json!({
+            "version": 1,
+            "saved_at": 0,
+            "scene": SceneGraphData::from_graph(&graph),
+        })
+        .to_string();
+
+        let doc = load_document(&v1_json).expect("load v1");
+        assert_eq!(doc.page_count(), 1);
+        assert_eq!(doc.active_page().scene.len(), 1);
+        assert_eq!(doc.active_page().name, "Page 1");
+    }
+
+    #[test]
+    fn save_document_produces_v2_format() {
+        let doc = Document::new();
+        let json = save_document(&doc).expect("save");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed["version"], FORMAT_VERSION);
+        assert!(parsed["pages"].is_array());
+        assert_eq!(parsed["pages"].as_array().unwrap().len(), 1);
+        // v2 should not have a top-level scene field.
+        assert!(parsed.get("scene").is_none());
+    }
+
+    #[test]
+    fn load_document_rejects_unsupported_version() {
+        let json = r#"{"version":999,"saved_at":0}"#;
+        let err = load_document(json).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PersistenceError::UnsupportedVersion {
+                    found: 999,
+                    expected: 2
+                }
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn load_preserves_page_dimensions() {
+        let mut doc = Document::new();
+        let id = doc.add_page("Wide", 3840.0, 2160.0);
+
+        let json = save_document(&doc).expect("save");
+        let restored = load_document(&json).expect("load");
+
+        let page = restored.page(id).unwrap();
+        assert_eq!(page.width, 3840.0);
+        assert_eq!(page.height, 2160.0);
+        assert_eq!(page.name, "Wide");
+    }
+
+    #[test]
+    fn load_via_save_graph_roundtrip() {
+        // save() wraps in v2 format, load() should still work.
+        let mut graph = SceneGraph::new();
+        let id = graph.add_root(make_node("Test"));
+
+        let json = save(&graph).expect("save");
+        let restored = load(&json).expect("load");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.get(id).unwrap().name, "Test");
     }
 }

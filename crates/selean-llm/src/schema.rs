@@ -164,6 +164,28 @@ impl ToolBuilder {
         self
     }
 
+    /// Add a required array parameter with string items.
+    pub fn array_param(mut self, name: &str, description: &str) -> Self {
+        self.properties.insert(
+            name.to_string(),
+            ToolParameter {
+                param_type: ToolParameterType::Array,
+                description: description.to_string(),
+                enum_values: None,
+                properties: None,
+                items: Some(Box::new(ToolParameter {
+                    param_type: ToolParameterType::String,
+                    description: String::new(),
+                    enum_values: None,
+                    properties: None,
+                    items: None,
+                })),
+            },
+        );
+        self.required.push(name.to_string());
+        self
+    }
+
     /// Add an optional string parameter.
     pub fn optional_string_param(mut self, name: &str, description: &str) -> Self {
         self.properties.insert(
@@ -232,10 +254,7 @@ mod tests {
             .build();
 
         let param = &tool.input_schema.properties["mode"];
-        assert_eq!(
-            param.enum_values.as_ref().map(Vec::len),
-            Some(2)
-        );
+        assert_eq!(param.enum_values.as_ref().map(Vec::len), Some(2));
     }
 
     #[test]
@@ -258,5 +277,31 @@ mod tests {
             .build();
 
         assert_eq!(tool.input_schema.schema_type, "object");
+    }
+
+    #[test]
+    fn tool_builder_array_param() {
+        let tool = ToolBuilder::new("array_tool", "Array param")
+            .array_param("ids", "List of IDs")
+            .build();
+
+        let param = &tool.input_schema.properties["ids"];
+        assert_eq!(param.param_type, ToolParameterType::Array);
+        assert!(param.items.is_some());
+        let items = param.items.as_ref().unwrap();
+        assert_eq!(items.param_type, ToolParameterType::String);
+        assert!(tool.input_schema.required.contains(&"ids".to_string()));
+    }
+
+    #[test]
+    fn tool_builder_array_param_roundtrip() {
+        let tool = ToolBuilder::new("roundtrip_array", "Test array roundtrip")
+            .string_param("parent_id", "Parent node ID")
+            .array_param("children", "Child node IDs")
+            .build();
+
+        let json = serde_json::to_string(&tool).expect("serialize");
+        let back: ToolDefinition = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(tool, back);
     }
 }

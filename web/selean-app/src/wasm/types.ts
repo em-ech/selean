@@ -50,6 +50,16 @@ export interface SeleanEditor {
   get_node_json(nodeId: string): string;
   get_selected_ids(): string;
   get_scene_json(): string;
+  execute_tool_call(tool_name: string, args_json: string): string;
+  can_undo(): boolean;
+  can_redo(): boolean;
+  get_pages_json(): string;
+  set_active_page(pageId: string): boolean;
+  add_page(name: string, width: number, height: number): string;
+  remove_page(pageId: string): boolean;
+  get_scene_tree_json(): string;
+  import_document(json: string): boolean;
+  export_document_json(): string;
 }
 
 export type EditorStatus = "loading" | "ready" | "error" | "unsupported";
@@ -77,8 +87,32 @@ export interface NodeInfo {
   font_size: number | null;
   asset_ref: string | null;
   path_data: string | null;
+  font_family: string | null;
+  font_weight: number | null;
+  font_style: string | null;
+  text_align: string | null;
+  line_height: number | null;
+  text_color: [number, number, number, number] | null;
   children: string[];
   parent: string | null;
+}
+
+/** Mirrors PageInfo from crates/selean-wasm/src/queries.rs */
+export interface PageInfo {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  node_count: number;
+}
+
+/** Mirrors TreeNode from crates/selean-wasm/src/queries.rs */
+export interface TreeNode {
+  id: string;
+  name: string;
+  kind: string;
+  visible: boolean;
+  children: TreeNode[];
 }
 
 /** Mirrors SceneInfo from crates/selean-wasm/src/queries.rs */

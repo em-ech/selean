@@ -1,6 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { colors, fontSizes } from "../theme";
-import type { ChatMessage, SeleanEditor } from "../wasm/types";
+import type { ChatEvent, SeleanEditor } from "../wasm/types";
+
+/** Maximum number of tool-loop iterations before stopping. */
+const MAX_TOOL_ITERATIONS = 10;
+
+/**
+ * A structured message in the conversation history.
+ * `content` is either a plain string or an array of content blocks
+ * (text / tool_use / tool_result) for Claude API structured messages.
+ */
+interface ConversationMessage {
+  role: "user" | "assistant";
+  content: unknown;
+}
+
+/** Display-only message shown in the sidebar. */
+interface DisplayMessage {
+  role: "user" | "assistant";
+  text: string;
+}
 
 interface ChatSidebarProps {
   editorRef: React.RefObject<SeleanEditor | null>;
@@ -10,16 +29,20 @@ interface ChatSidebarProps {
 /**
  * Left sidebar with chat interface for LLM-driven design modifications.
  * Sends messages to the server, which proxies to Claude API.
- * Tool calls are executed against the WASM editor.
+ * Implements a client-driven tool loop: when Claude responds with
+ * stop_reason "tool_use", the frontend executes tools locally via
+ * execute_tool_call, collects results, and sends a follow-up request
+ * with the full conversation until Claude finishes.
  */
 export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Full structured conversation for the Claude API.
+  const conversationRef = useRef<ConversationMessage[]>([]);
 
-  // Cancel in-flight request on unmount
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
@@ -30,33 +53,27 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
-    if (!text || loading) return;
-
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    // Abort any previous in-flight request
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const userMessage: ChatMessage = { role: "user", content: text };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-    setLoading(true);
-
-    try {
-      const sceneSummary = editor.get_scene_json();
-      const allMessages = [...messages, userMessage];
-
+  /**
+   * Sends a single request to the server and reads back the SSE stream.
+   * Returns the parsed events and the raw content blocks for structured
+   * conversation history.
+   */
+  const sendRequest = useCallback(
+    async (
+      messages: ConversationMessage[],
+      sceneSummary: string,
+      signal: AbortSignal,
+    ): Promise<{
+      events: ChatEvent[];
+      rawBlocks: unknown[];
+      stopReason: string;
+    }> => {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
+        signal,
         body: JSON.stringify({
-          messages: allMessages.map((m) => ({
+          messages: messages.map((m) => ({
             role: m.role,
             content: m.content,
           })),
@@ -73,7 +90,9 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
         throw new Error("No response body");
       }
 
-      let assistantText = "";
+      const events: ChatEvent[] = [];
+      const rawBlocks: unknown[] = [];
+      let stopReason = "end_turn";
       const decoder = new TextDecoder();
       let buffer = "";
 
@@ -91,31 +110,125 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
           if (!data) continue;
 
           try {
-            const event = JSON.parse(data);
+            const event: ChatEvent = JSON.parse(data);
+            events.push(event);
 
             if (event.type === "text") {
-              assistantText += event.text;
+              rawBlocks.push({ type: "text", text: event.text });
             } else if (event.type === "tool_use") {
-              const result = editor.execute_command(
-                JSON.stringify({
-                  type: toolNameToCommandType(event.name),
-                  ...event.input,
-                }),
-              );
-              if (result) {
-                onSceneChanged();
-              }
+              rawBlocks.push({
+                type: "tool_use",
+                id: event.id,
+                name: event.name,
+                input: event.input,
+              });
+            } else if (event.type === "done") {
+              stopReason = event.stop_reason;
             }
           } catch {
-            // Skip malformed SSE events
+            // Skip malformed SSE events.
           }
         }
       }
 
-      if (assistantText) {
-        setMessages((prev) => [
+      return { events, rawBlocks, stopReason };
+    },
+    [],
+  );
+
+  const sendMessage = useCallback(async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setDisplayMessages((prev) => [...prev, { role: "user", text }]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const sceneSummary = editor.get_scene_json();
+
+      // Add user message to structured conversation.
+      conversationRef.current = [
+        ...conversationRef.current,
+        { role: "user", content: text },
+      ];
+
+      let iteration = 0;
+      let assistantTextAccum = "";
+
+      while (iteration < MAX_TOOL_ITERATIONS) {
+        iteration++;
+
+        const { events, rawBlocks, stopReason } = await sendRequest(
+          conversationRef.current,
+          sceneSummary,
+          controller.signal,
+        );
+
+        // Collect text from this turn.
+        let turnText = "";
+        for (const event of events) {
+          if (event.type === "text") {
+            turnText += event.text;
+          }
+        }
+        assistantTextAccum += turnText;
+
+        // Add assistant response to conversation as structured content blocks.
+        conversationRef.current = [
+          ...conversationRef.current,
+          { role: "assistant", content: rawBlocks },
+        ];
+
+        if (stopReason !== "tool_use") {
+          // Done. No more tool calls needed.
+          break;
+        }
+
+        // Execute tool calls and build tool_result messages.
+        const toolResults: unknown[] = [];
+        for (const event of events) {
+          if (event.type !== "tool_use") continue;
+
+          const resultJson = editor.execute_tool_call(
+            event.name,
+            JSON.stringify(event.input),
+          );
+          onSceneChanged();
+
+          let resultContent: string;
+          try {
+            const parsed = JSON.parse(resultJson);
+            resultContent = JSON.stringify(parsed.result ?? parsed);
+          } catch {
+            resultContent = resultJson;
+          }
+
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: event.id,
+            content: resultContent,
+          });
+        }
+
+        // Add tool results as a user message (Claude API expects this).
+        conversationRef.current = [
+          ...conversationRef.current,
+          { role: "user", content: toolResults },
+        ];
+      }
+
+      if (assistantTextAccum) {
+        setDisplayMessages((prev) => [
           ...prev,
-          { role: "assistant", content: assistantText },
+          { role: "assistant", text: assistantTextAccum },
         ]);
       }
     } catch (err) {
@@ -123,28 +236,28 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
-      setMessages((prev) => [
+      setDisplayMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `Error: ${message}` },
+        { role: "assistant", text: `Error: ${message}` },
       ]);
     } finally {
       abortRef.current = null;
       setLoading(false);
       scrollToBottom();
     }
-  }, [input, loading, messages, editorRef, onSceneChanged, scrollToBottom]);
+  }, [input, loading, editorRef, onSceneChanged, scrollToBottom, sendRequest]);
 
   return (
     <div style={panelStyle}>
       <div style={headerStyle}>Chat</div>
       <div style={messagesStyle}>
-        {messages.length === 0 && (
+        {displayMessages.length === 0 && (
           <div style={emptyStyle}>
             Ask me to modify the design. For example: "Make the red box blue" or
             "Add a new green rectangle".
           </div>
         )}
-        {messages.map((msg, i) => (
+        {displayMessages.map((msg, i) => (
           <div
             key={i}
             style={msg.role === "user" ? userMsgStyle : assistantMsgStyle}
@@ -152,7 +265,7 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
             <div style={msgRoleStyle}>
               {msg.role === "user" ? "You" : "Assistant"}
             </div>
-            <div style={msgTextStyle}>{msg.content}</div>
+            <div style={msgTextStyle}>{msg.text}</div>
           </div>
         ))}
         {loading && (
@@ -193,26 +306,6 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
       </div>
     </div>
   );
-}
-
-/**
- * Maps LLM tool names to CommandDescriptor type tags.
- * Most tool names match directly; this handles the exceptions.
- */
-function toolNameToCommandType(toolName: string): string {
-  const mapping: Record<string, string> = {
-    set_fill: "SetFill",
-    set_bounds: "SetBounds",
-    set_text: "SetTextContent",
-    set_opacity: "SetOpacity",
-    set_visible: "SetVisible",
-    set_name: "SetName",
-    set_stroke: "SetStroke",
-    set_blend_mode: "SetBlendMode",
-    create_node: "AddRoot",
-    delete_node: "RemoveNode",
-  };
-  return mapping[toolName] ?? toolName;
 }
 
 // --- Styles ---

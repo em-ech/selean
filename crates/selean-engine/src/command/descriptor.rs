@@ -8,15 +8,18 @@ use selean_common::types::NodeId;
 use serde::{Deserialize, Serialize};
 
 use crate::scene::{
-    BlendMode, BoundingBox, ClipMode, Color, SceneNode, SceneNodeKind, Transform2D,
+    BlendMode, BoundingBox, ClipMode, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign,
+    Transform2D,
 };
 
 use super::{
-    AddChildCommand, AddRootCommand, Command, RemoveNodeCommand, ReparentCommand,
-    ReorderChildrenCommand, SetAssetRefCommand, SetBlendModeCommand, SetBoundsCommand,
-    SetClipModeCommand, SetFillCommand, SetFontSizeCommand, SetNameCommand, SetOpacityCommand,
-    SetPathDataCommand, SetScrollOffsetCommand, SetStrokeCommand, SetStrokeWidthCommand,
-    SetTextContentCommand, SetTransformCommand, SetVisibleCommand,
+    AddChildCommand, AddRootCommand, Command, RemoveNodeCommand, ReorderChildrenCommand,
+    ReparentCommand, SetAssetRefCommand, SetBlendModeCommand, SetBoundsCommand, SetClipModeCommand,
+    SetCornerRadiusCommand, SetFillCommand, SetFontFamilyCommand, SetFontSizeCommand,
+    SetFontStyleCommand, SetFontWeightCommand, SetLineHeightCommand, SetNameCommand,
+    SetOpacityCommand, SetPathDataCommand, SetScrollOffsetCommand, SetStrokeCommand,
+    SetStrokeWidthCommand, SetTextAlignCommand, SetTextColorCommand, SetTextContentCommand,
+    SetTransformCommand, SetVisibleCommand,
 };
 
 /// A serializable description of a scene graph mutation.
@@ -149,6 +152,55 @@ pub enum CommandDescriptor {
         /// New asset reference string.
         asset_ref: String,
     },
+    /// Set the corner radius of a Frame node.
+    SetCornerRadius {
+        /// Target node (must be Frame kind).
+        node_id: NodeId,
+        /// New corner radius `[tl, tr, br, bl]`.
+        corner_radius: [f32; 4],
+    },
+    /// Set the font family of a Text node.
+    SetFontFamily {
+        /// Target node (must be Text kind).
+        node_id: NodeId,
+        /// New font family name.
+        font_family: String,
+    },
+    /// Set the font weight of a Text node.
+    SetFontWeight {
+        /// Target node (must be Text kind).
+        node_id: NodeId,
+        /// New font weight (100-900).
+        font_weight: u16,
+    },
+    /// Set the font style of a Text node.
+    SetFontStyle {
+        /// Target node (must be Text kind).
+        node_id: NodeId,
+        /// New font style.
+        font_style: FontStyle,
+    },
+    /// Set the text alignment of a Text node.
+    SetTextAlign {
+        /// Target node (must be Text kind).
+        node_id: NodeId,
+        /// New text alignment.
+        text_align: TextAlign,
+    },
+    /// Set the line height of a Text node.
+    SetLineHeight {
+        /// Target node (must be Text kind).
+        node_id: NodeId,
+        /// New line height multiplier.
+        line_height: f32,
+    },
+    /// Set the text color of a Text node.
+    SetTextColor {
+        /// Target node (must be Text kind).
+        node_id: NodeId,
+        /// New text color, or null to clear.
+        text_color: Option<Color>,
+    },
     /// Reparent a node to a new parent.
     Reparent {
         /// Node to move.
@@ -170,15 +222,9 @@ impl CommandDescriptor {
     #[must_use]
     pub fn into_command(self) -> Box<dyn Command> {
         match self {
-            Self::SetBounds { node_id, bounds } => {
-                Box::new(SetBoundsCommand::new(node_id, bounds))
-            }
-            Self::SetFill { node_id, fill } => {
-                Box::new(SetFillCommand::new(node_id, fill))
-            }
-            Self::SetStroke { node_id, stroke } => {
-                Box::new(SetStrokeCommand::new(node_id, stroke))
-            }
+            Self::SetBounds { node_id, bounds } => Box::new(SetBoundsCommand::new(node_id, bounds)),
+            Self::SetFill { node_id, fill } => Box::new(SetFillCommand::new(node_id, fill)),
+            Self::SetStroke { node_id, stroke } => Box::new(SetStrokeCommand::new(node_id, stroke)),
             Self::SetStrokeWidth { node_id, width } => {
                 Box::new(SetStrokeWidthCommand::new(node_id, width))
             }
@@ -188,33 +234,27 @@ impl CommandDescriptor {
             Self::SetVisible { node_id, visible } => {
                 Box::new(SetVisibleCommand::new(node_id, visible))
             }
-            Self::SetName { node_id, name } => {
-                Box::new(SetNameCommand::new(node_id, name))
-            }
+            Self::SetName { node_id, name } => Box::new(SetNameCommand::new(node_id, name)),
             Self::SetTextContent { node_id, content } => {
                 Box::new(SetTextContentCommand::new(node_id, content))
             }
             Self::SetFontSize { node_id, font_size } => {
                 Box::new(SetFontSizeCommand::new(node_id, font_size))
             }
-            Self::AddRoot { node } => {
-                Box::new(AddRootCommand::new(node))
-            }
-            Self::AddChild { parent_id, node } => {
-                Box::new(AddChildCommand::new(parent_id, node))
-            }
-            Self::RemoveNode { node_id } => {
-                Box::new(RemoveNodeCommand::new(node_id))
-            }
-            Self::SetBlendMode { node_id, blend_mode } => {
-                Box::new(SetBlendModeCommand::new(node_id, blend_mode))
-            }
+            Self::AddRoot { node } => Box::new(AddRootCommand::new(node)),
+            Self::AddChild { parent_id, node } => Box::new(AddChildCommand::new(parent_id, node)),
+            Self::RemoveNode { node_id } => Box::new(RemoveNodeCommand::new(node_id)),
+            Self::SetBlendMode {
+                node_id,
+                blend_mode,
+            } => Box::new(SetBlendModeCommand::new(node_id, blend_mode)),
             Self::SetClipMode { node_id, clip_mode } => {
                 Box::new(SetClipModeCommand::new(node_id, clip_mode))
             }
-            Self::SetTransform { node_id, transform } => {
-                Box::new(SetTransformCommand::new(node_id, Transform2D::from_raw(transform)))
-            }
+            Self::SetTransform { node_id, transform } => Box::new(SetTransformCommand::new(
+                node_id,
+                Transform2D::from_raw(transform),
+            )),
             Self::SetScrollOffset { node_id, offset } => {
                 Box::new(SetScrollOffsetCommand::new(node_id, offset))
             }
@@ -224,12 +264,42 @@ impl CommandDescriptor {
             Self::SetAssetRef { node_id, asset_ref } => {
                 Box::new(SetAssetRefCommand::new(node_id, asset_ref))
             }
-            Self::Reparent { node_id, new_parent_id } => {
-                Box::new(ReparentCommand::new(node_id, new_parent_id))
-            }
-            Self::ReorderChildren { parent_id, new_order } => {
-                Box::new(ReorderChildrenCommand::new(parent_id, new_order))
-            }
+            Self::SetCornerRadius {
+                node_id,
+                corner_radius,
+            } => Box::new(SetCornerRadiusCommand::new(node_id, corner_radius)),
+            Self::SetFontFamily {
+                node_id,
+                font_family,
+            } => Box::new(SetFontFamilyCommand::new(node_id, font_family)),
+            Self::SetFontWeight {
+                node_id,
+                font_weight,
+            } => Box::new(SetFontWeightCommand::new(node_id, font_weight)),
+            Self::SetFontStyle {
+                node_id,
+                font_style,
+            } => Box::new(SetFontStyleCommand::new(node_id, font_style)),
+            Self::SetTextAlign {
+                node_id,
+                text_align,
+            } => Box::new(SetTextAlignCommand::new(node_id, text_align)),
+            Self::SetLineHeight {
+                node_id,
+                line_height,
+            } => Box::new(SetLineHeightCommand::new(node_id, line_height)),
+            Self::SetTextColor {
+                node_id,
+                text_color,
+            } => Box::new(SetTextColorCommand::new(node_id, text_color)),
+            Self::Reparent {
+                node_id,
+                new_parent_id,
+            } => Box::new(ReparentCommand::new(node_id, new_parent_id)),
+            Self::ReorderChildren {
+                parent_id,
+                new_order,
+            } => Box::new(ReorderChildrenCommand::new(parent_id, new_order)),
         }
     }
 }
@@ -620,7 +690,10 @@ mod tests {
         };
         let mut cmd = desc.into_command();
         assert!(cmd.execute(&mut scene));
-        assert_eq!(scene.get(id).expect("exists").blend_mode, BlendMode::Multiply);
+        assert_eq!(
+            scene.get(id).expect("exists").blend_mode,
+            BlendMode::Multiply
+        );
     }
 
     #[test]
@@ -670,5 +743,103 @@ mod tests {
         let mut cmd = desc.into_command();
         assert!(cmd.execute(&mut scene));
         assert_eq!(scene.get(id).expect("exists").scroll_offset, [15.0, 25.0]);
+    }
+
+    // --- New descriptor roundtrip tests ---
+
+    #[test]
+    fn set_corner_radius_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetCornerRadius {
+            node_id: id,
+            corner_radius: [4.0, 8.0, 12.0, 16.0],
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_font_family_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetFontFamily {
+            node_id: id,
+            font_family: "Roboto".to_string(),
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_font_weight_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetFontWeight {
+            node_id: id,
+            font_weight: 700,
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_font_style_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetFontStyle {
+            node_id: id,
+            font_style: FontStyle::Italic,
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_text_align_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetTextAlign {
+            node_id: id,
+            text_align: TextAlign::Center,
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_line_height_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetLineHeight {
+            node_id: id,
+            line_height: 1.5,
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_text_color_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetTextColor {
+            node_id: id,
+            text_color: Some(Color::new(1.0, 0.0, 0.0, 1.0)),
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_text_color_null_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetTextColor {
+            node_id: id,
+            text_color: None,
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
     }
 }

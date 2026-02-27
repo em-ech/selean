@@ -6,13 +6,26 @@ interface CanvasProps {
   canvasId: string;
   editorRef: React.RefObject<SeleanEditor | null>;
   status: EditorStatus;
+  onInteractionEvents?: (events: InteractionEvent[]) => void;
+}
+
+/** Subset of InteractionEvent variants relevant to the frontend. */
+export interface InteractionEvent {
+  type: string;
+  [key: string]: unknown;
 }
 
 /**
  * Canvas component that hosts the WebGPU render surface and forwards
- * pointer/wheel events to the WASM editor.
+ * pointer/wheel events to the WASM editor. Parses the JSON interaction
+ * events returned by WASM handlers and propagates them via callback.
  */
-export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
+export function Canvas({
+  canvasId,
+  editorRef,
+  status,
+  onInteractionEvents,
+}: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
 
@@ -61,6 +74,21 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
     return () => observer.disconnect();
   }, [canvasId, editorRef, status]);
 
+  const emitEvents = useCallback(
+    (json: string) => {
+      if (!onInteractionEvents) return;
+      try {
+        const events: InteractionEvent[] = JSON.parse(json);
+        if (events.length > 0) {
+          onInteractionEvents(events);
+        }
+      } catch {
+        // Ignore parse failures.
+      }
+    },
+    [onInteractionEvents],
+  );
+
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       const editor = editorRef.current;
@@ -68,9 +96,17 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      editor.on_pointer_move(x, y, e.shiftKey, e.ctrlKey, e.altKey, e.metaKey);
+      const json = editor.on_pointer_move(
+        x,
+        y,
+        e.shiftKey,
+        e.ctrlKey,
+        e.altKey,
+        e.metaKey,
+      );
+      emitEvents(json);
     },
-    [editorRef],
+    [editorRef, emitEvents],
   );
 
   const handlePointerDown = useCallback(
@@ -80,7 +116,7 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      editor.on_pointer_down(
+      const json = editor.on_pointer_down(
         x,
         y,
         e.button,
@@ -89,9 +125,10 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
         e.altKey,
         e.metaKey,
       );
+      emitEvents(json);
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [editorRef],
+    [editorRef, emitEvents],
   );
 
   const handlePointerUp = useCallback(
@@ -101,7 +138,7 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      editor.on_pointer_up(
+      const json = editor.on_pointer_up(
         x,
         y,
         e.button,
@@ -110,9 +147,10 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
         e.altKey,
         e.metaKey,
       );
+      emitEvents(json);
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     },
-    [editorRef],
+    [editorRef, emitEvents],
   );
 
   const handleWheel = useCallback(
@@ -123,7 +161,7 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      editor.on_scroll(
+      const json = editor.on_scroll(
         x,
         y,
         e.deltaX,
@@ -133,8 +171,9 @@ export function Canvas({ canvasId, editorRef, status }: CanvasProps) {
         e.altKey,
         e.metaKey,
       );
+      emitEvents(json);
     },
-    [editorRef],
+    [editorRef, emitEvents],
   );
 
   return (

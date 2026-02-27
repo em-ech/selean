@@ -1,18 +1,72 @@
-import { useCallback } from "react";
-import { Canvas } from "./components/Canvas";
+import { useCallback, useRef, useState } from "react";
+import { Canvas, type InteractionEvent } from "./components/Canvas";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { PropertyInspector } from "./components/PropertyInspector";
 import { useSeleanEditor } from "./hooks/useSeleanEditor";
 import { useSelection } from "./hooks/useSelection";
 import { colors, fontSizes } from "./theme";
 
+/** Interaction event types that should trigger a selection refresh. */
+const REFRESH_EVENT_TYPES = new Set([
+  "SelectionChanged",
+  "Clicked",
+  "ClickedCanvas",
+]);
+
 export function App() {
-  const { editorRef, status, error } = useSeleanEditor("selean-canvas");
+  const [undoRedoTick, setUndoRedoTick] = useState(0);
+
+  // Keyboard undo/redo callback. Uses ref inside useSeleanEditor,
+  // so it picks up the latest refresh even though refresh is defined after.
+  const onKeyboardUndoRedo = useCallback(() => {
+    refreshRef.current();
+    setUndoRedoTick((t) => t + 1);
+  }, []);
+
+  const { editorRef, status, error } = useSeleanEditor(
+    "selean-canvas",
+    onKeyboardUndoRedo,
+  );
   const { selectedNode, refresh } = useSelection(editorRef, status === "ready");
+
+  // Stable ref for refresh, used by onKeyboardUndoRedo.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   const onSceneChanged = useCallback(() => {
     refresh();
   }, [refresh]);
+
+  const handleInteractionEvents = useCallback(
+    (events: InteractionEvent[]) => {
+      for (const event of events) {
+        if (REFRESH_EVENT_TYPES.has(event.type)) {
+          refresh();
+          return;
+        }
+      }
+    },
+    [refresh],
+  );
+
+  const handleUndo = useCallback(() => {
+    editorRef.current?.undo();
+    refresh();
+    setUndoRedoTick((t) => t + 1);
+  }, [editorRef, refresh]);
+
+  const handleRedo = useCallback(() => {
+    editorRef.current?.redo();
+    refresh();
+    setUndoRedoTick((t) => t + 1);
+  }, [editorRef, refresh]);
+
+  const canUndo =
+    status === "ready" && (editorRef.current?.can_undo() ?? false);
+  const canRedo =
+    status === "ready" && (editorRef.current?.can_redo() ?? false);
+  // Force re-evaluation when undo/redo tick changes.
+  void undoRedoTick;
 
   return (
     <div style={rootStyle}>
@@ -27,14 +81,24 @@ export function App() {
         {status === "ready" && (
           <div style={toolbarStyle}>
             <button
-              style={buttonStyle}
-              onClick={() => editorRef.current?.undo()}
+              style={{
+                ...buttonStyle,
+                opacity: canUndo ? 1 : 0.4,
+                cursor: canUndo ? "pointer" : "default",
+              }}
+              onClick={handleUndo}
+              disabled={!canUndo}
             >
               Undo
             </button>
             <button
-              style={buttonStyle}
-              onClick={() => editorRef.current?.redo()}
+              style={{
+                ...buttonStyle,
+                opacity: canRedo ? 1 : 0.4,
+                cursor: canRedo ? "pointer" : "default",
+              }}
+              onClick={handleRedo}
+              disabled={!canRedo}
             >
               Redo
             </button>
@@ -50,6 +114,7 @@ export function App() {
             canvasId="selean-canvas"
             editorRef={editorRef}
             status={status}
+            onInteractionEvents={handleInteractionEvents}
           />
         </div>
         {status === "ready" && (

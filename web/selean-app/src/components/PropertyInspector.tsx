@@ -8,6 +8,28 @@ interface PropertyInspectorProps {
   onSceneChanged: () => void;
 }
 
+const BLEND_MODES = [
+  "Normal",
+  "Add",
+  "Multiply",
+  "Screen",
+  "Overlay",
+  "Darken",
+  "Lighten",
+  "ColorDodge",
+  "ColorBurn",
+  "HardLight",
+  "SoftLight",
+  "Difference",
+  "Exclusion",
+];
+
+const CLIP_MODES = ["None", "Scissor", "Stencil", "ShaderRect"];
+
+const FONT_STYLES = ["Normal", "Italic"];
+
+const TEXT_ALIGNS = ["Left", "Center", "Right", "Justify"];
+
 /**
  * Right panel showing editable properties of the selected node.
  * When no node is selected, shows a placeholder message.
@@ -154,6 +176,21 @@ export function PropertyInspector({
               }
             />
           </Field>
+          <Field label="Stroke W">
+            <NumberInput
+              value={node.stroke_width}
+              min={0}
+              step={0.5}
+              onCommit={(width) =>
+                executeCommand({
+                  type: "SetStrokeWidth",
+                  node_id: node.id,
+                  width,
+                })
+              }
+              suffix="px"
+            />
+          </Field>
           <Field label="Opacity">
             <NumberInput
               value={Math.round(node.opacity * 100)}
@@ -184,16 +221,49 @@ export function PropertyInspector({
             />
           </Field>
           <Field label="Blend">
-            <span style={readonlyStyle}>{node.blend_mode}</span>
+            <SelectInput
+              value={node.blend_mode}
+              options={BLEND_MODES}
+              onCommit={(blend_mode) =>
+                executeCommand({
+                  type: "SetBlendMode",
+                  node_id: node.id,
+                  blend_mode,
+                })
+              }
+            />
+          </Field>
+          <Field label="Clip">
+            <SelectInput
+              value={node.clip_mode}
+              options={CLIP_MODES}
+              onCommit={(clip_mode) =>
+                executeCommand({
+                  type: "SetClipMode",
+                  node_id: node.id,
+                  clip_mode,
+                })
+              }
+            />
           </Field>
         </Section>
 
         {node.kind === "Frame" && (
           <Section label="Frame">
             <Field label="Radius">
-              <span style={readonlyStyle}>
-                {node.corner_radius.map((r) => r.toFixed(0)).join(", ")}
-              </span>
+              <NumberInput
+                value={node.corner_radius[0]}
+                min={0}
+                step={1}
+                onCommit={(r) =>
+                  executeCommand({
+                    type: "SetCornerRadius",
+                    node_id: node.id,
+                    corner_radius: [r, r, r, r],
+                  })
+                }
+                suffix="px"
+              />
             </Field>
           </Section>
         )}
@@ -224,6 +294,93 @@ export function PropertyInspector({
                   })
                 }
                 suffix="px"
+              />
+            </Field>
+            <Field label="Family">
+              <TextInput
+                value={node.font_family ?? "Inter"}
+                onCommit={(font_family) =>
+                  executeCommand({
+                    type: "SetFontFamily",
+                    node_id: node.id,
+                    font_family,
+                  })
+                }
+              />
+            </Field>
+            <Field label="Weight">
+              <NumberInput
+                value={node.font_weight ?? 400}
+                min={100}
+                max={900}
+                step={100}
+                onCommit={(font_weight) =>
+                  executeCommand({
+                    type: "SetFontWeight",
+                    node_id: node.id,
+                    font_weight,
+                  })
+                }
+              />
+            </Field>
+            <Field label="Style">
+              <SelectInput
+                value={node.font_style ?? "Normal"}
+                options={FONT_STYLES}
+                onCommit={(font_style) =>
+                  executeCommand({
+                    type: "SetFontStyle",
+                    node_id: node.id,
+                    font_style,
+                  })
+                }
+              />
+            </Field>
+            <Field label="Align">
+              <SelectInput
+                value={node.text_align ?? "Left"}
+                options={TEXT_ALIGNS}
+                onCommit={(text_align) =>
+                  executeCommand({
+                    type: "SetTextAlign",
+                    node_id: node.id,
+                    text_align,
+                  })
+                }
+              />
+            </Field>
+            <Field label="Height">
+              <NumberInput
+                value={node.line_height ?? 1.2}
+                min={0.5}
+                max={3.0}
+                step={0.1}
+                onCommit={(line_height) =>
+                  executeCommand({
+                    type: "SetLineHeight",
+                    node_id: node.id,
+                    line_height,
+                  })
+                }
+              />
+            </Field>
+            <Field label="Color">
+              <ColorInput
+                value={node.text_color}
+                onCommit={(text_color) =>
+                  executeCommand({
+                    type: "SetTextColor",
+                    node_id: node.id,
+                    text_color: text_color
+                      ? {
+                          r: text_color[0],
+                          g: text_color[1],
+                          b: text_color[2],
+                          a: text_color[3],
+                        }
+                      : null,
+                  })
+                }
               />
             </Field>
           </Section>
@@ -332,6 +489,32 @@ function NumberInput({
       />
       {suffix && <span style={{ fontSize: 11, color: "#888" }}>{suffix}</span>}
     </div>
+  );
+}
+
+function SelectInput({
+  value,
+  options,
+  onCommit,
+}: {
+  value: string;
+  options: string[];
+  onCommit: (v: string) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => {
+        if (e.target.value !== value) onCommit(e.target.value);
+      }}
+      style={selectStyle}
+    >
+      {options.map((opt) => (
+        <option key={opt} value={opt}>
+          {opt}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -464,6 +647,17 @@ const readonlyStyle: React.CSSProperties = {
 };
 
 const inputStyle: React.CSSProperties = {
+  background: colors.surface,
+  border: `1px solid ${colors.borderHover}`,
+  color: colors.text,
+  padding: "3px 6px",
+  borderRadius: 3,
+  fontSize: fontSizes.base,
+  width: "100%",
+  outline: "none",
+};
+
+const selectStyle: React.CSSProperties = {
   background: colors.surface,
   border: `1px solid ${colors.borderHover}`,
   color: colors.text,

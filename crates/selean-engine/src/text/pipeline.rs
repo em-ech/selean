@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn finalize_uvs_normalizes_correctly() {
-        use crate::scene::{BoundingBox, SceneNodeKind};
+        use crate::scene::{BoundingBox, FontStyle, SceneNodeKind, TextAlign};
         use selean_common::types::NodeId;
 
         let mut batch = TextBatch::new();
@@ -630,6 +630,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "A".to_string(),
                 font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(10.0, 20.0, 100.0, 30.0),
         );

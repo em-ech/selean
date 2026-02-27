@@ -12,6 +12,74 @@ use super::DirtyFlags;
 use super::clip::ClipMode;
 use super::transform::Transform2D;
 
+/// Font style for text elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum FontStyle {
+    /// Normal (upright) text.
+    #[default]
+    Normal,
+    /// Italic text.
+    Italic,
+}
+
+impl std::fmt::Display for FontStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Normal => "Normal",
+            Self::Italic => "Italic",
+        })
+    }
+}
+
+impl std::str::FromStr for FontStyle {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Normal" => Ok(Self::Normal),
+            "Italic" => Ok(Self::Italic),
+            _ => Err(format!("unknown font style: {s}")),
+        }
+    }
+}
+
+/// Text alignment for text elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum TextAlign {
+    /// Left-aligned text.
+    #[default]
+    Left,
+    /// Center-aligned text.
+    Center,
+    /// Right-aligned text.
+    Right,
+    /// Justified text.
+    Justify,
+}
+
+impl std::fmt::Display for TextAlign {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Left => "Left",
+            Self::Center => "Center",
+            Self::Right => "Right",
+            Self::Justify => "Justify",
+        })
+    }
+}
+
+impl std::str::FromStr for TextAlign {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Left" => Ok(Self::Left),
+            "Center" => Ok(Self::Center),
+            "Right" => Ok(Self::Right),
+            "Justify" => Ok(Self::Justify),
+            _ => Err(format!("unknown text align: {s}")),
+        }
+    }
+}
+
 /// The visual type of a scene node, determining how it is rendered.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SceneNodeKind {
@@ -20,12 +88,30 @@ pub enum SceneNodeKind {
         /// Corner radius in logical pixels. 0.0 means sharp corners.
         corner_radius: [f32; 4],
     },
-    /// A text element with content and basic typography info.
+    /// A text element with content and typography info.
     Text {
         /// The text content to render.
         content: String,
         /// Font size in logical pixels.
         font_size: f32,
+        /// Font family name.
+        #[serde(default = "default_font_family")]
+        font_family: String,
+        /// Font weight (100-900).
+        #[serde(default = "default_font_weight")]
+        font_weight: u16,
+        /// Font style (Normal, Italic).
+        #[serde(default)]
+        font_style: FontStyle,
+        /// Text alignment.
+        #[serde(default)]
+        text_align: TextAlign,
+        /// Line height multiplier.
+        #[serde(default = "default_line_height")]
+        line_height: f32,
+        /// Text-specific color, overrides node fill when set.
+        #[serde(default)]
+        text_color: Option<Color>,
     },
     /// A raster image, referenced by asset ID or path.
     Image {
@@ -288,6 +374,18 @@ fn dirty_all() -> DirtyFlags {
 
 fn identity_transform() -> Transform2D {
     Transform2D::identity()
+}
+
+fn default_font_family() -> String {
+    "Inter".to_string()
+}
+
+fn default_font_weight() -> u16 {
+    400
+}
+
+fn default_line_height() -> f32 {
+    1.2
 }
 
 /// A node in the scene graph.
@@ -633,25 +731,91 @@ mod tests {
 
     #[test]
     fn kind_tag_frame() {
-        let kind = SceneNodeKind::Frame { corner_radius: [0.0; 4] };
+        let kind = SceneNodeKind::Frame {
+            corner_radius: [0.0; 4],
+        };
         assert_eq!(kind.kind_tag(), "Frame");
     }
 
     #[test]
     fn kind_tag_text() {
-        let kind = SceneNodeKind::Text { content: String::new(), font_size: 16.0 };
+        let kind = SceneNodeKind::Text {
+            content: String::new(),
+            font_size: 16.0,
+            font_family: "Inter".to_string(),
+            font_weight: 400,
+            font_style: FontStyle::Normal,
+            text_align: TextAlign::Left,
+            line_height: 1.2,
+            text_color: None,
+        };
         assert_eq!(kind.kind_tag(), "Text");
+    }
+
+    // --- FontStyle tests ---
+
+    #[test]
+    fn font_style_display_roundtrip() {
+        for &style in &[FontStyle::Normal, FontStyle::Italic] {
+            let s = style.to_string();
+            let back: FontStyle = s.parse().unwrap();
+            assert_eq!(back, style);
+        }
+    }
+
+    #[test]
+    fn font_style_from_str_invalid() {
+        let result: Result<FontStyle, _> = "Bold".parse();
+        assert!(result.is_err());
+        assert!(result.err().unwrap().contains("unknown font style"));
+    }
+
+    #[test]
+    fn font_style_default_is_normal() {
+        assert_eq!(FontStyle::default(), FontStyle::Normal);
+    }
+
+    // --- TextAlign tests ---
+
+    #[test]
+    fn text_align_display_roundtrip() {
+        for &align in &[
+            TextAlign::Left,
+            TextAlign::Center,
+            TextAlign::Right,
+            TextAlign::Justify,
+        ] {
+            let s = align.to_string();
+            let back: TextAlign = s.parse().unwrap();
+            assert_eq!(back, align);
+        }
+    }
+
+    #[test]
+    fn text_align_from_str_invalid() {
+        let result: Result<TextAlign, _> = "Start".parse();
+        assert!(result.is_err());
+        assert!(result.err().unwrap().contains("unknown text align"));
+    }
+
+    #[test]
+    fn text_align_default_is_left() {
+        assert_eq!(TextAlign::default(), TextAlign::Left);
     }
 
     #[test]
     fn kind_tag_image() {
-        let kind = SceneNodeKind::Image { asset_ref: String::new() };
+        let kind = SceneNodeKind::Image {
+            asset_ref: String::new(),
+        };
         assert_eq!(kind.kind_tag(), "Image");
     }
 
     #[test]
     fn kind_tag_vector() {
-        let kind = SceneNodeKind::Vector { path_data: String::new() };
+        let kind = SceneNodeKind::Vector {
+            path_data: String::new(),
+        };
         assert_eq!(kind.kind_tag(), "Vector");
     }
 
@@ -665,9 +829,19 @@ mod tests {
     #[test]
     fn blend_mode_from_str_all_variants() {
         let modes = [
-            "Normal", "Add", "Multiply", "Screen", "Overlay", "Darken",
-            "Lighten", "ColorDodge", "ColorBurn", "HardLight", "SoftLight",
-            "Difference", "Exclusion",
+            "Normal",
+            "Add",
+            "Multiply",
+            "Screen",
+            "Overlay",
+            "Darken",
+            "Lighten",
+            "ColorDodge",
+            "ColorBurn",
+            "HardLight",
+            "SoftLight",
+            "Difference",
+            "Exclusion",
         ];
         for mode_str in &modes {
             let parsed: BlendMode = mode_str.parse().unwrap();

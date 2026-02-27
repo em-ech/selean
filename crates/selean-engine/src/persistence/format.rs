@@ -7,22 +7,95 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use selean_common::types::NodeId;
+use selean_common::types::{NodeId, PageId};
 
 use crate::scene::{SceneGraph, SceneNode};
 
+use super::page::Page;
+
 /// Current format version. Incremented on breaking schema changes.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
+
+/// Serializable representation of a single page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageData {
+    /// Page identifier.
+    pub id: PageId,
+    /// Display name.
+    pub name: String,
+    /// Page width in logical pixels.
+    pub width: f32,
+    /// Page height in logical pixels.
+    pub height: f32,
+    /// Scene graph data for this page.
+    pub scene: SceneGraphData,
+}
+
+impl PageData {
+    /// Extracts serializable data from a live page.
+    #[must_use]
+    pub fn from_page(page: &Page) -> Self {
+        Self {
+            id: page.id,
+            name: page.name.clone(),
+            width: page.width,
+            height: page.height,
+            scene: SceneGraphData::from_graph(&page.scene),
+        }
+    }
+
+    /// Converts validated data into a live page.
+    #[must_use]
+    pub fn into_page(self) -> Page {
+        Page::with_scene(
+            self.id,
+            self.name,
+            self.width,
+            self.height,
+            self.scene.into_graph(),
+        )
+    }
+}
 
 /// Top-level document format written to disk.
+///
+/// Supports both v1 (single `scene` field) and v2 (multi-page `pages` field).
+/// New saves always use v2 format with the `pages` field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentFormat {
     /// Schema version for forward/backward compatibility checks.
     pub version: u32,
     /// Timestamp (seconds since UNIX epoch) when the document was saved.
     pub saved_at: u64,
-    /// The scene graph data.
-    pub scene: SceneGraphData,
+    /// v1 format: single scene (for backward compat on load).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<SceneGraphData>,
+    /// v2 format: multi-page document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<Vec<PageData>>,
+}
+
+impl DocumentFormat {
+    /// Validates the document structure.
+    ///
+    /// Delegates to `SceneGraphData::validate()` for each page (v2) or the
+    /// single scene (v1). Returns `Ok(())` if all invariants hold.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `String` describing the first validation failure found.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(pages) = &self.pages {
+            for (i, page) in pages.iter().enumerate() {
+                page.scene
+                    .validate()
+                    .map_err(|e| format!("page {i} ({}): {e}", page.name))?;
+            }
+        } else if let Some(scene) = &self.scene {
+            scene.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// Serializable subset of the scene graph: the node map and root ordering.
@@ -198,6 +271,7 @@ mod tests {
 
     use super::*;
     use crate::scene::{BoundingBox, ClipMode, SceneNodeKind, Transform2D};
+    use selean_common::types::PageId;
 
     fn make_node(name: &str) -> SceneNode {
         SceneNode::new(
@@ -211,12 +285,19 @@ mod tests {
     }
 
     fn make_text_node(name: &str, content: &str, font_size: f32) -> SceneNode {
+        use crate::scene::{FontStyle, TextAlign};
         SceneNode::new(
             NodeId::new(),
             name.to_string(),
             SceneNodeKind::Text {
                 content: content.to_string(),
                 font_size,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 200.0, 30.0),
         )
@@ -396,7 +477,14 @@ mod tests {
         let doc = DocumentFormat {
             version: FORMAT_VERSION,
             saved_at: 1700000000,
-            scene: SceneGraphData::from_graph(&graph),
+            scene: None,
+            pages: Some(vec![PageData {
+                id: PageId::new(),
+                name: "Page 1".to_string(),
+                width: 1920.0,
+                height: 1080.0,
+                scene: SceneGraphData::from_graph(&graph),
+            }]),
         };
 
         let json = serde_json::to_string(&doc).expect("serialize");
@@ -404,8 +492,10 @@ mod tests {
 
         assert_eq!(restored.version, FORMAT_VERSION);
         assert_eq!(restored.saved_at, 1700000000);
-        assert!(restored.scene.validate().is_ok());
-        assert_eq!(restored.scene.roots, vec![id]);
+        let pages = restored.pages.as_ref().unwrap();
+        assert_eq!(pages.len(), 1);
+        assert!(pages[0].scene.validate().is_ok());
+        assert_eq!(pages[0].scene.roots, vec![id]);
     }
 
     // --- Validation rejection tests ---

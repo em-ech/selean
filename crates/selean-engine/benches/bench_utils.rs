@@ -17,7 +17,8 @@ use rand::rngs::StdRng;
 
 use selean_common::types::NodeId;
 use selean_engine::scene::{
-    BlendMode, BoundingBox, ClipMode, Color, SceneGraph, SceneNode, SceneNodeKind, Transform2D,
+    BlendMode, BoundingBox, ClipMode, Color, FontStyle, SceneGraph, SceneNode, SceneNodeKind,
+    TextAlign, Transform2D,
 };
 
 /// Distribution of node types in the synthetic scene.
@@ -191,6 +192,12 @@ pub fn generate_scene(config: &SceneConfig) -> SceneGraph {
         leaf_kinds.push(SceneNodeKind::Text {
             content: format!("Label {i}"),
             font_size: rng.gen_range(10.0_f32..48.0),
+            font_family: "Inter".to_string(),
+            font_weight: 400,
+            font_style: FontStyle::Normal,
+            text_align: TextAlign::Left,
+            line_height: 1.2,
+            text_color: None,
         });
     }
 

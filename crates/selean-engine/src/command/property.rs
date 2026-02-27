@@ -8,7 +8,9 @@ use selean_common::types::NodeId;
 use super::traits::Command;
 use crate::scene::clip::ClipMode;
 use crate::scene::transform::Transform2D;
-use crate::scene::{BlendMode, BoundingBox, Color, SceneGraph, SceneNodeKind};
+use crate::scene::{
+    BlendMode, BoundingBox, Color, FontStyle, SceneGraph, SceneNodeKind, TextAlign,
+};
 
 /// Generates a property command struct and its `Command` impl.
 ///
@@ -384,6 +386,304 @@ impl Command for SetAssetRefCommand {
     }
 }
 
+/// Command to set the corner radius of a Frame node.
+#[derive(Debug)]
+pub struct SetCornerRadiusCommand {
+    node_id: NodeId,
+    new_value: [f32; 4],
+    old_value: Option<[f32; 4]>,
+}
+
+impl SetCornerRadiusCommand {
+    /// Creates a new command targeting the given Frame node.
+    #[must_use]
+    pub fn new(node_id: NodeId, new_value: [f32; 4]) -> Self {
+        Self {
+            node_id,
+            new_value,
+            old_value: None,
+        }
+    }
+}
+
+impl Command for SetCornerRadiusCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+        let SceneNodeKind::Frame { corner_radius } = node.kind else {
+            return false;
+        };
+        self.old_value = Some(corner_radius);
+        scene.set_corner_radius(self.node_id, self.new_value)
+    }
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_value.take() else {
+            return false;
+        };
+        scene.set_corner_radius(self.node_id, old)
+    }
+    fn description(&self) -> &str {
+        "Set Corner Radius"
+    }
+}
+
+/// Command to set the font family of a Text node.
+#[derive(Debug)]
+pub struct SetFontFamilyCommand {
+    node_id: NodeId,
+    new_value: String,
+    old_value: Option<String>,
+}
+
+impl SetFontFamilyCommand {
+    /// Creates a new command targeting the given Text node.
+    #[must_use]
+    pub fn new(node_id: NodeId, new_value: String) -> Self {
+        Self {
+            node_id,
+            new_value,
+            old_value: None,
+        }
+    }
+}
+
+impl Command for SetFontFamilyCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+        let SceneNodeKind::Text {
+            ref font_family, ..
+        } = node.kind
+        else {
+            return false;
+        };
+        self.old_value = Some(font_family.clone());
+        scene.set_font_family(self.node_id, self.new_value.clone())
+    }
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_value.take() else {
+            return false;
+        };
+        scene.set_font_family(self.node_id, old)
+    }
+    fn description(&self) -> &str {
+        "Set Font Family"
+    }
+}
+
+/// Command to set the font weight of a Text node.
+#[derive(Debug)]
+pub struct SetFontWeightCommand {
+    node_id: NodeId,
+    new_value: u16,
+    old_value: Option<u16>,
+}
+
+impl SetFontWeightCommand {
+    /// Creates a new command targeting the given Text node.
+    #[must_use]
+    pub fn new(node_id: NodeId, new_value: u16) -> Self {
+        Self {
+            node_id,
+            new_value,
+            old_value: None,
+        }
+    }
+}
+
+impl Command for SetFontWeightCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+        let SceneNodeKind::Text { font_weight, .. } = node.kind else {
+            return false;
+        };
+        self.old_value = Some(font_weight);
+        scene.set_font_weight(self.node_id, self.new_value)
+    }
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_value.take() else {
+            return false;
+        };
+        scene.set_font_weight(self.node_id, old)
+    }
+    fn description(&self) -> &str {
+        "Set Font Weight"
+    }
+}
+
+/// Command to set the font style of a Text node.
+#[derive(Debug)]
+pub struct SetFontStyleCommand {
+    node_id: NodeId,
+    new_value: FontStyle,
+    old_value: Option<FontStyle>,
+}
+
+impl SetFontStyleCommand {
+    /// Creates a new command targeting the given Text node.
+    #[must_use]
+    pub fn new(node_id: NodeId, new_value: FontStyle) -> Self {
+        Self {
+            node_id,
+            new_value,
+            old_value: None,
+        }
+    }
+}
+
+impl Command for SetFontStyleCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+        let SceneNodeKind::Text { font_style, .. } = node.kind else {
+            return false;
+        };
+        self.old_value = Some(font_style);
+        scene.set_font_style(self.node_id, self.new_value)
+    }
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_value.take() else {
+            return false;
+        };
+        scene.set_font_style(self.node_id, old)
+    }
+    fn description(&self) -> &str {
+        "Set Font Style"
+    }
+}
+
+/// Command to set the text alignment of a Text node.
+#[derive(Debug)]
+pub struct SetTextAlignCommand {
+    node_id: NodeId,
+    new_value: TextAlign,
+    old_value: Option<TextAlign>,
+}
+
+impl SetTextAlignCommand {
+    /// Creates a new command targeting the given Text node.
+    #[must_use]
+    pub fn new(node_id: NodeId, new_value: TextAlign) -> Self {
+        Self {
+            node_id,
+            new_value,
+            old_value: None,
+        }
+    }
+}
+
+impl Command for SetTextAlignCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+        let SceneNodeKind::Text { text_align, .. } = node.kind else {
+            return false;
+        };
+        self.old_value = Some(text_align);
+        scene.set_text_align(self.node_id, self.new_value)
+    }
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_value.take() else {
+            return false;
+        };
+        scene.set_text_align(self.node_id, old)
+    }
+    fn description(&self) -> &str {
+        "Set Text Align"
+    }
+}
+
+/// Command to set the line height of a Text node.
+#[derive(Debug)]
+pub struct SetLineHeightCommand {
+    node_id: NodeId,
+    new_value: f32,
+    old_value: Option<f32>,
+}
+
+impl SetLineHeightCommand {
+    /// Creates a new command targeting the given Text node.
+    #[must_use]
+    pub fn new(node_id: NodeId, new_value: f32) -> Self {
+        Self {
+            node_id,
+            new_value,
+            old_value: None,
+        }
+    }
+}
+
+impl Command for SetLineHeightCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+        let SceneNodeKind::Text { line_height, .. } = node.kind else {
+            return false;
+        };
+        self.old_value = Some(line_height);
+        scene.set_line_height(self.node_id, self.new_value)
+    }
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_value.take() else {
+            return false;
+        };
+        scene.set_line_height(self.node_id, old)
+    }
+    fn description(&self) -> &str {
+        "Set Line Height"
+    }
+}
+
+/// Command to set the text color of a Text node.
+#[derive(Debug)]
+pub struct SetTextColorCommand {
+    node_id: NodeId,
+    new_value: Option<Color>,
+    #[allow(clippy::option_option)]
+    old_value: Option<Option<Color>>,
+}
+
+impl SetTextColorCommand {
+    /// Creates a new command targeting the given Text node.
+    #[must_use]
+    pub fn new(node_id: NodeId, new_value: Option<Color>) -> Self {
+        Self {
+            node_id,
+            new_value,
+            old_value: None,
+        }
+    }
+}
+
+impl Command for SetTextColorCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+        let SceneNodeKind::Text { text_color, .. } = node.kind else {
+            return false;
+        };
+        self.old_value = Some(text_color);
+        scene.set_text_color(self.node_id, self.new_value)
+    }
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_value.take() else {
+            return false;
+        };
+        scene.set_text_color(self.node_id, old)
+    }
+    fn description(&self) -> &str {
+        "Set Text Color"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp, clippy::unwrap_used)]
@@ -409,6 +709,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: content.to_string(),
                 font_size,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 200.0, 50.0),
         )
@@ -730,5 +1036,168 @@ mod tests {
 
         let mut cmd = SetFillCommand::new(id, Some(Color::WHITE));
         assert!(!cmd.undo(&mut scene));
+    }
+
+    // --- New command tests ---
+
+    #[test]
+    fn set_corner_radius_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_frame("F");
+        let id = scene.add_root(node);
+
+        let mut cmd = SetCornerRadiusCommand::new(id, [8.0, 8.0, 8.0, 8.0]);
+        assert!(cmd.execute(&mut scene));
+        if let SceneNodeKind::Frame { corner_radius } = scene.get(id).unwrap().kind {
+            assert_eq!(corner_radius, [8.0; 4]);
+        } else {
+            panic!("Expected Frame node");
+        }
+
+        assert!(cmd.undo(&mut scene));
+        if let SceneNodeKind::Frame { corner_radius } = scene.get(id).unwrap().kind {
+            assert_eq!(corner_radius, [0.0; 4]);
+        } else {
+            panic!("Expected Frame node");
+        }
+    }
+
+    #[test]
+    fn set_font_family_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_text("T", "Hello", 16.0);
+        let id = scene.add_root(node);
+
+        let mut cmd = SetFontFamilyCommand::new(id, "Roboto".to_string());
+        assert!(cmd.execute(&mut scene));
+        if let SceneNodeKind::Text {
+            ref font_family, ..
+        } = scene.get(id).unwrap().kind
+        {
+            assert_eq!(font_family, "Roboto");
+        } else {
+            panic!("Expected Text node");
+        }
+
+        assert!(cmd.undo(&mut scene));
+        if let SceneNodeKind::Text {
+            ref font_family, ..
+        } = scene.get(id).unwrap().kind
+        {
+            assert_eq!(font_family, "Inter");
+        } else {
+            panic!("Expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_font_weight_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_text("T", "Hello", 16.0);
+        let id = scene.add_root(node);
+
+        let mut cmd = SetFontWeightCommand::new(id, 700);
+        assert!(cmd.execute(&mut scene));
+        if let SceneNodeKind::Text { font_weight, .. } = scene.get(id).unwrap().kind {
+            assert_eq!(font_weight, 700);
+        } else {
+            panic!("Expected Text node");
+        }
+
+        assert!(cmd.undo(&mut scene));
+        if let SceneNodeKind::Text { font_weight, .. } = scene.get(id).unwrap().kind {
+            assert_eq!(font_weight, 400);
+        } else {
+            panic!("Expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_font_style_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_text("T", "Hello", 16.0);
+        let id = scene.add_root(node);
+
+        let mut cmd = SetFontStyleCommand::new(id, FontStyle::Italic);
+        assert!(cmd.execute(&mut scene));
+        if let SceneNodeKind::Text { font_style, .. } = scene.get(id).unwrap().kind {
+            assert_eq!(font_style, FontStyle::Italic);
+        } else {
+            panic!("Expected Text node");
+        }
+
+        assert!(cmd.undo(&mut scene));
+        if let SceneNodeKind::Text { font_style, .. } = scene.get(id).unwrap().kind {
+            assert_eq!(font_style, FontStyle::Normal);
+        } else {
+            panic!("Expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_text_align_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_text("T", "Hello", 16.0);
+        let id = scene.add_root(node);
+
+        let mut cmd = SetTextAlignCommand::new(id, TextAlign::Center);
+        assert!(cmd.execute(&mut scene));
+        if let SceneNodeKind::Text { text_align, .. } = scene.get(id).unwrap().kind {
+            assert_eq!(text_align, TextAlign::Center);
+        } else {
+            panic!("Expected Text node");
+        }
+
+        assert!(cmd.undo(&mut scene));
+        if let SceneNodeKind::Text { text_align, .. } = scene.get(id).unwrap().kind {
+            assert_eq!(text_align, TextAlign::Left);
+        } else {
+            panic!("Expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_line_height_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_text("T", "Hello", 16.0);
+        let id = scene.add_root(node);
+
+        let mut cmd = SetLineHeightCommand::new(id, 1.8);
+        assert!(cmd.execute(&mut scene));
+        if let SceneNodeKind::Text { line_height, .. } = scene.get(id).unwrap().kind {
+            assert!((line_height - 1.8).abs() < f32::EPSILON);
+        } else {
+            panic!("Expected Text node");
+        }
+
+        assert!(cmd.undo(&mut scene));
+        if let SceneNodeKind::Text { line_height, .. } = scene.get(id).unwrap().kind {
+            assert!((line_height - 1.2).abs() < f32::EPSILON);
+        } else {
+            panic!("Expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_text_color_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_text("T", "Hello", 16.0);
+        let id = scene.add_root(node);
+
+        let red = Some(Color::new(1.0, 0.0, 0.0, 1.0));
+        let mut cmd = SetTextColorCommand::new(id, red);
+        assert!(cmd.execute(&mut scene));
+        if let SceneNodeKind::Text { text_color, .. } = scene.get(id).unwrap().kind {
+            assert_eq!(text_color, red);
+        } else {
+            panic!("Expected Text node");
+        }
+
+        assert!(cmd.undo(&mut scene));
+        if let SceneNodeKind::Text { text_color, .. } = scene.get(id).unwrap().kind {
+            assert!(text_color.is_none());
+        } else {
+            panic!("Expected Text node");
+        }
     }
 }

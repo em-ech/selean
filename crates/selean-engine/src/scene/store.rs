@@ -13,7 +13,7 @@ use selean_common::types::NodeId;
 
 use super::clip::ClipMode;
 use super::dirty::DirtyFlags;
-use super::node::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind};
+use super::node::{BlendMode, BoundingBox, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign};
 use super::transform::Transform2D;
 use crate::spatial::SpatialIndex;
 
@@ -537,6 +537,138 @@ impl SceneGraph {
             } = node.kind
             {
                 *fs = font_size;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the corner radius of a Frame node.
+    ///
+    /// Marks the node with `DIRTY_STYLE`.
+    /// Returns `false` if the node doesn't exist or is not a Frame node.
+    pub fn set_corner_radius(&mut self, id: NodeId, corner_radius: [f32; 4]) -> bool {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
+            if let SceneNodeKind::Frame {
+                corner_radius: ref mut cr,
+            } = node.kind
+            {
+                *cr = corner_radius;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the font family of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_font_family(&mut self, id: NodeId, font_family: String) -> bool {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
+            if let SceneNodeKind::Text {
+                font_family: ref mut ff,
+                ..
+            } = node.kind
+            {
+                *ff = font_family;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the font weight of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_font_weight(&mut self, id: NodeId, font_weight: u16) -> bool {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
+            if let SceneNodeKind::Text {
+                font_weight: ref mut fw,
+                ..
+            } = node.kind
+            {
+                *fw = font_weight;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the font style of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_font_style(&mut self, id: NodeId, font_style: FontStyle) -> bool {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
+            if let SceneNodeKind::Text {
+                font_style: ref mut fs,
+                ..
+            } = node.kind
+            {
+                *fs = font_style;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the text alignment of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_text_align(&mut self, id: NodeId, text_align: TextAlign) -> bool {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
+            if let SceneNodeKind::Text {
+                text_align: ref mut ta,
+                ..
+            } = node.kind
+            {
+                *ta = text_align;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the line height of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_line_height(&mut self, id: NodeId, line_height: f32) -> bool {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
+            if let SceneNodeKind::Text {
+                line_height: ref mut lh,
+                ..
+            } = node.kind
+            {
+                *lh = line_height;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Updates the text color of a Text node.
+    ///
+    /// Marks the node with `DIRTY_TEXT`.
+    /// Returns `false` if the node doesn't exist or is not a Text node.
+    pub fn set_text_color(&mut self, id: NodeId, text_color: Option<Color>) -> bool {
+        self.mutate_node(id, DirtyFlags::TEXT, |node| {
+            if let SceneNodeKind::Text {
+                text_color: ref mut tc,
+                ..
+            } = node.kind
+            {
+                *tc = text_color;
                 true
             } else {
                 false
@@ -1635,6 +1767,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "Hello".to_string(),
                 font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 200.0, 30.0),
         );
@@ -1678,6 +1816,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "Old".to_string(),
                 font_size: 14.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(10.0, 10.0, 100.0, 20.0),
         );
@@ -1706,6 +1850,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "Hello".to_string(),
                 font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 200.0, 30.0),
         );
@@ -1881,6 +2031,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "Hello".to_string(),
                 font_size: 14.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(10.0, 10.0, 100.0, 20.0),
         );

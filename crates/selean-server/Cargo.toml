@@ -10,7 +10,9 @@ repository.workspace = true
 [dependencies]
 selean-llm = { path = "../selean-llm" }
 selean-common = { path = "../selean-common" }
-axum.workspace = true
+selean-pptx = { path = "../selean-pptx" }
+selean-engine = { path = "../selean-engine" }
+axum = { workspace = true, features = ["multipart"] }
 tokio.workspace = true
 reqwest.workspace = true
 tower-http.workspace = true

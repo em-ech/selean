@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 selean-engine = { path = "../selean-engine" }
 selean-common = { path = "../selean-common" }
+selean-llm = { path = "../selean-llm" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -27,6 +28,7 @@ web-sys = { version = "0.3", features = [
 ] }
 console_error_panic_hook = "0.1"
 wgpu = { workspace = true, features = ["webgpu"] }
+uuid = { workspace = true, features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu.workspace = true

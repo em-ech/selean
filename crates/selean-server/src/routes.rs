@@ -5,16 +5,17 @@
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Multipart, State},
+    http::{StatusCode, header},
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
 };
 use std::convert::Infallible;
 
-use crate::chat::{ChatEvent, ChatRequest, send_chat_request, response_to_events};
+use crate::chat::{ChatEvent, ChatRequest, response_to_events, send_chat_request};
 use crate::state::AppState;
 
 /// Creates the Axum router with all API routes.
@@ -23,6 +24,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/tools", get(list_tools))
         .route("/api/chat", post(chat_handler))
+        .route("/api/import/pptx", post(import_pptx_handler))
+        .route("/api/export/pptx", post(export_pptx_handler))
         .with_state(state)
 }
 
@@ -68,6 +71,100 @@ async fn chat_handler(
                 .keep_alive(KeepAlive::default())
                 .into_response()
         }
+    }
+}
+
+/// PPTX content type for responses.
+const PPTX_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+/// Handles PPTX import. Accepts multipart form data with a `file` field
+/// containing the `.pptx` bytes. Returns the parsed `Document` as JSON.
+async fn import_pptx_handler(mut multipart: Multipart) -> impl IntoResponse {
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            let bytes = match field.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("failed to read file: {e}") })),
+                    )
+                        .into_response();
+                }
+            };
+
+            return match selean_pptx::import_pptx(&bytes) {
+                Ok(doc) => {
+                    let json = match selean_engine::persistence::save_document(&doc) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({
+                                    "error": format!("serialization failed: {e}")
+                                })),
+                            )
+                                .into_response();
+                        }
+                    };
+
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "application/json")],
+                        json,
+                    )
+                        .into_response()
+                }
+                Err(e) => (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("pptx import failed: {e}") })),
+                )
+                    .into_response(),
+            };
+        }
+    }
+
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": "missing 'file' field in multipart form" })),
+    )
+        .into_response()
+}
+
+/// Handles PPTX export. Accepts a `Document` as JSON body and returns the
+/// `.pptx` bytes with the appropriate content type.
+async fn export_pptx_handler(body: axum::body::Bytes) -> impl IntoResponse {
+    let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(&body)) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid document JSON: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    match selean_pptx::export_pptx(&doc) {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, PPTX_CONTENT_TYPE),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"export.pptx\"",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("pptx export failed: {e}") })),
+        )
+            .into_response(),
     }
 }
 
@@ -117,9 +214,8 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let tools: Vec<selean_llm::ToolDefinition> =
-            serde_json::from_slice(&body).unwrap();
-        assert_eq!(tools.len(), 13);
+        let tools: Vec<selean_llm::ToolDefinition> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(tools.len(), 22);
     }
 
     #[tokio::test]

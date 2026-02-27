@@ -52,6 +52,18 @@ pub struct NodeInfo {
     pub asset_ref: Option<String>,
     /// SVG path data (Vector kind only).
     pub path_data: Option<String>,
+    /// Font family (Text kind only).
+    pub font_family: Option<String>,
+    /// Font weight (Text kind only).
+    pub font_weight: Option<u16>,
+    /// Font style as string (Text kind only).
+    pub font_style: Option<String>,
+    /// Text alignment as string (Text kind only).
+    pub text_align: Option<String>,
+    /// Line height multiplier (Text kind only).
+    pub line_height: Option<f32>,
+    /// Text-specific color as RGBA (Text kind only).
+    pub text_color: Option<[f32; 4]>,
     /// Child node IDs.
     pub children: Vec<String>,
     /// Parent node ID, if any.
@@ -59,26 +71,70 @@ pub struct NodeInfo {
 }
 
 impl From<&SceneNode> for NodeInfo {
+    #[allow(clippy::too_many_lines)]
     fn from(node: &SceneNode) -> Self {
         use selean_engine::scene::SceneNodeKind;
 
         let kind = node.kind.kind_tag();
-        let (corner_radius, text_content, font_size, asset_ref, path_data) = match &node.kind {
-            SceneNodeKind::Frame { corner_radius } => {
-                (*corner_radius, None, None, None, None)
-            }
-            SceneNodeKind::Text { content, font_size } => (
+        let (
+            corner_radius,
+            text_content,
+            font_size,
+            asset_ref,
+            path_data,
+            font_family,
+            font_weight,
+            font_style,
+            text_align,
+            line_height,
+            text_color,
+        ) = match &node.kind {
+            SceneNodeKind::Frame { corner_radius } => (
+                *corner_radius,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            SceneNodeKind::Text {
+                content,
+                font_size,
+                font_family,
+                font_weight,
+                font_style,
+                text_align,
+                line_height,
+                text_color,
+            } => (
                 [0.0; 4],
                 Some(content.clone()),
                 Some(*font_size),
                 None,
                 None,
+                Some(font_family.clone()),
+                Some(*font_weight),
+                Some(font_style.to_string()),
+                Some(text_align.to_string()),
+                Some(*line_height),
+                text_color.map(|c| [c.r, c.g, c.b, c.a]),
             ),
             SceneNodeKind::Image { asset_ref } => (
                 [0.0; 4],
                 None,
                 None,
                 Some(asset_ref.clone()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
             ),
             SceneNodeKind::Vector { path_data } => (
@@ -87,8 +143,16 @@ impl From<&SceneNode> for NodeInfo {
                 None,
                 None,
                 Some(path_data.clone()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
             ),
-            SceneNodeKind::Group => ([0.0; 4], None, None, None, None),
+            SceneNodeKind::Group => (
+                [0.0; 4], None, None, None, None, None, None, None, None, None, None,
+            ),
         };
 
         Self {
@@ -113,6 +177,12 @@ impl From<&SceneNode> for NodeInfo {
             font_size,
             asset_ref,
             path_data,
+            font_family,
+            font_weight,
+            font_style,
+            text_align,
+            line_height,
+            text_color,
             children: node.children.iter().map(ToString::to_string).collect(),
             parent: node.parent.map(|id| id.to_string()),
         }
@@ -151,13 +221,56 @@ pub fn get_selected_ids_json(selected: &[NodeId]) -> String {
     serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Returns JSON representation of the entire scene graph.
-pub fn get_scene_json(scene: &SceneGraph) -> String {
-    let nodes: Vec<NodeInfo> = scene
+/// Compact node summary for query results.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NodeSummary {
+    /// Node ID.
+    pub id: String,
+    /// Node name.
+    pub name: String,
+    /// Node kind tag.
+    pub kind: String,
+}
+
+/// Searches nodes by optional name substring (case-insensitive) and optional kind.
+/// Returns JSON array of `NodeSummary`.
+pub fn query_nodes_json(
+    scene: &SceneGraph,
+    name_pattern: Option<&str>,
+    kind: Option<&str>,
+) -> String {
+    let pattern_lower = name_pattern.map(str::to_lowercase);
+    let kind_lower = kind.map(str::to_lowercase);
+
+    let results: Vec<NodeSummary> = scene
         .nodes()
         .values()
-        .map(NodeInfo::from)
+        .filter(|node| {
+            if let Some(ref pat) = pattern_lower {
+                if !node.name.to_lowercase().contains(pat) {
+                    return false;
+                }
+            }
+            if let Some(ref k) = kind_lower {
+                if node.kind.kind_tag().to_lowercase() != *k {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|node| NodeSummary {
+            id: node.id.to_string(),
+            name: node.name.clone(),
+            kind: node.kind.kind_tag().to_string(),
+        })
         .collect();
+
+    serde_json::to_string(&results).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Returns JSON representation of the entire scene graph.
+pub fn get_scene_json(scene: &SceneGraph) -> String {
+    let nodes: Vec<NodeInfo> = scene.nodes().values().map(NodeInfo::from).collect();
     let roots: Vec<String> = scene.roots().iter().map(ToString::to_string).collect();
     let info = SceneInfo {
         node_count: nodes.len(),
@@ -274,12 +387,19 @@ mod tests {
 
     #[test]
     fn node_info_text_kind() {
+        use selean_engine::scene::{FontStyle, TextAlign};
         let node = SceneNode::new(
             NodeId::new(),
             "Label".to_string(),
             SceneNodeKind::Text {
                 content: "Hello".to_string(),
                 font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 100.0, 20.0),
         );
@@ -313,12 +433,19 @@ mod tests {
 
     #[test]
     fn node_info_text_content_and_font_size() {
+        use selean_engine::scene::{FontStyle, TextAlign};
         let node = SceneNode::new(
             NodeId::new(),
             "Label".to_string(),
             SceneNodeKind::Text {
                 content: "Hello World".to_string(),
                 font_size: 24.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 200.0, 30.0),
         );
@@ -326,6 +453,12 @@ mod tests {
         assert_eq!(info.text_content.as_deref(), Some("Hello World"));
         assert_eq!(info.font_size, Some(24.0));
         assert_eq!(info.corner_radius, [0.0; 4]);
+        assert_eq!(info.font_family.as_deref(), Some("Inter"));
+        assert_eq!(info.font_weight, Some(400));
+        assert_eq!(info.font_style.as_deref(), Some("Normal"));
+        assert_eq!(info.text_align.as_deref(), Some("Left"));
+        assert_eq!(info.line_height, Some(1.2));
+        assert!(info.text_color.is_none());
     }
 
     #[test]
@@ -356,6 +489,80 @@ mod tests {
         let info = NodeInfo::from(&node);
         assert_eq!(info.path_data.as_deref(), Some("M 0 0 L 50 50"));
         assert!(info.asset_ref.is_none());
+    }
+
+    #[test]
+    fn query_nodes_no_filter() {
+        let mut scene = SceneGraph::new();
+        scene.add_root(make_frame("A", 0.0, 0.0, 50.0, 50.0));
+        scene.add_root(make_frame("B", 100.0, 0.0, 50.0, 50.0));
+
+        let json = query_nodes_json(&scene, None, None);
+        let results: Vec<NodeSummary> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn query_nodes_name_filter() {
+        let mut scene = SceneGraph::new();
+        scene.add_root(make_frame("Red Box", 0.0, 0.0, 50.0, 50.0));
+        scene.add_root(make_frame("Blue Box", 100.0, 0.0, 50.0, 50.0));
+        scene.add_root(make_frame("Green Circle", 200.0, 0.0, 50.0, 50.0));
+
+        let json = query_nodes_json(&scene, Some("box"), None);
+        let results: Vec<NodeSummary> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(results.len(), 2);
+        assert!(
+            results
+                .iter()
+                .all(|n| n.name.to_lowercase().contains("box"))
+        );
+    }
+
+    #[test]
+    fn query_nodes_kind_filter() {
+        let mut scene = SceneGraph::new();
+        scene.add_root(make_frame("Box", 0.0, 0.0, 50.0, 50.0));
+        scene.add_root(SceneNode::new(
+            NodeId::new(),
+            "Label".to_string(),
+            SceneNodeKind::Text {
+                content: "Hi".to_string(),
+                font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: selean_engine::scene::FontStyle::Normal,
+                text_align: selean_engine::scene::TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 20.0),
+        ));
+
+        let json = query_nodes_json(&scene, None, Some("Text"));
+        let results: Vec<NodeSummary> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].kind, "Text");
+    }
+
+    #[test]
+    fn query_nodes_both_filters() {
+        let mut scene = SceneGraph::new();
+        scene.add_root(make_frame("Red Box", 0.0, 0.0, 50.0, 50.0));
+        scene.add_root(make_frame("Blue Box", 100.0, 0.0, 50.0, 50.0));
+
+        let json = query_nodes_json(&scene, Some("red"), Some("Frame"));
+        let results: Vec<NodeSummary> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Red Box");
+    }
+
+    #[test]
+    fn query_nodes_empty_result() {
+        let scene = SceneGraph::new();
+        let json = query_nodes_json(&scene, Some("nonexistent"), None);
+        let results: Vec<NodeSummary> = serde_json::from_str(&json).expect("valid json");
+        assert!(results.is_empty());
     }
 
     #[test]

@@ -520,7 +520,7 @@ mod tests {
 
     use super::*;
     use crate::renderer::QUAD_VERTICES;
-    use crate::scene::{BoundingBox, ClipRect, SceneNodeKind};
+    use crate::scene::{BoundingBox, ClipRect, FontStyle, SceneNodeKind, TextAlign};
     use selean_common::types::NodeId;
 
     #[test]
@@ -609,6 +609,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "Hello".to_string(),
                 font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 100.0, 20.0),
         );
@@ -771,6 +777,12 @@ mod tests {
             SceneNodeKind::Text {
                 content: "Hello".to_string(),
                 font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
             },
             BoundingBox::new(0.0, 0.0, 200.0, 30.0),
         );
