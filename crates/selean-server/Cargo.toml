@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "selean-server"
+path = "src/main.rs"
+
 [dependencies]
 selean-llm = { path = "../selean-llm" }
 selean-common = { path = "../selean-common" }
@@ -19,6 +23,7 @@ tower-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 thiserror.workspace = true
 tokio-stream = "0.1"
 

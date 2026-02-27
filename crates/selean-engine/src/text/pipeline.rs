@@ -12,7 +12,7 @@ use crate::renderer::{
     BLEND_STATE_ADD, PersistentInstanceBuffer, QUAD_INDICES, QuadVertex, STENCIL_NOOP,
     STENCIL_TEST, SharedPipelineResources, create_pipeline_with_blend,
 };
-use crate::scene::{BlendMode, ClipRect, Color, SceneNode, TransformColumns};
+use crate::scene::{BlendMode, ClipRect, Color, SceneNode, SceneNodeKind, TransformColumns};
 
 use super::atlas::GlyphAtlas;
 use super::cache::{GlyphCache, GlyphCacheKey};
@@ -198,7 +198,13 @@ impl TextBatch {
             return;
         }
 
-        let color = node.fill.unwrap_or(Color::BLACK);
+        // Priority: text_color > node.fill > BLACK.
+        let color = match &node.kind {
+            SceneNodeKind::Text { text_color, .. } => {
+                text_color.unwrap_or_else(|| node.fill.unwrap_or(Color::BLACK))
+            }
+            _ => node.fill.unwrap_or(Color::BLACK),
+        };
         let transform = node.world_transform.to_gpu_columns();
         let is_add = match node.blend_mode {
             BlendMode::Add => true,
@@ -687,5 +693,142 @@ mod tests {
         assert!((instance.uv_rect[2] - 148.0 / 1024.0).abs() < f32::EPSILON);
         assert!((instance.uv_rect[3] - 248.0 / 1024.0).abs() < f32::EPSILON);
         assert_eq!(instance.clip_rect, ClipRect::INFINITE.to_array());
+    }
+
+    #[test]
+    fn text_color_used_over_fill() {
+        use crate::scene::{BoundingBox, FontStyle, SceneNodeKind, TextAlign};
+        use selean_common::types::NodeId;
+
+        let mut batch = TextBatch::new();
+        let red = Color::new(1.0, 0.0, 0.0, 1.0);
+        let blue = Color::new(0.0, 0.0, 1.0, 1.0);
+
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "T".to_string(),
+            SceneNodeKind::Text {
+                content: "A".to_string(),
+                font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: Some(red),
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 30.0),
+        );
+        node.fill = Some(blue); // Fill is blue, text_color is red.
+
+        let mut cache = GlyphCache::new();
+        let key = GlyphCacheKey {
+            glyph_id: 1,
+            sdf_size: 48,
+        };
+        cache.insert(
+            key,
+            super::super::cache::CachedGlyph {
+                atlas_region: AtlasRegion {
+                    x: 0,
+                    y: 0,
+                    width: 48,
+                    height: 48,
+                },
+                bearing_x: 0.0,
+                bearing_y: 36.0,
+                glyph_width_funits: 600,
+                glyph_height_funits: 800,
+            },
+        );
+
+        let positioned = vec![PositionedGlyph {
+            glyph_id: 1,
+            x: 5.0,
+            y: 5.0,
+            width: 10.0,
+            height: 12.0,
+        }];
+
+        batch.push_text_node(&node, &positioned, &cache, 48);
+        batch.finalize_uvs(1024, 1024);
+        assert_eq!(batch.len(), 1);
+
+        let instance = &batch.normal_instances[0];
+        // text_color (red) should be used, not fill (blue).
+        assert!(
+            (instance.color[0] - 1.0).abs() < f32::EPSILON,
+            "red channel"
+        );
+        assert!(
+            (instance.color[2] - 0.0).abs() < f32::EPSILON,
+            "blue channel"
+        );
+    }
+
+    #[test]
+    fn text_color_fallback_to_fill() {
+        use crate::scene::{BoundingBox, FontStyle, SceneNodeKind, TextAlign};
+        use selean_common::types::NodeId;
+
+        let mut batch = TextBatch::new();
+        let green = Color::new(0.0, 1.0, 0.0, 1.0);
+
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "T".to_string(),
+            SceneNodeKind::Text {
+                content: "A".to_string(),
+                font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None, // No text_color set.
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 30.0),
+        );
+        node.fill = Some(green);
+
+        let mut cache = GlyphCache::new();
+        let key = GlyphCacheKey {
+            glyph_id: 1,
+            sdf_size: 48,
+        };
+        cache.insert(
+            key,
+            super::super::cache::CachedGlyph {
+                atlas_region: AtlasRegion {
+                    x: 0,
+                    y: 0,
+                    width: 48,
+                    height: 48,
+                },
+                bearing_x: 0.0,
+                bearing_y: 36.0,
+                glyph_width_funits: 600,
+                glyph_height_funits: 800,
+            },
+        );
+
+        let positioned = vec![PositionedGlyph {
+            glyph_id: 1,
+            x: 5.0,
+            y: 5.0,
+            width: 10.0,
+            height: 12.0,
+        }];
+
+        batch.push_text_node(&node, &positioned, &cache, 48);
+        batch.finalize_uvs(1024, 1024);
+        assert_eq!(batch.len(), 1);
+
+        let instance = &batch.normal_instances[0];
+        // Should use fill (green) since text_color is None.
+        assert!(
+            (instance.color[1] - 1.0).abs() < f32::EPSILON,
+            "green channel"
+        );
     }
 }

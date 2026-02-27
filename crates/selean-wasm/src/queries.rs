@@ -4,6 +4,8 @@
 //! React frontend. All return `String` (JSON) to cross the WASM FFI boundary.
 
 use selean_common::types::NodeId;
+use selean_engine::persistence::Document;
+use selean_engine::renderer::Camera;
 use selean_engine::scene::{SceneGraph, SceneNode};
 use serde::{Deserialize, Serialize};
 
@@ -276,6 +278,136 @@ pub fn get_scene_json(scene: &SceneGraph) -> String {
         node_count: nodes.len(),
         nodes,
         roots,
+    };
+    serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Serializable page metadata for the frontend.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageInfo {
+    /// Page ID as a string.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Page width.
+    pub width: f32,
+    /// Page height.
+    pub height: f32,
+    /// Number of nodes on this page.
+    pub node_count: usize,
+}
+
+/// Returns JSON array of page metadata from a document.
+pub fn get_pages_json(doc: &Document) -> String {
+    let pages: Vec<PageInfo> = doc
+        .pages()
+        .iter()
+        .map(|p| PageInfo {
+            id: p.id.to_string(),
+            name: p.name.clone(),
+            width: p.width,
+            height: p.height,
+            node_count: p.scene.len(),
+        })
+        .collect();
+    serde_json::to_string(&pages).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Serializable scene tree node for the layer panel.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TreeNode {
+    /// Node ID.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Node kind tag.
+    pub kind: String,
+    /// Visibility.
+    pub visible: bool,
+    /// Recursive children.
+    pub children: Vec<TreeNode>,
+}
+
+/// Builds a `TreeNode` recursively from the scene graph.
+fn build_tree_node(scene: &SceneGraph, node_id: NodeId) -> Option<TreeNode> {
+    let node = scene.get(node_id)?;
+    let children = node
+        .children
+        .iter()
+        .filter_map(|&cid| build_tree_node(scene, cid))
+        .collect();
+    Some(TreeNode {
+        id: node.id.to_string(),
+        name: node.name.clone(),
+        kind: node.kind.kind_tag().to_string(),
+        visible: node.visible,
+        children,
+    })
+}
+
+/// Returns JSON array of `TreeNode` from the scene roots.
+pub fn get_scene_tree_json(scene: &SceneGraph) -> String {
+    let tree: Vec<TreeNode> = scene
+        .roots()
+        .iter()
+        .filter_map(|&rid| build_tree_node(scene, rid))
+        .collect();
+    serde_json::to_string(&tree).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Serializable bounding box for the selection overlay.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SelectionBounds {
+    /// World-space x.
+    pub x: f32,
+    /// World-space y.
+    pub y: f32,
+    /// Width.
+    pub width: f32,
+    /// Height.
+    pub height: f32,
+}
+
+/// Returns JSON array of world-space bounds for each selected node.
+pub fn get_selected_bounds_json(scene: &SceneGraph, selected_ids: &[NodeId]) -> String {
+    let bounds: Vec<SelectionBounds> = selected_ids
+        .iter()
+        .filter_map(|&id| scene.get(id))
+        .map(|node| SelectionBounds {
+            x: node.bounds.x,
+            y: node.bounds.y,
+            width: node.bounds.width,
+            height: node.bounds.height,
+        })
+        .collect();
+    serde_json::to_string(&bounds).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Serializable camera state for the frontend overlay.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CameraInfo {
+    /// Pan X in world space.
+    pub pan_x: f32,
+    /// Pan Y in world space.
+    pub pan_y: f32,
+    /// Zoom level.
+    pub zoom: f32,
+    /// Viewport width.
+    pub viewport_width: f32,
+    /// Viewport height.
+    pub viewport_height: f32,
+}
+
+/// Returns JSON representation of the camera state.
+pub fn get_camera_json(camera: &Camera) -> String {
+    let (pan_x, pan_y) = camera.pan();
+    let (viewport_width, viewport_height) = camera.viewport_size();
+    let info = CameraInfo {
+        pan_x,
+        pan_y,
+        zoom: camera.zoom(),
+        viewport_width,
+        viewport_height,
     };
     serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string())
 }
@@ -595,5 +727,130 @@ mod tests {
         assert!(json.contains("\"clip_mode\":\"None\""));
         assert!(json.contains("\"scroll_offset\":[5.0,10.0]"));
         assert!(json.contains("\"corner_radius\":[0.0,0.0,0.0,0.0]"));
+    }
+
+    // --- Page and tree query tests ---
+
+    #[test]
+    fn get_pages_json_default_document() {
+        let doc = Document::new();
+        let json = get_pages_json(&doc);
+        let pages: Vec<PageInfo> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].name, "Page 1");
+        assert_eq!(pages[0].node_count, 0);
+    }
+
+    #[test]
+    fn get_pages_json_multi_page() {
+        let mut doc = Document::new();
+        doc.active_page_mut()
+            .scene
+            .add_root(make_frame("A", 0.0, 0.0, 50.0, 50.0));
+        doc.add_page("Page 2", 800.0, 600.0);
+
+        let json = get_pages_json(&doc);
+        let pages: Vec<PageInfo> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].node_count, 1);
+        assert_eq!(pages[1].node_count, 0);
+        assert_eq!(pages[1].width, 800.0);
+    }
+
+    #[test]
+    fn get_scene_tree_json_empty() {
+        let scene = SceneGraph::new();
+        let json = get_scene_tree_json(&scene);
+        let tree: Vec<TreeNode> = serde_json::from_str(&json).expect("valid json");
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn get_scene_tree_json_flat() {
+        let mut scene = SceneGraph::new();
+        scene.add_root(make_frame("A", 0.0, 0.0, 50.0, 50.0));
+        scene.add_root(make_frame("B", 100.0, 0.0, 50.0, 50.0));
+
+        let json = get_scene_tree_json(&scene);
+        let tree: Vec<TreeNode> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(tree.len(), 2);
+        assert!(tree[0].children.is_empty());
+        assert!(tree[1].children.is_empty());
+    }
+
+    #[test]
+    fn get_scene_tree_json_nested() {
+        let mut scene = SceneGraph::new();
+        let parent = make_frame("Parent", 0.0, 0.0, 200.0, 200.0);
+        let pid = scene.add_root(parent);
+        let child = make_frame("Child", 10.0, 10.0, 50.0, 50.0);
+        scene.add_child(pid, child);
+
+        let json = get_scene_tree_json(&scene);
+        let tree: Vec<TreeNode> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "Parent");
+        assert_eq!(tree[0].children.len(), 1);
+        assert_eq!(tree[0].children[0].name, "Child");
+    }
+
+    #[test]
+    fn get_selected_bounds_no_selection() {
+        let scene = SceneGraph::new();
+        let json = get_selected_bounds_json(&scene, &[]);
+        let bounds: Vec<super::SelectionBounds> = serde_json::from_str(&json).expect("valid json");
+        assert!(bounds.is_empty());
+    }
+
+    #[test]
+    fn get_selected_bounds_single_node() {
+        let mut scene = SceneGraph::new();
+        let node = make_frame("A", 10.0, 20.0, 100.0, 50.0);
+        let id = node.id;
+        scene.add_root(node);
+
+        let json = get_selected_bounds_json(&scene, &[id]);
+        let bounds: Vec<super::SelectionBounds> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(bounds.len(), 1);
+        assert!((bounds[0].x - 10.0).abs() < f32::EPSILON);
+        assert!((bounds[0].width - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn get_selected_bounds_multi_node() {
+        let mut scene = SceneGraph::new();
+        let n1 = make_frame("A", 0.0, 0.0, 50.0, 50.0);
+        let id1 = n1.id;
+        scene.add_root(n1);
+        let n2 = make_frame("B", 100.0, 100.0, 60.0, 40.0);
+        let id2 = n2.id;
+        scene.add_root(n2);
+
+        let json = get_selected_bounds_json(&scene, &[id1, id2]);
+        let bounds: Vec<super::SelectionBounds> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(bounds.len(), 2);
+    }
+
+    #[test]
+    fn get_camera_json_defaults() {
+        let camera = Camera::new(800.0, 600.0);
+        let json = get_camera_json(&camera);
+        let info: super::CameraInfo = serde_json::from_str(&json).expect("valid json");
+        assert!((info.pan_x).abs() < f32::EPSILON);
+        assert!((info.pan_y).abs() < f32::EPSILON);
+        assert!((info.zoom - 1.0).abs() < f32::EPSILON);
+        assert!((info.viewport_width - 800.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn tree_node_includes_visibility() {
+        let mut scene = SceneGraph::new();
+        let mut node = make_frame("Hidden", 0.0, 0.0, 50.0, 50.0);
+        node.visible = false;
+        scene.add_root(node);
+
+        let json = get_scene_tree_json(&scene);
+        let tree: Vec<TreeNode> = serde_json::from_str(&json).expect("valid json");
+        assert!(!tree[0].visible);
     }
 }

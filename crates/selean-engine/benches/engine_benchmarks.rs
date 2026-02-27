@@ -23,7 +23,9 @@ use selean_common::types::NodeId;
 use selean_engine::image::{decode_image, decode_image_resized};
 use selean_engine::input::{InputEvent, InputHandler, Modifiers, PointerButton};
 use selean_engine::renderer::{Camera, RectBatch, TexturedQuadBatch};
-use selean_engine::scene::{BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind, Transform2D};
+use selean_engine::scene::{
+    BlendMode, BoundingBox, Color, SceneNode, SceneNodeKind, TextAlign, Transform2D,
+};
 use selean_engine::text::{
     AtlasRegion, FontData, GlyphCache, GlyphCacheKey, SdfParams, ShapedRun, TextBatch,
     generate_glyph_sdf, layout_text, shape_text,
@@ -479,7 +481,18 @@ fn bench_text_layout(c: &mut Criterion) {
     for &(label, run) in cases {
         group.bench_with_input(BenchmarkId::new("layout", label), &label, |b, _| {
             b.iter(|| {
-                black_box(layout_text(run, &cache, ascender, 100.0, 200.0, 16.0, 48));
+                black_box(layout_text(
+                    run,
+                    &cache,
+                    ascender,
+                    100.0,
+                    200.0,
+                    16.0,
+                    48,
+                    200.0,
+                    TextAlign::Left,
+                    1.2,
+                ));
             });
         });
     }
@@ -544,8 +557,18 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                     }
 
                     // Layout.
-                    let layout =
-                        layout_text(&shaped, &cache, font.ascender(), 100.0, 200.0, 16.0, 48);
+                    let layout = layout_text(
+                        &shaped,
+                        &cache,
+                        font.ascender(),
+                        100.0,
+                        200.0,
+                        16.0,
+                        48,
+                        200.0,
+                        TextAlign::Left,
+                        1.2,
+                    );
 
                     black_box(layout);
                 });
@@ -568,6 +591,9 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                 200.0,
                 16.0,
                 48,
+                200.0,
+                TextAlign::Left,
+                1.2,
             ));
         });
     });

@@ -152,7 +152,7 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
     setLoading(true);
 
     try {
-      const sceneSummary = editor.get_scene_json();
+      let sceneSummary = editor.get_scene_json();
 
       // Add user message to structured conversation.
       conversationRef.current = [
@@ -217,6 +217,9 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
             content: resultContent,
           });
         }
+
+        // Refresh scene summary so Claude sees updated state.
+        sceneSummary = editor.get_scene_json();
 
         // Add tool results as a user message (Claude API expects this).
         conversationRef.current = [

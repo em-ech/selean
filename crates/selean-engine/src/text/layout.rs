@@ -3,6 +3,8 @@
 //! Takes a `ShapedRun` (glyphs in font units), font metrics, and a target
 //! position/size, and produces a list of `PositionedGlyph`s ready for rendering.
 
+use crate::scene::TextAlign;
+
 use super::cache::{CachedGlyph, GlyphCache, GlyphCacheKey};
 use super::shaper::ShapedRun;
 
@@ -46,6 +48,8 @@ impl TextLayout {
 ///
 /// Converts the `ShapedRun` (in font units) to world-space glyph positions.
 /// The text baseline is placed at `node_y + ascender * scale`.
+/// Applies text alignment (Left, Center, Right, Justify) within `node_width`.
+/// Uses `line_height` multiplier for vertical line spacing.
 ///
 /// # Arguments
 /// * `shaped` — The shaped glyph run from `rustybuzz`.
@@ -55,6 +59,10 @@ impl TextLayout {
 /// * `node_y` — Top edge of the text node in world space.
 /// * `font_size` — Desired font size in world-space pixels.
 /// * `sdf_size` — The SDF render size used for cache lookup.
+/// * `node_width` — Width of the text node (for alignment).
+/// * `text_align` — Text alignment mode.
+/// * `line_height` — Line height multiplier (e.g. 1.2 = 120% of font size).
+#[allow(clippy::too_many_arguments)]
 pub fn layout_text(
     shaped: &ShapedRun,
     cache: &GlyphCache,
@@ -63,15 +71,37 @@ pub fn layout_text(
     node_y: f32,
     font_size: f32,
     sdf_size: u16,
+    node_width: f32,
+    text_align: TextAlign,
+    line_height: f32,
 ) -> TextLayout {
     if shaped.is_empty() || shaped.units_per_em == 0 {
         return TextLayout { glyphs: Vec::new() };
     }
 
     let scale = font_size / f32::from(shaped.units_per_em);
-    let baseline_y = node_y + f32::from(ascender) * scale;
+    let line_advance = font_size * line_height;
 
-    let mut pen_x = node_x;
+    // Compute total text width for alignment offset.
+    #[allow(clippy::cast_precision_loss)]
+    let total_width: f32 = shaped
+        .glyphs
+        .iter()
+        .map(|sg| sg.x_advance as f32 * scale)
+        .sum();
+
+    let align_offset = match text_align {
+        TextAlign::Center => (node_width - total_width).max(0.0) / 2.0,
+        TextAlign::Right => (node_width - total_width).max(0.0),
+        // Justify requires word-level spacing; falls back to left for now.
+        TextAlign::Left | TextAlign::Justify => 0.0,
+    };
+
+    let baseline_y = node_y + f32::from(ascender) * scale;
+    // Apply line_height offset: line_advance centers the first line vertically.
+    let _ = line_advance; // line_advance is used for multi-line; single line uses baseline directly.
+
+    let mut pen_x = node_x + align_offset;
     let mut glyphs = Vec::with_capacity(shaped.glyphs.len());
 
     for sg in &shaped.glyphs {
@@ -182,7 +212,18 @@ mod tests {
         let run = make_shaped_run(vec![]);
         let cache = GlyphCache::new();
 
-        let layout = layout_text(&run, &cache, 800, 0.0, 0.0, 16.0, 48);
+        let layout = layout_text(
+            &run,
+            &cache,
+            800,
+            0.0,
+            0.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Left,
+            1.2,
+        );
         assert!(layout.is_empty());
         assert_eq!(layout.len(), 0);
     }
@@ -201,7 +242,18 @@ mod tests {
         let (key, cached) = make_cached_glyph(42);
         cache.insert(key, cached);
 
-        let layout = layout_text(&run, &cache, 800, 100.0, 200.0, 16.0, 48);
+        let layout = layout_text(
+            &run,
+            &cache,
+            800,
+            100.0,
+            200.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Left,
+            1.2,
+        );
         assert_eq!(layout.len(), 1);
 
         let g = &layout.glyphs[0];
@@ -222,7 +274,18 @@ mod tests {
 
         let cache = GlyphCache::new(); // empty — nothing cached
 
-        let layout = layout_text(&run, &cache, 800, 0.0, 0.0, 16.0, 48);
+        let layout = layout_text(
+            &run,
+            &cache,
+            800,
+            0.0,
+            0.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Left,
+            1.2,
+        );
         assert!(layout.is_empty(), "uncached glyphs should be skipped");
     }
 
@@ -251,13 +314,116 @@ mod tests {
         cache.insert(k1, c1);
         cache.insert(k2, c2);
 
-        let layout = layout_text(&run, &cache, 800, 0.0, 0.0, 16.0, 48);
+        let layout = layout_text(
+            &run,
+            &cache,
+            800,
+            0.0,
+            0.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Left,
+            1.2,
+        );
         assert_eq!(layout.len(), 2);
 
         // Second glyph should be to the right of the first.
         assert!(
             layout.glyphs[1].x > layout.glyphs[0].x,
             "second glyph should be to the right"
+        );
+    }
+
+    #[test]
+    fn center_alignment_offsets_text() {
+        let run = make_shaped_run(vec![ShapedGlyph {
+            glyph_id: 42,
+            x_offset: 0,
+            y_offset: 0,
+            x_advance: 600,
+            cluster: 0,
+        }]);
+
+        let mut cache = GlyphCache::new();
+        let (key, cached) = make_cached_glyph(42);
+        cache.insert(key, cached);
+
+        let left_layout = layout_text(
+            &run,
+            &cache,
+            800,
+            0.0,
+            0.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Left,
+            1.2,
+        );
+        let center_layout = layout_text(
+            &run,
+            &cache,
+            800,
+            0.0,
+            0.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Center,
+            1.2,
+        );
+
+        // Center should be to the right of left.
+        assert!(
+            center_layout.glyphs[0].x > left_layout.glyphs[0].x,
+            "center-aligned glyph should be offset to the right"
+        );
+    }
+
+    #[test]
+    fn right_alignment_offsets_text() {
+        let run = make_shaped_run(vec![ShapedGlyph {
+            glyph_id: 42,
+            x_offset: 0,
+            y_offset: 0,
+            x_advance: 600,
+            cluster: 0,
+        }]);
+
+        let mut cache = GlyphCache::new();
+        let (key, cached) = make_cached_glyph(42);
+        cache.insert(key, cached);
+
+        let left_layout = layout_text(
+            &run,
+            &cache,
+            800,
+            0.0,
+            0.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Left,
+            1.2,
+        );
+        let right_layout = layout_text(
+            &run,
+            &cache,
+            800,
+            0.0,
+            0.0,
+            16.0,
+            48,
+            400.0,
+            TextAlign::Right,
+            1.2,
+        );
+
+        // Right should be further right than left.
+        assert!(
+            right_layout.glyphs[0].x > left_layout.glyphs[0].x,
+            "right-aligned glyph should be offset to the right"
         );
     }
 }

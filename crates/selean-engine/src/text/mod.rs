@@ -27,7 +27,20 @@ use selean_common::error::EngineError;
 use selean_common::types::NodeId;
 use tracing::debug;
 
-use crate::scene::{DirtyFlags, SceneNode};
+use crate::scene::{DirtyFlags, SceneNode, SceneNodeKind, TextAlign};
+
+/// Extracts `text_align` and `line_height` from a `SceneNodeKind::Text`.
+/// Returns defaults for non-text nodes.
+fn extract_text_props(kind: &SceneNodeKind) -> (TextAlign, f32) {
+    match kind {
+        SceneNodeKind::Text {
+            text_align,
+            line_height,
+            ..
+        } => (*text_align, *line_height),
+        _ => (TextAlign::Left, 1.2),
+    }
+}
 
 /// Per-node cached text processing state.
 ///
@@ -178,6 +191,7 @@ impl TextSystem {
             }
             TextCacheAction::RelayoutOnly => {
                 // Content unchanged — re-layout from cached shaped run.
+                let (text_align, line_height) = extract_text_props(&node.kind);
                 let layout = if let Some(cached) = self.node_text_cache.get(&node.id) {
                     layout_text(
                         &cached.shaped,
@@ -187,6 +201,9 @@ impl TextSystem {
                         node.bounds.y,
                         font_size,
                         sdf_size,
+                        node.bounds.width,
+                        text_align,
+                        line_height,
                     )
                 } else {
                     return Ok(());
@@ -209,6 +226,7 @@ impl TextSystem {
 
                 self.ensure_glyphs_cached(&shaped, device, queue)?;
 
+                let (text_align, line_height) = extract_text_props(&node.kind);
                 let layout = layout_text(
                     &shaped,
                     &self.cache,
@@ -217,6 +235,9 @@ impl TextSystem {
                     node.bounds.y,
                     font_size,
                     sdf_size,
+                    node.bounds.width,
+                    text_align,
+                    line_height,
                 );
 
                 batch.push_text_node(node, &layout.glyphs, &self.cache, sdf_size);

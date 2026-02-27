@@ -1,18 +1,22 @@
 //! WASM binding layer for the Selean design platform.
 //!
 //! Provides the [`SeleanEditor`] struct as the single entry point exposed
-//! to JavaScript via `wasm-bindgen`. Owns the `SceneGraph`, `Renderer`,
-//! `Camera`, `InputHandler`, and `CommandHistory`.
+//! to JavaScript via `wasm-bindgen`. Owns the `Document`, `Renderer`,
+//! `Camera`, `InputHandler`, and per-page `CommandHistory` instances.
 
 pub mod command_descriptor;
 pub mod queries;
 
 use selean_engine::command::CommandHistory;
 use selean_engine::input::{InputHandler, Modifiers, PointerButton};
+use selean_engine::persistence::Document;
 use selean_engine::scene::{Color, SceneGraph};
 
 use command_descriptor::{CommandDescriptor, create_frame_node};
-use queries::{get_node_json, get_scene_json, get_selected_ids_json, query_nodes_json};
+use queries::{
+    get_node_json, get_pages_json, get_scene_json, get_scene_tree_json, get_selected_bounds_json,
+    get_selected_ids_json, query_nodes_json,
+};
 
 /// Core editor state, independent of the WASM runtime.
 ///
@@ -20,23 +24,45 @@ use queries::{get_node_json, get_scene_json, get_selected_ids_json, query_nodes_
 /// directly; on WASM it is wrapped by the `wasm_bindgen`-exported
 /// `SeleanEditor` facade below.
 pub struct EditorState {
-    /// The scene graph (document model).
-    pub scene: SceneGraph,
+    /// The multi-page document model.
+    pub document: Document,
+    /// Per-page undo/redo histories, parallel to `document.pages()`.
+    histories: Vec<CommandHistory>,
     /// Input handler (hover, selection, drag, camera).
     pub input: InputHandler,
-    /// Undo/redo history.
-    pub history: CommandHistory,
 }
 
 impl EditorState {
-    /// Creates a new editor with an empty scene.
+    /// Creates a new editor with a default single-page document.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            scene: SceneGraph::new(),
+            document: Document::new(),
+            histories: vec![CommandHistory::new()],
             input: InputHandler::new(),
-            history: CommandHistory::new(),
         }
+    }
+
+    /// Returns a reference to the active page's scene graph.
+    #[must_use]
+    pub fn scene(&self) -> &SceneGraph {
+        &self.document.active_page().scene
+    }
+
+    /// Returns a mutable reference to the active page's scene graph.
+    #[must_use]
+    pub fn scene_mut(&mut self) -> &mut SceneGraph {
+        &mut self.document.active_page_mut().scene
+    }
+
+    /// Returns a reference to the active page's command history.
+    fn history(&self) -> &CommandHistory {
+        &self.histories[self.document.active_page_index()]
+    }
+
+    /// Returns a mutable reference to the active page's command history.
+    fn history_mut(&mut self) -> &mut CommandHistory {
+        &mut self.histories[self.document.active_page_index()]
     }
 
     /// Executes a command described by a JSON string.
@@ -48,56 +74,61 @@ impl EditorState {
             Err(_) => return false,
         };
         let cmd = desc.into_command();
-        self.history.execute(cmd, &mut self.scene)
+        let idx = self.document.active_page_index();
+        self.histories[idx].execute(cmd, &mut self.document.active_page_mut().scene)
     }
 
     /// Executes a [`CommandDescriptor`] directly.
     pub fn execute_descriptor(&mut self, desc: CommandDescriptor) -> bool {
         let cmd = desc.into_command();
-        self.history.execute(cmd, &mut self.scene)
+        let idx = self.document.active_page_index();
+        self.histories[idx].execute(cmd, &mut self.document.active_page_mut().scene)
     }
 
-    /// Undoes the last command.
+    /// Undoes the last command on the active page.
     pub fn undo(&mut self) -> bool {
-        self.history.undo(&mut self.scene)
+        let idx = self.document.active_page_index();
+        self.histories[idx].undo(&mut self.document.active_page_mut().scene)
     }
 
-    /// Redoes the last undone command.
+    /// Redoes the last undone command on the active page.
     pub fn redo(&mut self) -> bool {
-        self.history.redo(&mut self.scene)
+        let idx = self.document.active_page_index();
+        self.histories[idx].redo(&mut self.document.active_page_mut().scene)
     }
 
     /// Begins a command group (for drag operations or LLM batches).
     pub fn begin_group(&mut self, label: &str) {
-        self.history.begin_group(label);
+        self.history_mut().begin_group(label);
     }
 
     /// Ends the active command group.
     pub fn end_group(&mut self) {
-        self.history.end_group();
+        self.history_mut().end_group();
     }
 
     /// Cancels the active command group, undoing all commands in it.
     pub fn cancel_group(&mut self) {
-        self.history.cancel_group(&mut self.scene);
+        let idx = self.document.active_page_index();
+        self.histories[idx].cancel_group(&mut self.document.active_page_mut().scene);
     }
 
-    /// Returns whether undo is available.
+    /// Returns whether undo is available on the active page.
     #[must_use]
     pub fn can_undo(&self) -> bool {
-        self.history.can_undo()
+        self.history().can_undo()
     }
 
-    /// Returns whether redo is available.
+    /// Returns whether redo is available on the active page.
     #[must_use]
     pub fn can_redo(&self) -> bool {
-        self.history.can_redo()
+        self.history().can_redo()
     }
 
     /// Returns JSON for a single node.
     #[must_use]
     pub fn get_node_json(&self, node_id: &str) -> String {
-        get_node_json(&self.scene, node_id)
+        get_node_json(self.scene(), node_id)
     }
 
     /// Returns JSON array of selected node IDs.
@@ -106,10 +137,144 @@ impl EditorState {
         get_selected_ids_json(self.input.state().selection.ids())
     }
 
-    /// Returns JSON representation of the full scene.
+    /// Returns JSON representation of the active page's scene.
     #[must_use]
     pub fn get_scene_json(&self) -> String {
-        get_scene_json(&self.scene)
+        get_scene_json(self.scene())
+    }
+
+    /// Returns JSON array of page metadata.
+    #[must_use]
+    pub fn get_pages_json(&self) -> String {
+        get_pages_json(&self.document)
+    }
+
+    /// Switches the active page by ID string. Returns `true` on success.
+    pub fn set_active_page(&mut self, page_id: &str) -> bool {
+        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+            return false;
+        };
+        let id = selean_common::types::PageId::from_uuid(uuid);
+        self.document.set_active_page(id)
+    }
+
+    /// Adds a new page and returns its ID as a string.
+    pub fn add_page(&mut self, name: &str, width: f32, height: f32) -> String {
+        let id = self.document.add_page(name, width, height);
+        self.histories.push(CommandHistory::new());
+        id.to_string()
+    }
+
+    /// Removes a page by ID string. Returns `true` on success.
+    pub fn remove_page(&mut self, page_id: &str) -> bool {
+        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+            return false;
+        };
+        let id = selean_common::types::PageId::from_uuid(uuid);
+        // Find the page index before removing so we can remove the matching history.
+        let Some(index) = self.document.pages().iter().position(|p| p.id == id) else {
+            return false;
+        };
+        if !self.document.remove_page(id) {
+            return false;
+        }
+        self.histories.remove(index);
+        true
+    }
+
+    /// Returns a JSON tree of the active page's scene hierarchy.
+    #[must_use]
+    pub fn get_scene_tree_json(&self) -> String {
+        get_scene_tree_json(self.scene())
+    }
+
+    /// Returns JSON array of world-space bounds for selected nodes.
+    #[must_use]
+    pub fn get_selected_bounds_json(&self) -> String {
+        get_selected_bounds_json(self.scene(), self.input.state().selection.ids())
+    }
+
+    /// Clears the current selection.
+    pub fn clear_selection(&mut self) {
+        self.input.state_mut().selection.clear();
+    }
+
+    /// Executes a page-level tool call (`add_page`, `remove_page`, `set_active_page`).
+    #[allow(clippy::cast_possible_truncation)]
+    fn execute_page_tool(&mut self, tool_name: &str, args: &serde_json::Value) -> String {
+        match tool_name {
+            "add_page" => {
+                let name = args
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("New Page");
+                let width = args
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1920.0) as f32;
+                let height = args
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1080.0) as f32;
+                let id = self.add_page(name, width, height);
+                serde_json::json!({
+                    "success": true,
+                    "result": { "page_id": id }
+                })
+                .to_string()
+            }
+            "remove_page" => {
+                let page_id = args
+                    .get("page_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let ok = self.remove_page(page_id);
+                serde_json::json!({
+                    "success": ok,
+                    "result": { "removed": ok }
+                })
+                .to_string()
+            }
+            "set_active_page" => {
+                let page_id = args
+                    .get("page_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let ok = self.set_active_page(page_id);
+                serde_json::json!({
+                    "success": ok,
+                    "result": { "switched": ok }
+                })
+                .to_string()
+            }
+            _ => serde_json::json!({
+                "success": false,
+                "error": format!("unknown page tool: {tool_name}")
+            })
+            .to_string(),
+        }
+    }
+
+    /// Imports a document from JSON, replacing the current state.
+    /// Returns `true` on success.
+    pub fn import_document(&mut self, json: &str) -> bool {
+        match selean_engine::persistence::load_document(json) {
+            Ok(doc) => {
+                let page_count = doc.page_count();
+                self.document = doc;
+                self.histories = (0..page_count).map(|_| CommandHistory::new()).collect();
+                self.input = InputHandler::new();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Exports the current document as a JSON string.
+    #[must_use]
+    pub fn export_document_json(&self) -> String {
+        selean_engine::persistence::save_document(&self.document)
+            .unwrap_or_else(|_| "{}".to_string())
     }
 
     /// Executes an LLM tool call by name and JSON args string.
@@ -132,19 +297,20 @@ impl EditorState {
         // Handle read-only tools directly.
         if selean_llm::is_read_only_tool(tool_name) {
             let result = match tool_name {
-                "get_scene_summary" => get_scene_json(&self.scene),
+                "get_scene_summary" => get_scene_json(self.scene()),
                 "get_node" => {
                     let node_id = args
                         .get("node_id")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("");
-                    get_node_json(&self.scene, node_id)
+                    get_node_json(self.scene(), node_id)
                 }
                 "query_nodes" => {
                     let name_pattern = args.get("name_pattern").and_then(serde_json::Value::as_str);
                     let kind = args.get("kind").and_then(serde_json::Value::as_str);
-                    query_nodes_json(&self.scene, name_pattern, kind)
+                    query_nodes_json(self.scene(), name_pattern, kind)
                 }
+                "get_pages" => get_pages_json(&self.document),
                 _ => "null".to_string(),
             };
             return serde_json::json!({
@@ -152,6 +318,11 @@ impl EditorState {
                 "result": serde_json::from_str::<serde_json::Value>(&result).unwrap_or(serde_json::Value::Null)
             })
             .to_string();
+        }
+
+        // Handle page-level mutations (operate on Document, not CommandDescriptor).
+        if selean_llm::is_page_tool(tool_name) {
+            return self.execute_page_tool(tool_name, &args);
         }
 
         // Map tool call to command descriptors.
@@ -169,7 +340,7 @@ impl EditorState {
         // Wrap multiple descriptors in a group.
         let use_group = descriptors.len() > 1;
         if use_group {
-            self.history.begin_group(tool_name);
+            self.history_mut().begin_group(tool_name);
         }
 
         let mut executed = 0;
@@ -185,9 +356,10 @@ impl EditorState {
 
         if use_group {
             if failed {
-                self.history.cancel_group(&mut self.scene);
+                let idx = self.document.active_page_index();
+                self.histories[idx].cancel_group(&mut self.document.active_page_mut().scene);
             } else {
-                self.history.end_group();
+                self.history_mut().end_group();
             }
         }
 
@@ -198,7 +370,7 @@ impl EditorState {
         .to_string()
     }
 
-    /// Sets up a demo scene with colored rectangles.
+    /// Sets up a demo scene with colored rectangles on the active page.
     pub fn setup_demo_scene(&mut self) {
         let colors = [
             (
@@ -245,7 +417,7 @@ impl EditorState {
 
         for (name, x, y, w, h, color) in &colors {
             let node = create_frame_node(name, *x, *y, *w, *h, Some(*color), [8.0; 4]);
-            self.scene.add_root(node);
+            self.scene_mut().add_root(node);
         }
     }
 
@@ -396,7 +568,7 @@ mod wasm {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            self.renderer.render_frame(&mut self.state.scene, &view);
+            self.renderer.render_frame(self.state.scene_mut(), &view);
             frame.present();
         }
 
@@ -417,7 +589,7 @@ mod wasm {
             };
             let events = self.state.input.handle_event(
                 &event,
-                &mut self.state.scene,
+                self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
             serde_json::to_string(&events).unwrap_or_default()
@@ -442,7 +614,7 @@ mod wasm {
             };
             let events = self.state.input.handle_event(
                 &event,
-                &mut self.state.scene,
+                self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
             serde_json::to_string(&events).unwrap_or_default()
@@ -467,7 +639,7 @@ mod wasm {
             };
             let events = self.state.input.handle_event(
                 &event,
-                &mut self.state.scene,
+                self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
             serde_json::to_string(&events).unwrap_or_default()
@@ -494,7 +666,7 @@ mod wasm {
             };
             let events = self.state.input.handle_event(
                 &event,
-                &mut self.state.scene,
+                self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
             serde_json::to_string(&events).unwrap_or_default()
@@ -545,6 +717,62 @@ mod wasm {
         pub fn can_redo(&self) -> bool {
             self.state.can_redo()
         }
+
+        /// Returns JSON array of page metadata.
+        pub fn get_pages_json(&self) -> String {
+            self.state.get_pages_json()
+        }
+
+        /// Switches the active page by ID.
+        pub fn set_active_page(&mut self, page_id: &str) -> bool {
+            self.state.set_active_page(page_id)
+        }
+
+        /// Adds a page and returns its ID as a string.
+        pub fn add_page(&mut self, name: &str, width: f32, height: f32) -> String {
+            self.state.add_page(name, width, height)
+        }
+
+        /// Removes a page by ID.
+        pub fn remove_page(&mut self, page_id: &str) -> bool {
+            self.state.remove_page(page_id)
+        }
+
+        /// Returns the scene tree as JSON.
+        pub fn get_scene_tree_json(&self) -> String {
+            self.state.get_scene_tree_json()
+        }
+
+        /// Imports a document from JSON.
+        pub fn import_document(&mut self, json: &str) -> bool {
+            self.state.import_document(json)
+        }
+
+        /// Exports the document as JSON.
+        pub fn export_document_json(&self) -> String {
+            self.state.export_document_json()
+        }
+
+        /// Returns JSON array of world-space bounds for selected nodes.
+        pub fn get_selected_bounds_json(&self) -> String {
+            self.state.get_selected_bounds_json()
+        }
+
+        /// Returns JSON camera state (pan, zoom, viewport).
+        pub fn get_camera_json(&self) -> String {
+            crate::queries::get_camera_json(self.renderer.camera())
+        }
+
+        /// Clears the current selection.
+        pub fn clear_selection(&mut self) {
+            self.state.clear_selection();
+        }
+
+        /// Registers an image asset from raw bytes.
+        /// Returns `true` on success.
+        pub fn register_image_asset(&mut self, asset_ref: &str, data: &[u8]) -> bool {
+            self.renderer.register_image_asset(asset_ref, data).is_ok()
+        }
     }
 }
 
@@ -557,7 +785,7 @@ mod tests {
     #[test]
     fn editor_state_new_has_empty_scene() {
         let state = EditorState::new();
-        assert!(state.scene.is_empty());
+        assert!(state.scene().is_empty());
         assert!(!state.can_undo());
         assert!(!state.can_redo());
     }
@@ -566,15 +794,15 @@ mod tests {
     fn setup_demo_scene_creates_five_nodes() {
         let mut state = EditorState::new();
         state.setup_demo_scene();
-        assert_eq!(state.scene.len(), 5);
-        assert_eq!(state.scene.roots().len(), 5);
+        assert_eq!(state.scene().len(), 5);
+        assert_eq!(state.scene().roots().len(), 5);
     }
 
     #[test]
     fn execute_command_json_valid() {
         let mut state = EditorState::new();
         state.setup_demo_scene();
-        let id = state.scene.roots()[0];
+        let id = state.scene().roots()[0];
 
         let json = format!(
             r#"{{"type":"SetFill","node_id":"{id}","fill":{{"r":1.0,"g":0.0,"b":0.0,"a":1.0}}}}"#,
@@ -593,31 +821,31 @@ mod tests {
     fn undo_redo_cycle() {
         let mut state = EditorState::new();
         state.setup_demo_scene();
-        let id = state.scene.roots()[0];
+        let id = state.scene().roots()[0];
 
-        let original_fill = state.scene.get(id).unwrap().fill;
+        let original_fill = state.scene().get(id).unwrap().fill;
 
         let desc = CommandDescriptor::SetFill {
             node_id: id,
             fill: Some(Color::WHITE),
         };
         state.execute_descriptor(desc);
-        assert_ne!(state.scene.get(id).unwrap().fill, original_fill);
+        assert_ne!(state.scene().get(id).unwrap().fill, original_fill);
 
         state.undo();
-        assert_eq!(state.scene.get(id).unwrap().fill, original_fill);
+        assert_eq!(state.scene().get(id).unwrap().fill, original_fill);
 
         state.redo();
-        assert_ne!(state.scene.get(id).unwrap().fill, original_fill);
+        assert_ne!(state.scene().get(id).unwrap().fill, original_fill);
     }
 
     #[test]
     fn command_group_for_drag() {
         let mut state = EditorState::new();
         state.setup_demo_scene();
-        let id = state.scene.roots()[0];
+        let id = state.scene().roots()[0];
 
-        let original_bounds = state.scene.get(id).unwrap().bounds;
+        let original_bounds = state.scene().get(id).unwrap().bounds;
 
         state.begin_group("Drag");
         state.execute_descriptor(CommandDescriptor::SetBounds {
@@ -631,16 +859,16 @@ mod tests {
         state.end_group();
 
         // Single undo reverts both
-        assert_eq!(state.history.undo_count(), 1);
+        assert_eq!(state.history().undo_count(), 1);
         state.undo();
-        assert_eq!(state.scene.get(id).unwrap().bounds, original_bounds);
+        assert_eq!(state.scene().get(id).unwrap().bounds, original_bounds);
     }
 
     #[test]
     fn get_node_json_returns_data() {
         let mut state = EditorState::new();
         state.setup_demo_scene();
-        let id = state.scene.roots()[0];
+        let id = state.scene().roots()[0];
         let json = state.get_node_json(&id.to_string());
         assert!(json.contains("Red Box"));
     }
@@ -681,14 +909,14 @@ mod tests {
     fn execute_tool_call_set_fill() {
         let mut state = EditorState::new();
         state.setup_demo_scene();
-        let id = state.scene.roots()[0];
+        let id = state.scene().roots()[0];
 
         let args = format!(r#"{{"node_id":"{id}","r":0.0,"g":1.0,"b":0.0,"a":1.0}}"#);
         let result = state.execute_tool_call("set_fill", &args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["success"], true);
 
-        let node = state.scene.get(id).unwrap();
+        let node = state.scene().get(id).unwrap();
         let fill = node.fill.unwrap();
         assert!((fill.g - 1.0).abs() < f32::EPSILON);
     }
@@ -700,7 +928,7 @@ mod tests {
         let result = state.execute_tool_call("create_node", args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["success"], true);
-        assert_eq!(state.scene.len(), 1);
+        assert_eq!(state.scene().len(), 1);
     }
 
     #[test]
@@ -734,7 +962,7 @@ mod tests {
     fn execute_tool_call_get_node() {
         let mut state = EditorState::new();
         state.setup_demo_scene();
-        let id = state.scene.roots()[0];
+        let id = state.scene().roots()[0];
         let args = format!(r#"{{"node_id":"{id}"}}"#);
         let result = state.execute_tool_call("get_node", &args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -761,14 +989,14 @@ mod tests {
         // First create a Text node.
         let create_args = r#"{"name":"Label","kind":"Text","x":0,"y":0,"width":200,"height":30,"text_content":"Hello"}"#;
         state.execute_tool_call("create_node", create_args);
-        assert_eq!(state.scene.len(), 6);
+        assert_eq!(state.scene().len(), 6);
 
         // Find the text node.
         let text_id = state
-            .scene
+            .scene()
             .roots()
             .iter()
-            .find(|&&rid| state.scene.get(rid).is_some_and(|n| n.name == "Label"))
+            .find(|&&rid| state.scene().get(rid).is_some_and(|n| n.name == "Label"))
             .copied()
             .unwrap();
 
@@ -780,7 +1008,7 @@ mod tests {
 
         // Single undo should revert both.
         state.undo();
-        let node = state.scene.get(text_id).unwrap();
+        let node = state.scene().get(text_id).unwrap();
         match &node.kind {
             selean_engine::scene::SceneNodeKind::Text {
                 content, font_size, ..
@@ -790,5 +1018,197 @@ mod tests {
             }
             _ => panic!("expected Text node"),
         }
+    }
+
+    // --- Phase 12: New tests for Document-based EditorState ---
+
+    #[test]
+    fn get_pages_json_returns_default_page() {
+        let state = EditorState::new();
+        let json = state.get_pages_json();
+        let pages: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0]["name"], "Page 1");
+        assert_eq!(pages[0]["node_count"], 0);
+    }
+
+    #[test]
+    fn add_page_increases_count() {
+        let mut state = EditorState::new();
+        let id_str = state.add_page("Page 2", 800.0, 600.0);
+        assert!(!id_str.is_empty());
+        let pages: Vec<serde_json::Value> = serde_json::from_str(&state.get_pages_json()).unwrap();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[1]["name"], "Page 2");
+    }
+
+    #[test]
+    fn remove_page_decreases_count() {
+        let mut state = EditorState::new();
+        let id_str = state.add_page("Temp", 800.0, 600.0);
+        assert!(state.remove_page(&id_str));
+        let pages: Vec<serde_json::Value> = serde_json::from_str(&state.get_pages_json()).unwrap();
+        assert_eq!(pages.len(), 1);
+    }
+
+    #[test]
+    fn remove_last_page_fails() {
+        let mut state = EditorState::new();
+        let pages: Vec<serde_json::Value> = serde_json::from_str(&state.get_pages_json()).unwrap();
+        let id = pages[0]["id"].as_str().unwrap();
+        assert!(!state.remove_page(id));
+    }
+
+    #[test]
+    fn set_active_page_switches_scene() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene(); // 5 nodes on page 1
+        let page2_id = state.add_page("Page 2", 800.0, 600.0);
+        assert!(state.set_active_page(&page2_id));
+        assert_eq!(state.scene().len(), 0); // page 2 is empty
+        // Switch back
+        let pages: Vec<serde_json::Value> = serde_json::from_str(&state.get_pages_json()).unwrap();
+        let page1_id = pages[0]["id"].as_str().unwrap();
+        assert!(state.set_active_page(page1_id));
+        assert_eq!(state.scene().len(), 5);
+    }
+
+    #[test]
+    fn undo_per_page_isolation() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        // Make a change on page 1
+        state.execute_descriptor(CommandDescriptor::SetFill {
+            node_id: id,
+            fill: Some(Color::WHITE),
+        });
+        assert!(state.can_undo());
+
+        // Switch to page 2
+        let page2_id = state.add_page("Page 2", 800.0, 600.0);
+        assert!(state.set_active_page(&page2_id));
+        // Page 2 has no undo
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn import_document_replaces_state() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        assert_eq!(state.scene().len(), 5);
+
+        // Export, add a page, re-import
+        let mut doc = Document::new();
+        doc.add_page("Imported Page 2", 1280.0, 720.0);
+        let json = selean_engine::persistence::save_document(&doc).unwrap();
+        assert!(state.import_document(&json));
+        assert_eq!(state.document.page_count(), 2);
+        assert_eq!(state.scene().len(), 0); // empty document
+    }
+
+    #[test]
+    fn export_document_json_roundtrips() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        state.add_page("Page 2", 800.0, 600.0);
+
+        let json = state.export_document_json();
+        let mut state2 = EditorState::new();
+        assert!(state2.import_document(&json));
+        assert_eq!(state2.document.page_count(), 2);
+        assert_eq!(state2.scene().len(), 5); // page 1 has demo scene
+    }
+
+    #[test]
+    fn execute_tool_call_get_pages() {
+        let mut state = EditorState::new();
+        let result = state.execute_tool_call("get_pages", "{}");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        let pages = parsed["result"].as_array().unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0]["name"], "Page 1");
+    }
+
+    #[test]
+    fn execute_tool_call_add_page() {
+        let mut state = EditorState::new();
+        let result = state.execute_tool_call(
+            "add_page",
+            r#"{"name":"Slide 2","width":1920,"height":1080}"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert!(parsed["result"]["page_id"].as_str().is_some());
+        assert_eq!(state.document.page_count(), 2);
+    }
+
+    #[test]
+    fn execute_tool_call_set_active_page() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let page2_id = state.add_page("Page 2", 800.0, 600.0);
+        let result =
+            state.execute_tool_call("set_active_page", &format!(r#"{{"page_id":"{page2_id}"}}"#));
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert_eq!(state.scene().len(), 0);
+    }
+
+    #[test]
+    fn execute_tool_call_remove_page() {
+        let mut state = EditorState::new();
+        let page2_id = state.add_page("Temp", 800.0, 600.0);
+        let result =
+            state.execute_tool_call("remove_page", &format!(r#"{{"page_id":"{page2_id}"}}"#));
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert_eq!(state.document.page_count(), 1);
+    }
+
+    #[test]
+    fn clear_selection_empties_set() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        state.input.state_mut().selection.select_one(id);
+        assert!(!state.input.state().selection.is_empty());
+        state.clear_selection();
+        assert!(state.input.state().selection.is_empty());
+    }
+
+    #[test]
+    fn get_scene_tree_json_hierarchy() {
+        let mut state = EditorState::new();
+        // Add a parent and a child
+        let parent = create_frame_node(
+            "Parent",
+            0.0,
+            0.0,
+            200.0,
+            200.0,
+            Some(Color::WHITE),
+            [0.0; 4],
+        );
+        let parent_id = parent.id;
+        state.scene_mut().add_root(parent);
+        let child = create_frame_node(
+            "Child",
+            10.0,
+            10.0,
+            50.0,
+            50.0,
+            Some(Color::WHITE),
+            [0.0; 4],
+        );
+        state.scene_mut().add_child(parent_id, child);
+
+        let json = state.get_scene_tree_json();
+        let tree: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0]["name"], "Parent");
+        assert_eq!(tree[0]["children"].as_array().unwrap().len(), 1);
+        assert_eq!(tree[0]["children"][0]["name"], "Child");
     }
 }

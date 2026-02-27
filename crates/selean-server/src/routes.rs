@@ -215,7 +215,7 @@ mod tests {
             .await
             .unwrap();
         let tools: Vec<selean_llm::ToolDefinition> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(tools.len(), 22);
+        assert_eq!(tools.len(), 26);
     }
 
     #[tokio::test]

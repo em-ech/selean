@@ -52,6 +52,10 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         tool_add_child_node(),
         tool_reparent_node(),
         tool_reorder_children(),
+        tool_get_pages(),
+        tool_add_page(),
+        tool_remove_page(),
+        tool_set_active_page(),
     ]
 }
 
@@ -59,7 +63,17 @@ pub fn all_tools() -> Vec<ToolDefinition> {
 /// without producing mutations).
 #[must_use]
 pub fn is_read_only_tool(name: &str) -> bool {
-    matches!(name, "get_scene_summary" | "get_node" | "query_nodes")
+    matches!(
+        name,
+        "get_scene_summary" | "get_node" | "query_nodes" | "get_pages"
+    )
+}
+
+/// Returns `true` if the given tool name is a page-level mutation that
+/// operates on the `Document` directly (not through `CommandDescriptor`).
+#[must_use]
+pub fn is_page_tool(name: &str) -> bool {
+    matches!(name, "add_page" | "remove_page" | "set_active_page")
 }
 
 /// Maps a tool call (name + JSON args) to a list of `CommandDescriptor` values.
@@ -716,6 +730,45 @@ fn map_reorder_children(args: &serde_json::Value) -> Result<Vec<CommandDescripto
     }])
 }
 
+// --- Page management tool definitions ---
+
+fn tool_get_pages() -> ToolDefinition {
+    ToolBuilder::new(
+        "get_pages",
+        "List all pages in the document with their names, dimensions, and node counts. Use this to understand the multi-page structure before navigating or modifying pages.",
+    )
+    .build()
+}
+
+fn tool_add_page() -> ToolDefinition {
+    ToolBuilder::new(
+        "add_page",
+        "Add a new blank page to the document. Returns the new page's ID.",
+    )
+    .string_param("name", "Name for the new page (e.g. 'Slide 2')")
+    .number_param("width", "Page width in pixels (e.g. 1920)")
+    .number_param("height", "Page height in pixels (e.g. 1080)")
+    .build()
+}
+
+fn tool_remove_page() -> ToolDefinition {
+    ToolBuilder::new(
+        "remove_page",
+        "Remove a page from the document by its ID. Cannot remove the last remaining page.",
+    )
+    .string_param("page_id", "The UUID of the page to remove")
+    .build()
+}
+
+fn tool_set_active_page() -> ToolDefinition {
+    ToolBuilder::new(
+        "set_active_page",
+        "Switch the active page being edited. All subsequent scene operations will apply to this page.",
+    )
+    .string_param("page_id", "The UUID of the page to make active")
+    .build()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
@@ -724,7 +777,7 @@ mod tests {
     #[test]
     fn all_tools_returns_expected_count() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 22);
+        assert_eq!(tools.len(), 26);
     }
 
     #[test]
@@ -784,9 +837,21 @@ mod tests {
         assert!(is_read_only_tool("get_scene_summary"));
         assert!(is_read_only_tool("get_node"));
         assert!(is_read_only_tool("query_nodes"));
+        assert!(is_read_only_tool("get_pages"));
         assert!(!is_read_only_tool("set_fill"));
         assert!(!is_read_only_tool("create_node"));
+        assert!(!is_read_only_tool("add_page"));
         assert!(!is_read_only_tool("nonexistent"));
+    }
+
+    #[test]
+    fn is_page_tool_identifies_page_mutations() {
+        assert!(is_page_tool("add_page"));
+        assert!(is_page_tool("remove_page"));
+        assert!(is_page_tool("set_active_page"));
+        assert!(!is_page_tool("get_pages"));
+        assert!(!is_page_tool("set_fill"));
+        assert!(!is_page_tool("nonexistent"));
     }
 
     #[test]
@@ -796,6 +861,44 @@ mod tests {
             assert!(result.is_ok());
             assert!(result.unwrap().is_empty());
         }
+    }
+
+    #[test]
+    fn page_tool_definitions_have_correct_params() {
+        let tools = all_tools();
+        let get_pages = tools.iter().find(|t| t.name == "get_pages").unwrap();
+        assert!(get_pages.input_schema.required.is_empty());
+
+        let add_page = tools.iter().find(|t| t.name == "add_page").unwrap();
+        assert!(add_page.input_schema.required.contains(&"name".to_string()));
+        assert!(
+            add_page
+                .input_schema
+                .required
+                .contains(&"width".to_string())
+        );
+        assert!(
+            add_page
+                .input_schema
+                .required
+                .contains(&"height".to_string())
+        );
+
+        let remove_page = tools.iter().find(|t| t.name == "remove_page").unwrap();
+        assert!(
+            remove_page
+                .input_schema
+                .required
+                .contains(&"page_id".to_string())
+        );
+
+        let set_active = tools.iter().find(|t| t.name == "set_active_page").unwrap();
+        assert!(
+            set_active
+                .input_schema
+                .required
+                .contains(&"page_id".to_string())
+        );
     }
 
     fn test_node_id() -> NodeId {

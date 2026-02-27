@@ -60,6 +60,27 @@ export interface SeleanEditor {
   get_scene_tree_json(): string;
   import_document(json: string): boolean;
   export_document_json(): string;
+  get_selected_bounds_json(): string;
+  get_camera_json(): string;
+  clear_selection(): void;
+  register_image_asset(asset_ref: string, data: Uint8Array): boolean;
+}
+
+/** Bounding box of a selected node in world space */
+export interface SelectionBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Camera state for overlay coordinate transforms */
+export interface CameraInfo {
+  pan_x: number;
+  pan_y: number;
+  zoom: number;
+  viewport_width: number;
+  viewport_height: number;
 }
 
 export type EditorStatus = "loading" | "ready" | "error" | "unsupported";
