@@ -4,6 +4,17 @@ import { SelectionOverlay } from "./SelectionOverlay";
 import { createMockEditorRef, DEFAULT_CAMERA } from "../test/mock-editor";
 import type { SelectionBounds } from "../wasm/types";
 
+const EXPECTED_CURSORS = [
+  "nwse-resize", // 0: top-left
+  "ns-resize", // 1: top-center
+  "nesw-resize", // 2: top-right
+  "ew-resize", // 3: middle-right
+  "nwse-resize", // 4: bottom-right
+  "ns-resize", // 5: bottom-center
+  "nesw-resize", // 6: bottom-left
+  "ew-resize", // 7: middle-left
+];
+
 describe("SelectionOverlay", () => {
   it("renders nothing when no selection bounds", async () => {
     const ref = createMockEditorRef({
@@ -23,7 +34,7 @@ describe("SelectionOverlay", () => {
 
   it("renders selection box when bounds exist", async () => {
     const bounds: SelectionBounds[] = [
-      { x: 100, y: 200, width: 300, height: 150 },
+      { node_id: "node-1", x: 100, y: 200, width: 300, height: 150 },
     ];
     const ref = createMockEditorRef({
       get_selected_bounds_json: vi.fn().mockReturnValue(JSON.stringify(bounds)),
@@ -46,8 +57,8 @@ describe("SelectionOverlay", () => {
 
   it("renders multiple selection boxes for multi-select", async () => {
     const bounds: SelectionBounds[] = [
-      { x: 0, y: 0, width: 100, height: 100 },
-      { x: 200, y: 200, width: 50, height: 50 },
+      { node_id: "node-1", x: 0, y: 0, width: 100, height: 100 },
+      { node_id: "node-2", x: 200, y: 200, width: 50, height: 50 },
     ];
     const ref = createMockEditorRef({
       get_selected_bounds_json: vi.fn().mockReturnValue(JSON.stringify(bounds)),
@@ -78,5 +89,52 @@ describe("SelectionOverlay", () => {
     });
 
     expect(getCameraFn).toHaveBeenCalled();
+  });
+
+  it("renders directional cursors on resize handles", async () => {
+    const bounds: SelectionBounds[] = [
+      { node_id: "node-1", x: 100, y: 100, width: 200, height: 200 },
+    ];
+    const ref = createMockEditorRef({
+      get_selected_bounds_json: vi.fn().mockReturnValue(JSON.stringify(bounds)),
+      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+    });
+    const { container } = render(<SelectionOverlay editorRef={ref} />);
+
+    await waitFor(() => {
+      const overlay = container.firstChild;
+      expect(overlay).not.toBeNull();
+    });
+
+    const selectionBox = container.firstChild!.firstChild as HTMLElement;
+    const handles = Array.from(selectionBox.children) as HTMLElement[];
+    expect(handles.length).toBe(8);
+
+    for (let i = 0; i < 8; i++) {
+      expect(handles[i].style.cursor).toBe(EXPECTED_CURSORS[i]);
+    }
+  });
+
+  it("handles have data-handle-index attributes", async () => {
+    const bounds: SelectionBounds[] = [
+      { node_id: "node-1", x: 0, y: 0, width: 100, height: 100 },
+    ];
+    const ref = createMockEditorRef({
+      get_selected_bounds_json: vi.fn().mockReturnValue(JSON.stringify(bounds)),
+      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+    });
+    const { container } = render(<SelectionOverlay editorRef={ref} />);
+
+    await waitFor(() => {
+      const overlay = container.firstChild;
+      expect(overlay).not.toBeNull();
+    });
+
+    const selectionBox = container.firstChild!.firstChild as HTMLElement;
+    const handles = Array.from(selectionBox.children) as HTMLElement[];
+
+    for (let i = 0; i < 8; i++) {
+      expect(handles[i].getAttribute("data-handle-index")).toBe(String(i));
+    }
   });
 });

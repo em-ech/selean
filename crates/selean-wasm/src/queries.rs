@@ -358,6 +358,8 @@ pub fn get_scene_tree_json(scene: &SceneGraph) -> String {
 /// Serializable bounding box for the selection overlay.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SelectionBounds {
+    /// Node ID as a string.
+    pub node_id: String,
     /// World-space x.
     pub x: f32,
     /// World-space y.
@@ -374,6 +376,7 @@ pub fn get_selected_bounds_json(scene: &SceneGraph, selected_ids: &[NodeId]) -> 
         .iter()
         .filter_map(|&id| scene.get(id))
         .map(|node| SelectionBounds {
+            node_id: node.id.to_string(),
             x: node.bounds.x,
             y: node.bounds.y,
             width: node.bounds.width,
@@ -812,6 +815,7 @@ mod tests {
         let json = get_selected_bounds_json(&scene, &[id]);
         let bounds: Vec<super::SelectionBounds> = serde_json::from_str(&json).expect("valid json");
         assert_eq!(bounds.len(), 1);
+        assert_eq!(bounds[0].node_id, id.to_string());
         assert!((bounds[0].x - 10.0).abs() < f32::EPSILON);
         assert!((bounds[0].width - 100.0).abs() < f32::EPSILON);
     }

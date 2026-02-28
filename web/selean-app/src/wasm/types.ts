@@ -64,10 +64,14 @@ export interface SeleanEditor {
   get_camera_json(): string;
   clear_selection(): void;
   register_image_asset(asset_ref: string, data: Uint8Array): boolean;
+  begin_group(label: string): void;
+  end_group(): void;
+  cancel_group(): void;
 }
 
 /** Bounding box of a selected node in world space */
 export interface SelectionBounds {
+  node_id: string;
   x: number;
   y: number;
   width: number;

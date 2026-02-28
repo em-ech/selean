@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { CameraInfo, SelectionBounds, SeleanEditor } from "../wasm/types";
+import { useResizeDrag } from "../hooks/useResizeDrag";
 
 interface SelectionOverlayProps {
   editorRef: React.RefObject<SeleanEditor | null>;
+  onSceneChanged?: () => void;
 }
 
 /** Handle size in CSS pixels. */
@@ -10,14 +12,36 @@ const HANDLE_SIZE = 8;
 /** Selection box border color. */
 const SELECTION_COLOR = "#4a90d9";
 
+/** Cursor style per handle index. */
+const HANDLE_CURSORS: string[] = [
+  "nwse-resize", // 0: top-left
+  "ns-resize", // 1: top-center
+  "nesw-resize", // 2: top-right
+  "ew-resize", // 3: middle-right
+  "nwse-resize", // 4: bottom-right
+  "ns-resize", // 5: bottom-center
+  "nesw-resize", // 6: bottom-left
+  "ew-resize", // 7: middle-left
+];
+
 /**
  * HTML overlay that renders selection bounding boxes and resize handles
  * on top of the WebGPU canvas. Updates on every animation frame.
  */
-export function SelectionOverlay({ editorRef }: SelectionOverlayProps) {
+export function SelectionOverlay({
+  editorRef,
+  onSceneChanged,
+}: SelectionOverlayProps) {
   const [bounds, setBounds] = useState<SelectionBounds[]>([]);
   const [camera, setCamera] = useState<CameraInfo | null>(null);
   const rafRef = useRef(0);
+
+  const { getHandleProps, isDragging } = useResizeDrag({
+    editorRef,
+    bounds,
+    camera,
+    onSceneChanged,
+  });
 
   useEffect(() => {
     function poll() {
@@ -43,7 +67,13 @@ export function SelectionOverlay({ editorRef }: SelectionOverlayProps) {
   return (
     <div style={overlayStyle}>
       {bounds.map((b, i) => (
-        <SelectionBox key={i} bounds={b} camera={camera} />
+        <SelectionBox
+          key={i}
+          bounds={b}
+          camera={camera}
+          getHandleProps={getHandleProps}
+          isDragging={isDragging}
+        />
       ))}
     </div>
   );
@@ -52,15 +82,26 @@ export function SelectionOverlay({ editorRef }: SelectionOverlayProps) {
 interface SelectionBoxProps {
   bounds: SelectionBounds;
   camera: CameraInfo;
+  getHandleProps: (index: number) => {
+    onPointerDown: (e: React.PointerEvent) => void;
+  };
+  isDragging: boolean;
 }
 
-function SelectionBox({ bounds, camera }: SelectionBoxProps) {
+function SelectionBox({
+  bounds,
+  camera,
+  getHandleProps,
+  isDragging,
+}: SelectionBoxProps) {
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const screenX =
-    (bounds.x - camera.pan_x) * camera.zoom + camera.viewport_width / 2;
+    ((bounds.x - camera.pan_x) * camera.zoom + camera.viewport_width / 2) / dpr;
   const screenY =
-    (bounds.y - camera.pan_y) * camera.zoom + camera.viewport_height / 2;
-  const screenW = bounds.width * camera.zoom;
-  const screenH = bounds.height * camera.zoom;
+    ((bounds.y - camera.pan_y) * camera.zoom + camera.viewport_height / 2) /
+    dpr;
+  const screenW = (bounds.width * camera.zoom) / dpr;
+  const screenH = (bounds.height * camera.zoom) / dpr;
 
   const half = HANDLE_SIZE / 2;
 
@@ -90,6 +131,7 @@ function SelectionBox({ bounds, camera }: SelectionBoxProps) {
       {handles.map((h, i) => (
         <div
           key={i}
+          data-handle-index={i}
           style={{
             position: "absolute",
             left: h.x,
@@ -98,9 +140,10 @@ function SelectionBox({ bounds, camera }: SelectionBoxProps) {
             height: HANDLE_SIZE,
             background: "#fff",
             border: `1px solid ${SELECTION_COLOR}`,
-            pointerEvents: "auto",
-            cursor: "pointer",
+            pointerEvents: isDragging ? "none" : "auto",
+            cursor: HANDLE_CURSORS[i],
           }}
+          {...getHandleProps(i)}
         />
       ))}
     </div>

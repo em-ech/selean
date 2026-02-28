@@ -346,7 +346,10 @@ export function App() {
       <div style={bodyStyle}>
         {status === "ready" && (
           <ErrorBoundary name="Chat">
-            <ChatSidebar editorRef={editorRef} onSceneChanged={onSceneChanged} />
+            <ChatSidebar
+              editorRef={editorRef}
+              onSceneChanged={onSceneChanged}
+            />
           </ErrorBoundary>
         )}
         {status === "ready" && (
@@ -361,7 +364,12 @@ export function App() {
               onInteractionEvents={handleInteractionEvents}
             />
           </ErrorBoundary>
-          {status === "ready" && <SelectionOverlay editorRef={editorRef} />}
+          {status === "ready" && (
+            <SelectionOverlay
+              editorRef={editorRef}
+              onSceneChanged={onSceneChanged}
+            />
+          )}
           {creationHandlers && (
             <div style={creationOverlayStyle} {...creationHandlers} />
           )}

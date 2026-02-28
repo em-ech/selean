@@ -768,6 +768,21 @@ mod wasm {
             self.state.clear_selection();
         }
 
+        /// Begins a command group (for drag gestures).
+        pub fn begin_group(&mut self, label: &str) {
+            self.state.begin_group(label);
+        }
+
+        /// Ends the active command group.
+        pub fn end_group(&mut self) {
+            self.state.end_group();
+        }
+
+        /// Cancels the active command group, undoing all commands in it.
+        pub fn cancel_group(&mut self) {
+            self.state.cancel_group();
+        }
+
         /// Registers an image asset from raw bytes.
         /// Returns `true` on success.
         pub fn register_image_asset(&mut self, asset_ref: &str, data: &[u8]) -> bool {
@@ -1210,5 +1225,28 @@ mod tests {
         assert_eq!(tree[0]["name"], "Parent");
         assert_eq!(tree[0]["children"].as_array().unwrap().len(), 1);
         assert_eq!(tree[0]["children"][0]["name"], "Child");
+    }
+
+    #[test]
+    fn cancel_group_reverts_all_commands() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let original_bounds = state.scene().get(id).unwrap().bounds;
+
+        state.begin_group("Resize");
+        state.execute_descriptor(CommandDescriptor::SetBounds {
+            node_id: id,
+            bounds: BoundingBox::new(50.0, 50.0, 200.0, 200.0),
+        });
+        state.execute_descriptor(CommandDescriptor::SetBounds {
+            node_id: id,
+            bounds: BoundingBox::new(60.0, 60.0, 250.0, 250.0),
+        });
+        state.cancel_group();
+
+        assert_eq!(state.scene().get(id).unwrap().bounds, original_bounds);
+        // No undo entry should exist for the cancelled group.
+        assert!(!state.can_undo());
     }
 }

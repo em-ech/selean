@@ -91,6 +91,9 @@ export function createMockEditor(
     get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
     clear_selection: vi.fn(),
     register_image_asset: vi.fn().mockReturnValue(true),
+    begin_group: vi.fn(),
+    end_group: vi.fn(),
+    cancel_group: vi.fn(),
   };
 
   return { ...defaults, ...overrides } as SeleanEditor;
