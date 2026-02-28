@@ -6,6 +6,27 @@ import type { ChatEvent, SeleanEditor } from "../wasm/types";
 const MAX_TOOL_ITERATIONS = 10;
 
 /**
+ * Merges consecutive text content blocks into a single block.
+ * Many small streaming text deltas should be one block in conversation
+ * history to avoid wasting tokens.
+ */
+export function consolidateTextBlocks(blocks: unknown[]): unknown[] {
+  const result: unknown[] = [];
+  for (const block of blocks) {
+    const b = block as Record<string, unknown>;
+    const last = result[result.length - 1] as
+      | Record<string, unknown>
+      | undefined;
+    if (b.type === "text" && last?.type === "text") {
+      last.text = (last.text as string) + (b.text as string);
+    } else {
+      result.push({ ...b });
+    }
+  }
+  return result;
+}
+
+/**
  * A structured message in the conversation history.
  * `content` is either a plain string or an array of content blocks
  * (text / tool_use / tool_result) for Claude API structured messages.
@@ -38,6 +59,7 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [streamingText, setStreamingText] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Full structured conversation for the Claude API.
@@ -56,13 +78,15 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
   /**
    * Sends a single request to the server and reads back the SSE stream.
    * Returns the parsed events and the raw content blocks for structured
-   * conversation history.
+   * conversation history. Invokes `onTextDelta` for each text chunk as
+   * it arrives so the UI can display streaming text.
    */
   const sendRequest = useCallback(
     async (
       messages: ConversationMessage[],
       sceneSummary: string,
       signal: AbortSignal,
+      onTextDelta?: (delta: string) => void,
     ): Promise<{
       events: ChatEvent[];
       rawBlocks: unknown[];
@@ -115,6 +139,7 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
 
             if (event.type === "text") {
               rawBlocks.push({ type: "text", text: event.text });
+              onTextDelta?.(event.text);
             } else if (event.type === "tool_use") {
               rawBlocks.push({
                 type: "tool_use",
@@ -150,6 +175,11 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
     setDisplayMessages((prev) => [...prev, { role: "user", text }]);
     setInput("");
     setLoading(true);
+    setStreamingText(null);
+
+    const onTextDelta = (delta: string) => {
+      setStreamingText((prev) => (prev === null ? delta : prev + delta));
+    };
 
     try {
       let sceneSummary = editor.get_scene_json();
@@ -161,7 +191,6 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
       ];
 
       let iteration = 0;
-      let assistantTextAccum = "";
 
       while (iteration < MAX_TOOL_ITERATIONS) {
         iteration++;
@@ -170,25 +199,19 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
           conversationRef.current,
           sceneSummary,
           controller.signal,
+          onTextDelta,
         );
 
-        // Collect text from this turn.
-        let turnText = "";
-        for (const event of events) {
-          if (event.type === "text") {
-            turnText += event.text;
-          }
-        }
-        assistantTextAccum += turnText;
+        // Consolidate many small text deltas into fewer blocks.
+        const consolidated = consolidateTextBlocks(rawBlocks);
 
         // Add assistant response to conversation as structured content blocks.
         conversationRef.current = [
           ...conversationRef.current,
-          { role: "assistant", content: rawBlocks },
+          { role: "assistant", content: consolidated },
         ];
 
         if (stopReason !== "tool_use") {
-          // Done. No more tool calls needed.
           break;
         }
 
@@ -228,17 +251,22 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
         ];
       }
 
-      if (assistantTextAccum) {
-        setDisplayMessages((prev) => [
-          ...prev,
-          { role: "assistant", text: assistantTextAccum },
-        ]);
-      }
+      // Finalize: move streaming text into display messages.
+      setStreamingText((current) => {
+        if (current) {
+          setDisplayMessages((prev) => [
+            ...prev,
+            { role: "assistant", text: current },
+          ]);
+        }
+        return null;
+      });
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
+      setStreamingText(null);
       setDisplayMessages((prev) => [
         ...prev,
         { role: "assistant", text: `Error: ${message}` },
@@ -254,7 +282,7 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
     <div style={panelStyle}>
       <div style={headerStyle}>Chat</div>
       <div style={messagesStyle}>
-        {displayMessages.length === 0 && (
+        {displayMessages.length === 0 && !streamingText && (
           <div style={emptyStyle}>
             Ask me to modify the design. For example: "Make the red box blue" or
             "Add a new green rectangle".
@@ -271,12 +299,18 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
             <div style={msgTextStyle}>{msg.text}</div>
           </div>
         ))}
-        {loading && (
+        {loading && streamingText === null && (
           <div style={assistantMsgStyle}>
             <div style={msgRoleStyle}>Assistant</div>
             <div style={{ ...msgTextStyle, color: colors.textDim }}>
               Thinking...
             </div>
+          </div>
+        )}
+        {streamingText !== null && (
+          <div style={assistantMsgStyle}>
+            <div style={msgRoleStyle}>Assistant</div>
+            <div style={msgTextStyle}>{streamingText}</div>
           </div>
         )}
         <div ref={messagesEndRef} />

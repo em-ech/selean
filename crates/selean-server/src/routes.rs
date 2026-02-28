@@ -14,8 +14,9 @@ use axum::{
     routing::{get, post},
 };
 use std::convert::Infallible;
+use tokio_stream::StreamExt;
 
-use crate::chat::{ChatEvent, ChatRequest, response_to_events, send_chat_request};
+use crate::chat::{ChatRequest, send_chat_request_streaming};
 use crate::state::AppState;
 
 /// Creates the Axum router with all API routes.
@@ -44,34 +45,15 @@ async fn chat_handler(
     State(state): State<AppState>,
     Json(request): Json<ChatRequest>,
 ) -> impl IntoResponse {
-    let result = send_chat_request(&state, &request).await;
+    let rx = send_chat_request_streaming(&state, &request);
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|event| {
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        Ok::<_, Infallible>(Event::default().data(json))
+    });
 
-    match result {
-        Ok(response) => {
-            let events = response_to_events(&response);
-            let stream = tokio_stream::iter(events.into_iter().map(|event| {
-                let json = serde_json::to_string(&event).unwrap_or_default();
-                Ok::<_, Infallible>(Event::default().data(json))
-            }));
-
-            Sse::new(stream)
-                .keep_alive(KeepAlive::default())
-                .into_response()
-        }
-        Err(e) => {
-            let error_event = ChatEvent::Error {
-                message: e.to_string(),
-            };
-            let json = serde_json::to_string(&error_event).unwrap_or_default();
-            let stream = tokio_stream::iter(std::iter::once(Ok::<_, Infallible>(
-                Event::default().data(json),
-            )));
-
-            Sse::new(stream)
-                .keep_alive(KeepAlive::default())
-                .into_response()
-        }
-    }
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 /// PPTX content type for responses.

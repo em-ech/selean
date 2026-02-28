@@ -4,6 +4,7 @@
 //! processing the response. The actual SSE streaming to the client is
 //! handled in [`super::routes`].
 
+use futures_util::StreamExt;
 use selean_llm::{ToolDefinition, all_tools};
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +60,7 @@ pub struct ClaudeResponse {
 }
 
 /// SSE event sent to the frontend.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum ChatEvent {
     /// Text chunk from Claude.
@@ -190,6 +191,87 @@ pub fn response_to_events(response: &ClaudeResponse) -> Vec<ChatEvent> {
     });
 
     events
+}
+
+/// Sends a chat request to Claude with streaming enabled and returns a
+/// receiver that yields [`ChatEvent`] values as they arrive.
+///
+/// Spawns a background tokio task that reads the byte stream from Claude,
+/// parses SSE events via [`crate::stream::StreamParser`], and forwards
+/// parsed events through an `mpsc` channel.
+pub fn send_chat_request_streaming(
+    state: &AppState,
+    request: &ChatRequest,
+) -> tokio::sync::mpsc::Receiver<ChatEvent> {
+    let mut body = build_claude_request(state, request);
+    // build_claude_request always returns a JSON object, so as_object_mut is safe.
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("stream".to_string(), serde_json::json!(true));
+    }
+
+    let client = state.http_client.clone();
+    let api_key = state.api_key.clone();
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+
+    tokio::spawn(async move {
+        let response = client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &*api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await;
+
+        let response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx
+                    .send(ChatEvent::Error {
+                        message: format!("HTTP error: {e}"),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body_text = response.text().await.unwrap_or_default();
+            let _ = tx
+                .send(ChatEvent::Error {
+                    message: format!("API error (status {status}): {body_text}"),
+                })
+                .await;
+            return;
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut parser = crate::stream::StreamParser::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = match chunk_result {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx
+                        .send(ChatEvent::Error {
+                            message: format!("Stream error: {e}"),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let events = parser.feed(&chunk);
+            for event in events {
+                if tx.send(event).await.is_err() {
+                    return;
+                }
+            }
+        }
+    });
+
+    rx
 }
 
 /// Errors from chat operations.
