@@ -7,6 +7,20 @@ use selean_engine::scene::{Color, TextAlign};
 
 use crate::api::{FigmaColor, FigmaPaint};
 
+/// Finds the first visible paint of the given type.
+///
+/// Iterates paints in order, skipping invisible ones, and returns the
+/// first match for `paint_type`.
+#[must_use]
+pub fn find_visible_paint<'a>(
+    paints: &'a [FigmaPaint],
+    paint_type: &str,
+) -> Option<&'a FigmaPaint> {
+    paints
+        .iter()
+        .find(|p| p.visible && p.paint_type == paint_type)
+}
+
 /// Converts a Figma RGBA color to an engine `Color`.
 ///
 /// The paint-level `opacity` is multiplied into the alpha channel.
@@ -17,39 +31,19 @@ pub fn figma_color_to_engine(color: &FigmaColor, opacity: f32) -> Color {
 
 /// Extracts the first visible SOLID fill color from a list of paints.
 ///
-/// Returns `None` if no visible solid fill exists. Gradients and image
-/// fills are skipped with a trace-level log.
+/// Returns `None` if no visible solid fill exists.
 #[must_use]
 pub fn first_solid_color(paints: &[FigmaPaint]) -> Option<Color> {
-    for paint in paints {
-        if !paint.visible {
-            continue;
-        }
-        if paint.paint_type == "SOLID" {
-            if let Some(ref color) = paint.color {
-                return Some(figma_color_to_engine(color, paint.opacity));
-            }
-        } else {
-            tracing::trace!(paint_type = %paint.paint_type, "skipping non-solid paint");
-        }
-    }
-    None
+    let paint = find_visible_paint(paints, "SOLID")?;
+    let color = paint.color.as_ref()?;
+    Some(figma_color_to_engine(color, paint.opacity))
 }
 
-/// Finds the first IMAGE paint's `imageRef` from a list of paints.
+/// Finds the first visible IMAGE paint's `imageRef` from a list of paints.
 #[must_use]
 pub fn first_image_ref(paints: &[FigmaPaint]) -> Option<String> {
-    for paint in paints {
-        if !paint.visible {
-            continue;
-        }
-        if paint.paint_type == "IMAGE" {
-            if let Some(ref img_ref) = paint.image_ref {
-                return Some(img_ref.clone());
-            }
-        }
-    }
-    None
+    let paint = find_visible_paint(paints, "IMAGE")?;
+    paint.image_ref.clone()
 }
 
 /// Maps a Figma text alignment string to an engine `TextAlign`.
@@ -68,6 +62,14 @@ pub fn figma_text_align(align: &str) -> TextAlign {
 mod tests {
     use super::*;
     use crate::api::FigmaColor;
+
+    fn solid_paint(r: f32, g: f32, b: f32, a: f32) -> FigmaPaint {
+        FigmaPaint {
+            paint_type: "SOLID".to_string(),
+            color: Some(FigmaColor { r, g, b, a }),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn color_conversion_direct() {
@@ -109,32 +111,40 @@ mod tests {
     }
 
     #[test]
-    fn first_solid_color_picks_first() {
+    fn find_visible_paint_returns_first_match() {
         let paints = vec![
             FigmaPaint {
-                paint_type: "SOLID".to_string(),
-                color: Some(FigmaColor {
-                    r: 1.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 1.0,
-                }),
-                opacity: 1.0,
-                visible: true,
-                image_ref: None,
+                paint_type: "GRADIENT_LINEAR".to_string(),
+                ..Default::default()
             },
-            FigmaPaint {
-                paint_type: "SOLID".to_string(),
-                color: Some(FigmaColor {
-                    r: 0.0,
-                    g: 1.0,
-                    b: 0.0,
-                    a: 1.0,
-                }),
-                opacity: 1.0,
-                visible: true,
-                image_ref: None,
-            },
+            solid_paint(1.0, 0.0, 0.0, 1.0),
+            solid_paint(0.0, 1.0, 0.0, 1.0),
+        ];
+        let found = find_visible_paint(&paints, "SOLID").unwrap();
+        assert_eq!(found.color.unwrap().r, 1.0);
+    }
+
+    #[test]
+    fn find_visible_paint_skips_invisible() {
+        let paints = vec![FigmaPaint {
+            paint_type: "SOLID".to_string(),
+            visible: false,
+            ..Default::default()
+        }];
+        assert!(find_visible_paint(&paints, "SOLID").is_none());
+    }
+
+    #[test]
+    fn find_visible_paint_no_match() {
+        let paints = vec![solid_paint(1.0, 0.0, 0.0, 1.0)];
+        assert!(find_visible_paint(&paints, "IMAGE").is_none());
+    }
+
+    #[test]
+    fn first_solid_color_picks_first() {
+        let paints = vec![
+            solid_paint(1.0, 0.0, 0.0, 1.0),
+            solid_paint(0.0, 1.0, 0.0, 1.0),
         ];
         let c = first_solid_color(&paints).unwrap();
         assert_eq!(c.r, 1.0);
@@ -148,26 +158,12 @@ mod tests {
                 paint_type: "SOLID".to_string(),
                 color: Some(FigmaColor {
                     r: 1.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 1.0,
+                    ..Default::default()
                 }),
-                opacity: 1.0,
                 visible: false,
-                image_ref: None,
+                ..Default::default()
             },
-            FigmaPaint {
-                paint_type: "SOLID".to_string(),
-                color: Some(FigmaColor {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 1.0,
-                    a: 1.0,
-                }),
-                opacity: 1.0,
-                visible: true,
-                image_ref: None,
-            },
+            solid_paint(0.0, 0.0, 1.0, 1.0),
         ];
         let c = first_solid_color(&paints).unwrap();
         assert_eq!(c.b, 1.0);
@@ -178,10 +174,7 @@ mod tests {
     fn first_solid_color_skips_gradient() {
         let paints = vec![FigmaPaint {
             paint_type: "GRADIENT_LINEAR".to_string(),
-            color: None,
-            opacity: 1.0,
-            visible: true,
-            image_ref: None,
+            ..Default::default()
         }];
         assert!(first_solid_color(&paints).is_none());
     }
@@ -195,10 +188,8 @@ mod tests {
     fn first_image_ref_found() {
         let paints = vec![FigmaPaint {
             paint_type: "IMAGE".to_string(),
-            color: None,
-            opacity: 1.0,
-            visible: true,
             image_ref: Some("hash123".to_string()),
+            ..Default::default()
         }];
         assert_eq!(first_image_ref(&paints).as_deref(), Some("hash123"));
     }
@@ -207,10 +198,9 @@ mod tests {
     fn first_image_ref_skips_invisible() {
         let paints = vec![FigmaPaint {
             paint_type: "IMAGE".to_string(),
-            color: None,
-            opacity: 1.0,
             visible: false,
             image_ref: Some("hash123".to_string()),
+            ..Default::default()
         }];
         assert!(first_image_ref(&paints).is_none());
     }

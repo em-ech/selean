@@ -134,8 +134,7 @@ describe("ChatSidebar", () => {
 
   it("streaming text replaces Thinking... indicator", async () => {
     // Simulate a stream that delivers text in two chunks
-    const chunk1 =
-      'data: {"type":"text","text":"Hello"}\n';
+    const chunk1 = 'data: {"type":"text","text":"Hello"}\n';
     const chunk2 =
       'data: {"type":"text","text":" world"}\ndata: {"type":"done","stop_reason":"end_turn"}\n';
 
@@ -206,8 +205,7 @@ describe("ChatSidebar", () => {
               }
               if (readIndex === chunks.length) {
                 readIndex++;
-                const sse =
-                  'data: {"type":"done","stop_reason":"end_turn"}\n';
+                const sse = 'data: {"type":"done","stop_reason":"end_turn"}\n';
                 return Promise.resolve({
                   done: false,
                   value: new TextEncoder().encode(sse),

@@ -11,6 +11,8 @@ pub struct AppState {
     pub model: Arc<str>,
     /// HTTP client for Claude API requests.
     pub http_client: reqwest::Client,
+    /// Figma personal access token. Read from `FIGMA_ACCESS_TOKEN` env var.
+    pub figma_access_token: Option<Arc<str>>,
 }
 
 impl AppState {
@@ -26,10 +28,16 @@ impl AppState {
         let model =
             std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
 
+        let figma_access_token = std::env::var("FIGMA_ACCESS_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(Arc::from);
+
         Ok(Self {
             api_key: Arc::from(api_key),
             model: Arc::from(model),
             http_client: reqwest::Client::new(),
+            figma_access_token,
         })
     }
 
@@ -40,6 +48,7 @@ impl AppState {
             api_key: Arc::from("test-key"),
             model: Arc::from("claude-sonnet-4-6"),
             http_client: reqwest::Client::new(),
+            figma_access_token: None,
         }
     }
 }
@@ -68,6 +77,12 @@ mod tests {
         let state = AppState::new_test();
         assert_eq!(&*state.api_key, "test-key");
         assert_eq!(&*state.model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn test_state_figma_token_is_none() {
+        let state = AppState::new_test();
+        assert!(state.figma_access_token.is_none());
     }
 
     #[test]

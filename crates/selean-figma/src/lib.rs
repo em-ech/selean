@@ -22,8 +22,13 @@ pub enum FigmaError {
     Http(#[from] reqwest::Error),
 
     /// The Figma API returned an error response.
-    #[error("figma api error: {0}")]
-    Api(String),
+    #[error("figma api error ({status}): {body}")]
+    Api {
+        /// HTTP status code from the Figma API.
+        status: u16,
+        /// Response body text.
+        body: String,
+    },
 
     /// Failed to parse the Figma API response JSON.
     #[error("parse error: {0}")]
@@ -58,11 +63,24 @@ mod tests {
 
     #[test]
     fn error_display_formats() {
-        let err = FigmaError::Api("forbidden".to_string());
-        assert_eq!(err.to_string(), "figma api error: forbidden");
+        let err = FigmaError::Api {
+            status: 403,
+            body: "forbidden".to_string(),
+        };
+        assert_eq!(err.to_string(), "figma api error (403): forbidden");
 
         let err = FigmaError::InvalidFile("no canvases".to_string());
         assert_eq!(err.to_string(), "invalid file: no canvases");
+    }
+
+    #[test]
+    fn error_display_api_with_status() {
+        let err = FigmaError::Api {
+            status: 404,
+            body: "not found".to_string(),
+        };
+        assert!(err.to_string().contains("404"));
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]
@@ -72,70 +90,35 @@ mod tests {
             document: api::FigmaNode {
                 id: "0:0".to_string(),
                 name: "Document".to_string(),
-                node_type: "DOCUMENT".to_string(),
-                visible: true,
-                opacity: 1.0,
-                absolute_bounding_box: None,
+                node_type: api::FigmaNodeType::Document,
                 children: vec![api::FigmaNode {
                     id: "0:1".to_string(),
                     name: "Page 1".to_string(),
-                    node_type: "CANVAS".to_string(),
-                    visible: true,
-                    opacity: 1.0,
-                    absolute_bounding_box: None,
+                    node_type: api::FigmaNodeType::Canvas,
                     children: vec![api::FigmaNode {
                         id: "1:1".to_string(),
                         name: "Rect".to_string(),
-                        node_type: "RECTANGLE".to_string(),
-                        visible: true,
-                        opacity: 1.0,
+                        node_type: api::FigmaNodeType::Rectangle,
                         absolute_bounding_box: Some(api::FigmaRect {
                             x: 0.0,
                             y: 0.0,
                             width: 200.0,
                             height: 100.0,
                         }),
-                        children: vec![],
                         fills: vec![api::FigmaPaint {
                             paint_type: "SOLID".to_string(),
                             color: Some(api::FigmaColor {
                                 r: 1.0,
-                                g: 0.0,
-                                b: 0.0,
-                                a: 1.0,
+                                ..Default::default()
                             }),
-                            opacity: 1.0,
-                            visible: true,
-                            image_ref: None,
+                            ..Default::default()
                         }],
-                        strokes: vec![],
-                        stroke_weight: 0.0,
                         corner_radius: 8.0,
-                        rectangle_corner_radii: None,
-                        characters: None,
-                        style: None,
-                        fill_geometry: vec![],
-                        image_ref: None,
+                        ..Default::default()
                     }],
-                    fills: vec![],
-                    strokes: vec![],
-                    stroke_weight: 0.0,
-                    corner_radius: 0.0,
-                    rectangle_corner_radii: None,
-                    characters: None,
-                    style: None,
-                    fill_geometry: vec![],
-                    image_ref: None,
+                    ..Default::default()
                 }],
-                fills: vec![],
-                strokes: vec![],
-                stroke_weight: 0.0,
-                corner_radius: 0.0,
-                rectangle_corner_radii: None,
-                characters: None,
-                style: None,
-                fill_geometry: vec![],
-                image_ref: None,
+                ..Default::default()
             },
         };
 
@@ -150,22 +133,9 @@ mod tests {
         let response = api::FigmaFileResponse {
             name: "Multi".to_string(),
             document: api::FigmaNode {
-                id: "0:0".to_string(),
-                name: "Document".to_string(),
-                node_type: "DOCUMENT".to_string(),
-                visible: true,
-                opacity: 1.0,
-                absolute_bounding_box: None,
+                node_type: api::FigmaNodeType::Document,
                 children: vec![make_canvas("Page A", vec![]), make_canvas("Page B", vec![])],
-                fills: vec![],
-                strokes: vec![],
-                stroke_weight: 0.0,
-                corner_radius: 0.0,
-                rectangle_corner_radii: None,
-                characters: None,
-                style: None,
-                fill_geometry: vec![],
-                image_ref: None,
+                ..Default::default()
             },
         };
 
@@ -179,20 +149,9 @@ mod tests {
         api::FigmaNode {
             id: "0:1".to_string(),
             name: name.to_string(),
-            node_type: "CANVAS".to_string(),
-            visible: true,
-            opacity: 1.0,
-            absolute_bounding_box: None,
+            node_type: api::FigmaNodeType::Canvas,
             children,
-            fills: vec![],
-            strokes: vec![],
-            stroke_weight: 0.0,
-            corner_radius: 0.0,
-            rectangle_corner_radii: None,
-            characters: None,
-            style: None,
-            fill_geometry: vec![],
-            image_ref: None,
+            ..Default::default()
         }
     }
 }

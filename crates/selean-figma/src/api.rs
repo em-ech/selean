@@ -7,18 +7,76 @@
 
 use serde::Deserialize;
 
+/// Figma node types as returned by the REST API.
+///
+/// The `Unknown` variant catches any unrecognized type via `#[serde(other)]`,
+/// ensuring forward compatibility when Figma adds new node types.
+#[derive(Debug, PartialEq, Eq, Hash, Deserialize, Default)]
+pub enum FigmaNodeType {
+    /// Root document container.
+    #[serde(rename = "DOCUMENT")]
+    Document,
+    /// Page (canvas) container.
+    #[serde(rename = "CANVAS")]
+    Canvas,
+    /// Rectangular frame.
+    #[serde(rename = "FRAME")]
+    Frame,
+    /// Rectangle shape.
+    #[serde(rename = "RECTANGLE")]
+    Rectangle,
+    /// Text element.
+    #[serde(rename = "TEXT")]
+    Text,
+    /// Vector shape.
+    #[serde(rename = "VECTOR")]
+    Vector,
+    /// Logical grouping.
+    #[serde(rename = "GROUP")]
+    Group,
+    /// Reusable component definition.
+    #[serde(rename = "COMPONENT")]
+    Component,
+    /// Component set (variant group).
+    #[serde(rename = "COMPONENT_SET")]
+    ComponentSet,
+    /// Component instance.
+    #[serde(rename = "INSTANCE")]
+    Instance,
+    /// Ellipse shape.
+    #[serde(rename = "ELLIPSE")]
+    Ellipse,
+    /// Line shape.
+    #[serde(rename = "LINE")]
+    Line,
+    /// Regular polygon shape.
+    #[serde(rename = "REGULAR_POLYGON")]
+    RegularPolygon,
+    /// Star shape.
+    #[serde(rename = "STAR")]
+    Star,
+    /// Boolean operation (union, subtract, etc.).
+    #[serde(rename = "BOOLEAN_OPERATION")]
+    BooleanOperation,
+    /// Unrecognized node type.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// Top-level response from `GET /v1/files/:key`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct FigmaFileResponse {
     /// File name as displayed in Figma.
     #[serde(default)]
     pub name: String,
     /// Root document node containing canvases (pages).
+    #[serde(default)]
     pub document: FigmaNode,
 }
 
 /// A node in the Figma document tree.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FigmaNode {
     /// Node ID (e.g. "0:1").
@@ -27,9 +85,9 @@ pub struct FigmaNode {
     /// Display name.
     #[serde(default)]
     pub name: String,
-    /// Node type (DOCUMENT, CANVAS, FRAME, TEXT, etc.).
+    /// Node type.
     #[serde(rename = "type", default)]
-    pub node_type: String,
+    pub node_type: FigmaNodeType,
     /// Whether the node is visible. Defaults to `true`.
     #[serde(default = "default_true")]
     pub visible: bool,
@@ -71,8 +129,31 @@ pub struct FigmaNode {
     pub image_ref: Option<String>,
 }
 
+impl Default for FigmaNode {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            node_type: FigmaNodeType::default(),
+            visible: true,
+            opacity: 1.0,
+            absolute_bounding_box: None,
+            children: Vec::new(),
+            fills: Vec::new(),
+            strokes: Vec::new(),
+            stroke_weight: 0.0,
+            corner_radius: 0.0,
+            rectangle_corner_radii: None,
+            characters: None,
+            style: None,
+            fill_geometry: Vec::new(),
+            image_ref: None,
+        }
+    }
+}
+
 /// Axis-aligned bounding rectangle from the Figma API.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub struct FigmaRect {
     /// Left edge x coordinate.
     #[serde(default)]
@@ -89,7 +170,7 @@ pub struct FigmaRect {
 }
 
 /// A fill or stroke paint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FigmaPaint {
     /// Paint type: `SOLID`, `GRADIENT_LINEAR`, `IMAGE`, etc.
@@ -109,6 +190,18 @@ pub struct FigmaPaint {
     pub image_ref: Option<String>,
 }
 
+impl Default for FigmaPaint {
+    fn default() -> Self {
+        Self {
+            paint_type: String::new(),
+            color: None,
+            opacity: 1.0,
+            visible: true,
+            image_ref: None,
+        }
+    }
+}
+
 /// RGBA color with components in [0.0, 1.0].
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct FigmaColor {
@@ -126,8 +219,19 @@ pub struct FigmaColor {
     pub a: f32,
 }
 
+impl Default for FigmaColor {
+    fn default() -> Self {
+        Self {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        }
+    }
+}
+
 /// Text style properties from the Figma API.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FigmaTextStyle {
     /// Font family name.
@@ -151,7 +255,7 @@ pub struct FigmaTextStyle {
 }
 
 /// A geometry path from `fillGeometry`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct FigmaPath {
     /// SVG path data string.
     #[serde(default)]
@@ -176,13 +280,14 @@ mod tests {
         let json = r#"{"name":"Test","document":{"id":"0:0","name":"Document","type":"DOCUMENT"}}"#;
         let resp: FigmaFileResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.name, "Test");
-        assert_eq!(resp.document.node_type, "DOCUMENT");
+        assert_eq!(resp.document.node_type, FigmaNodeType::Document);
     }
 
     #[test]
     fn deserialize_node_defaults() {
         let json = r#"{"type":"FRAME"}"#;
         let node: FigmaNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.node_type, FigmaNodeType::Frame);
         assert!(node.visible);
         assert_eq!(node.opacity, 1.0);
         assert!(node.children.is_empty());
@@ -199,6 +304,7 @@ mod tests {
             "absoluteBoundingBox": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0}
         }"#;
         let node: FigmaNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.node_type, FigmaNodeType::Rectangle);
         let bb = node.absolute_bounding_box.unwrap();
         assert_eq!(bb.x, 10.0);
         assert_eq!(bb.y, 20.0);
@@ -261,13 +367,21 @@ mod tests {
             "anotherField": [1, 2, 3]
         }"#;
         let node: FigmaNode = serde_json::from_str(json).unwrap();
-        assert_eq!(node.node_type, "FRAME");
+        assert_eq!(node.node_type, FigmaNodeType::Frame);
+    }
+
+    #[test]
+    fn unknown_node_type_deserialized() {
+        let json = r#"{"type": "SOME_FUTURE_TYPE"}"#;
+        let node: FigmaNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.node_type, FigmaNodeType::Unknown);
     }
 
     #[test]
     fn missing_optional_fields_default() {
         let json = r#"{"type": "TEXT"}"#;
         let node: FigmaNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.node_type, FigmaNodeType::Text);
         assert!(node.characters.is_none());
         assert!(node.style.is_none());
         assert_eq!(node.corner_radius, 0.0);
@@ -330,13 +444,13 @@ mod tests {
         assert_eq!(resp.name, "My File");
         assert_eq!(resp.document.children.len(), 1);
         let canvas = &resp.document.children[0];
-        assert_eq!(canvas.node_type, "CANVAS");
+        assert_eq!(canvas.node_type, FigmaNodeType::Canvas);
         assert_eq!(canvas.children.len(), 1);
         let frame = &canvas.children[0];
-        assert_eq!(frame.node_type, "FRAME");
+        assert_eq!(frame.node_type, FigmaNodeType::Frame);
         assert_eq!(frame.children.len(), 1);
         let text = &frame.children[0];
-        assert_eq!(text.node_type, "TEXT");
+        assert_eq!(text.node_type, FigmaNodeType::Text);
         assert_eq!(text.characters.as_deref(), Some("Hello World"));
     }
 
@@ -351,5 +465,54 @@ mod tests {
         let paint: FigmaPaint = serde_json::from_str(json).unwrap();
         assert_eq!(paint.paint_type, "IMAGE");
         assert_eq!(paint.image_ref.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn default_figma_node_has_sensible_values() {
+        let node = FigmaNode::default();
+        assert_eq!(node.node_type, FigmaNodeType::Unknown);
+        assert!(node.visible);
+        assert_eq!(node.opacity, 1.0);
+        assert!(node.children.is_empty());
+    }
+
+    #[test]
+    fn default_figma_paint_has_sensible_values() {
+        let paint = FigmaPaint::default();
+        assert!(paint.visible);
+        assert_eq!(paint.opacity, 1.0);
+    }
+
+    #[test]
+    fn default_figma_color_has_opaque_alpha() {
+        let color = FigmaColor::default();
+        assert_eq!(color.a, 1.0);
+        assert_eq!(color.r, 0.0);
+    }
+
+    #[test]
+    fn all_node_types_deserialize() {
+        let types = [
+            ("DOCUMENT", FigmaNodeType::Document),
+            ("CANVAS", FigmaNodeType::Canvas),
+            ("FRAME", FigmaNodeType::Frame),
+            ("RECTANGLE", FigmaNodeType::Rectangle),
+            ("TEXT", FigmaNodeType::Text),
+            ("VECTOR", FigmaNodeType::Vector),
+            ("GROUP", FigmaNodeType::Group),
+            ("COMPONENT", FigmaNodeType::Component),
+            ("COMPONENT_SET", FigmaNodeType::ComponentSet),
+            ("INSTANCE", FigmaNodeType::Instance),
+            ("ELLIPSE", FigmaNodeType::Ellipse),
+            ("LINE", FigmaNodeType::Line),
+            ("REGULAR_POLYGON", FigmaNodeType::RegularPolygon),
+            ("STAR", FigmaNodeType::Star),
+            ("BOOLEAN_OPERATION", FigmaNodeType::BooleanOperation),
+        ];
+        for (json_type, expected) in &types {
+            let json = format!(r#"{{"type": "{json_type}"}}"#);
+            let node: FigmaNode = serde_json::from_str(&json).unwrap();
+            assert_eq!(&node.node_type, expected, "failed for {json_type}");
+        }
     }
 }

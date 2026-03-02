@@ -251,12 +251,11 @@ async fn export_idml_handler(body: axum::body::Bytes) -> impl IntoResponse {
 struct FigmaImportRequest {
     /// Figma file key extracted from the Figma URL.
     file_key: String,
-    /// Figma personal access token.
-    access_token: String,
 }
 
-/// Handles Figma import. Accepts a JSON body with `file_key` and `access_token`,
-/// fetches the file from the Figma REST API, and returns the parsed `Document` as JSON.
+/// Handles Figma import. Accepts a JSON body with `file_key`, reads the
+/// access token from server-side configuration, fetches the file from
+/// the Figma REST API, and returns the parsed `Document` as JSON.
 async fn import_figma_handler(
     State(state): State<AppState>,
     Json(request): Json<FigmaImportRequest>,
@@ -269,17 +268,15 @@ async fn import_figma_handler(
             .into_response();
     }
 
-    if request.access_token.is_empty() {
+    let Some(ref access_token) = state.figma_access_token else {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "access_token is required" })),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "FIGMA_ACCESS_TOKEN not configured on server" })),
         )
             .into_response();
-    }
+    };
 
-    match selean_figma::import_figma(&state.http_client, &request.access_token, &request.file_key)
-        .await
-    {
+    match selean_figma::import_figma(&state.http_client, access_token, &request.file_key).await {
         Ok(doc) => {
             let json = match selean_engine::persistence::save_document(&doc) {
                 Ok(j) => j,
@@ -303,12 +300,8 @@ async fn import_figma_handler(
         }
         Err(e) => {
             let status = match &e {
-                selean_figma::FigmaError::Api(msg) if msg.starts_with("403") => {
-                    StatusCode::FORBIDDEN
-                }
-                selean_figma::FigmaError::Api(msg) if msg.starts_with("404") => {
-                    StatusCode::NOT_FOUND
-                }
+                selean_figma::FigmaError::Api { status: 403, .. } => StatusCode::FORBIDDEN,
+                selean_figma::FigmaError::Api { status: 404, .. } => StatusCode::NOT_FOUND,
                 _ => StatusCode::BAD_REQUEST,
             };
             (
@@ -409,8 +402,7 @@ mod tests {
     async fn figma_import_missing_file_key() {
         let app = create_router(test_state());
         let body = serde_json::json!({
-            "file_key": "",
-            "access_token": "test-token"
+            "file_key": ""
         });
         let response = app
             .oneshot(
@@ -433,11 +425,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn figma_import_missing_access_token() {
+    async fn figma_import_server_token_not_configured() {
+        // test_state() has figma_access_token: None
         let app = create_router(test_state());
         let body = serde_json::json!({
-            "file_key": "some-key",
-            "access_token": ""
+            "file_key": "some-key"
         });
         let response = app
             .oneshot(
@@ -451,12 +443,17 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["error"].as_str().unwrap().contains("access_token"));
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap()
+                .contains("FIGMA_ACCESS_TOKEN")
+        );
     }
 
     #[tokio::test]
