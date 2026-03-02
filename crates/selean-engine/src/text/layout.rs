@@ -62,6 +62,7 @@ impl TextLayout {
 /// * `node_width` — Width of the text node (for alignment).
 /// * `text_align` — Text alignment mode.
 /// * `line_height` — Line height multiplier (e.g. 1.2 = 120% of font size).
+/// * `font_weight` — Font weight (100-900) for weight-aware cache lookup.
 #[allow(clippy::too_many_arguments)]
 pub fn layout_text(
     shaped: &ShapedRun,
@@ -74,6 +75,7 @@ pub fn layout_text(
     node_width: f32,
     text_align: TextAlign,
     line_height: f32,
+    font_weight: u16,
 ) -> TextLayout {
     if shaped.is_empty() || shaped.units_per_em == 0 {
         return TextLayout { glyphs: Vec::new() };
@@ -108,6 +110,7 @@ pub fn layout_text(
         let cache_key = GlyphCacheKey {
             glyph_id: sg.glyph_id,
             sdf_size,
+            font_weight,
         };
 
         if let Some(cached) = cache.get(&cache_key) {
@@ -191,6 +194,7 @@ mod tests {
         let key = GlyphCacheKey {
             glyph_id,
             sdf_size: 48,
+            font_weight: 400,
         };
         let glyph = CachedGlyph {
             atlas_region: AtlasRegion {
@@ -223,6 +227,7 @@ mod tests {
             400.0,
             TextAlign::Left,
             1.2,
+            400,
         );
         assert!(layout.is_empty());
         assert_eq!(layout.len(), 0);
@@ -253,6 +258,7 @@ mod tests {
             400.0,
             TextAlign::Left,
             1.2,
+            400,
         );
         assert_eq!(layout.len(), 1);
 
@@ -285,6 +291,7 @@ mod tests {
             400.0,
             TextAlign::Left,
             1.2,
+            400,
         );
         assert!(layout.is_empty(), "uncached glyphs should be skipped");
     }
@@ -325,6 +332,7 @@ mod tests {
             400.0,
             TextAlign::Left,
             1.2,
+            400,
         );
         assert_eq!(layout.len(), 2);
 
@@ -360,6 +368,7 @@ mod tests {
             400.0,
             TextAlign::Left,
             1.2,
+            400,
         );
         let center_layout = layout_text(
             &run,
@@ -372,6 +381,7 @@ mod tests {
             400.0,
             TextAlign::Center,
             1.2,
+            400,
         );
 
         // Center should be to the right of left.
@@ -406,6 +416,7 @@ mod tests {
             400.0,
             TextAlign::Left,
             1.2,
+            400,
         );
         let right_layout = layout_text(
             &run,
@@ -418,6 +429,7 @@ mod tests {
             400.0,
             TextAlign::Right,
             1.2,
+            400,
         );
 
         // Right should be further right than left.

@@ -51,17 +51,21 @@ impl ShapedRun {
 
 /// Shapes text content using `rustybuzz`.
 ///
-/// Takes the font data and a text string, runs the `HarfBuzz` shaping algorithm,
-/// and returns a `ShapedRun` containing positioned glyphs with correct kerning
-/// and ligatures applied.
+/// Takes the font data, a text string, and a font weight, runs the `HarfBuzz`
+/// shaping algorithm, and returns a `ShapedRun` containing positioned glyphs
+/// with correct kerning and ligatures applied.
+///
+/// For variable fonts, the `wght` axis is set to `font_weight` before shaping,
+/// producing weight-aware glyph advances and kerning.
 ///
 /// Returns `None` if the font cannot be parsed by `rustybuzz`.
 ///
 /// # Arguments
 /// * `font_data` — The loaded font.
 /// * `content` — The text string to shape.
+/// * `font_weight` — Font weight (100-900, e.g. 400 = regular, 700 = bold).
 #[must_use]
-pub fn shape_text(font_data: &FontData, content: &str) -> Option<ShapedRun> {
+pub fn shape_text(font_data: &FontData, content: &str, font_weight: u16) -> Option<ShapedRun> {
     if content.is_empty() {
         return Some(ShapedRun {
             glyphs: Vec::new(),
@@ -69,7 +73,11 @@ pub fn shape_text(font_data: &FontData, content: &str) -> Option<ShapedRun> {
         });
     }
 
-    let face = rustybuzz::Face::from_slice(font_data.raw_bytes(), font_data.face_index())?;
+    let mut face = rustybuzz::Face::from_slice(font_data.raw_bytes(), font_data.face_index())?;
+    face.set_variation(
+        rustybuzz::ttf_parser::Tag::from_bytes(b"wght"),
+        f32::from(font_weight),
+    );
 
     let mut buffer = rustybuzz::UnicodeBuffer::new();
     buffer.push_str(content);
@@ -115,7 +123,7 @@ mod tests {
     #[test]
     fn shape_hello() {
         let font = test_font();
-        let run = shape_text(&font, "Hello");
+        let run = shape_text(&font, "Hello", 400);
         assert!(run.is_some());
 
         let run = run.unwrap_or_else(|| unreachable!());
@@ -126,7 +134,7 @@ mod tests {
     #[test]
     fn shape_empty_string() {
         let font = test_font();
-        let run = shape_text(&font, "");
+        let run = shape_text(&font, "", 400);
         assert!(run.is_some());
 
         let run = run.unwrap_or_else(|| unreachable!());
@@ -137,7 +145,7 @@ mod tests {
     #[test]
     fn shaped_glyphs_have_positive_advances() {
         let font = test_font();
-        let run = shape_text(&font, "Hello, world!").unwrap_or_else(|| unreachable!());
+        let run = shape_text(&font, "Hello, world!", 400).unwrap_or_else(|| unreachable!());
 
         for glyph in &run.glyphs {
             assert!(glyph.x_advance >= 0, "advance should be non-negative");
@@ -147,21 +155,21 @@ mod tests {
     #[test]
     fn total_advance_is_positive() {
         let font = test_font();
-        let run = shape_text(&font, "Test").unwrap_or_else(|| unreachable!());
+        let run = shape_text(&font, "Test", 400).unwrap_or_else(|| unreachable!());
         assert!(run.total_advance() > 0);
     }
 
     #[test]
     fn units_per_em_is_set() {
         let font = test_font();
-        let run = shape_text(&font, "A").unwrap_or_else(|| unreachable!());
+        let run = shape_text(&font, "A", 400).unwrap_or_else(|| unreachable!());
         assert_eq!(run.units_per_em, font.units_per_em());
     }
 
     #[test]
     fn clusters_are_sequential() {
         let font = test_font();
-        let run = shape_text(&font, "ABCD").unwrap_or_else(|| unreachable!());
+        let run = shape_text(&font, "ABCD", 400).unwrap_or_else(|| unreachable!());
 
         // For simple LTR text without ligatures, clusters should be in order.
         for (i, glyph) in run.glyphs.iter().enumerate() {
@@ -174,7 +182,7 @@ mod tests {
     #[test]
     fn glyph_ids_are_nonzero_for_latin() {
         let font = test_font();
-        let run = shape_text(&font, "ABC").unwrap_or_else(|| unreachable!());
+        let run = shape_text(&font, "ABC", 400).unwrap_or_else(|| unreachable!());
 
         // Latin glyphs in Inter should have non-zero glyph IDs.
         for glyph in &run.glyphs {
@@ -188,16 +196,30 @@ mod tests {
     #[test]
     fn longer_text_produces_more_glyphs() {
         let font = test_font();
-        let short = shape_text(&font, "Hi").unwrap_or_else(|| unreachable!());
-        let long = shape_text(&font, "Hello, world!").unwrap_or_else(|| unreachable!());
+        let short = shape_text(&font, "Hi", 400).unwrap_or_else(|| unreachable!());
+        let long = shape_text(&font, "Hello, world!", 400).unwrap_or_else(|| unreachable!());
         assert!(long.len() > short.len());
     }
 
     #[test]
     fn longer_text_has_greater_advance() {
         let font = test_font();
-        let short = shape_text(&font, "Hi").unwrap_or_else(|| unreachable!());
-        let long = shape_text(&font, "Hello, world!").unwrap_or_else(|| unreachable!());
+        let short = shape_text(&font, "Hi", 400).unwrap_or_else(|| unreachable!());
+        let long = shape_text(&font, "Hello, world!", 400).unwrap_or_else(|| unreachable!());
         assert!(long.total_advance() > short.total_advance());
+    }
+
+    #[test]
+    fn bold_weight_produces_wider_advance() {
+        let font = test_font();
+        let regular = shape_text(&font, "Hello", 400).unwrap_or_else(|| unreachable!());
+        let bold = shape_text(&font, "Hello", 700).unwrap_or_else(|| unreachable!());
+        // Bold glyphs in Inter are wider than regular.
+        assert!(
+            bold.total_advance() > regular.total_advance(),
+            "bold advance {} should exceed regular advance {}",
+            bold.total_advance(),
+            regular.total_advance()
+        );
     }
 }

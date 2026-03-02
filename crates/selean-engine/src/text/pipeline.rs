@@ -199,11 +199,16 @@ impl TextBatch {
         }
 
         // Priority: text_color > node.fill > BLACK.
-        let color = match &node.kind {
-            SceneNodeKind::Text { text_color, .. } => {
-                text_color.unwrap_or_else(|| node.fill.unwrap_or(Color::BLACK))
-            }
-            _ => node.fill.unwrap_or(Color::BLACK),
+        let (color, font_weight) = match &node.kind {
+            SceneNodeKind::Text {
+                text_color,
+                font_weight,
+                ..
+            } => (
+                text_color.unwrap_or_else(|| node.fill.unwrap_or(Color::BLACK)),
+                *font_weight,
+            ),
+            _ => (node.fill.unwrap_or(Color::BLACK), 400),
         };
         let transform = node.world_transform.to_gpu_columns();
         let is_add = match node.blend_mode {
@@ -219,6 +224,7 @@ impl TextBatch {
             let key = GlyphCacheKey {
                 glyph_id: glyph.glyph_id,
                 sdf_size,
+                font_weight,
             };
 
             if let Some(cached) = cache.get(&key) {
@@ -651,6 +657,7 @@ mod tests {
         let key = GlyphCacheKey {
             glyph_id: 42,
             sdf_size: 48,
+            font_weight: 400,
         };
         cache.insert(
             key,
@@ -725,6 +732,7 @@ mod tests {
         let key = GlyphCacheKey {
             glyph_id: 1,
             sdf_size: 48,
+            font_weight: 400,
         };
         cache.insert(
             key,
@@ -795,6 +803,7 @@ mod tests {
         let key = GlyphCacheKey {
             glyph_id: 1,
             sdf_size: 48,
+            font_weight: 400,
         };
         cache.insert(
             key,

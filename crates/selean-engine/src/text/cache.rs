@@ -16,6 +16,8 @@ pub struct GlyphCacheKey {
     /// SDF render size used when generating the bitmap.
     /// Typically a fixed value (e.g., 48) for all glyphs.
     pub sdf_size: u16,
+    /// Font weight (100-900). Variable fonts produce different outlines per weight.
+    pub font_weight: u16,
 }
 
 /// Cached information about a glyph stored in the atlas.
@@ -110,6 +112,7 @@ mod tests {
         GlyphCacheKey {
             glyph_id,
             sdf_size: 48,
+            font_weight: 400,
         }
     }
 
@@ -174,15 +177,37 @@ mod tests {
         let key1 = GlyphCacheKey {
             glyph_id: 42,
             sdf_size: 48,
+            font_weight: 400,
         };
         let key2 = GlyphCacheKey {
             glyph_id: 42,
             sdf_size: 64,
+            font_weight: 400,
         };
 
         cache.insert(key1, test_cached_glyph());
         assert!(cache.contains(&key1));
         assert!(!cache.contains(&key2));
+    }
+
+    #[test]
+    fn different_weights_are_different_keys() {
+        let mut cache = GlyphCache::new();
+
+        let key_regular = GlyphCacheKey {
+            glyph_id: 42,
+            sdf_size: 48,
+            font_weight: 400,
+        };
+        let key_bold = GlyphCacheKey {
+            glyph_id: 42,
+            sdf_size: 48,
+            font_weight: 700,
+        };
+
+        cache.insert(key_regular, test_cached_glyph());
+        assert!(cache.contains(&key_regular));
+        assert!(!cache.contains(&key_bold));
     }
 
     #[test]

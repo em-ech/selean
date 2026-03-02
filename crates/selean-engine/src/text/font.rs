@@ -6,8 +6,8 @@
 
 use selean_common::error::EngineError;
 
-/// The default font embedded in the binary (Inter Regular).
-const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
+/// The default font embedded in the binary (Inter Variable).
+const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/InterVariable.ttf");
 
 /// Parsed font data, owned for the lifetime of the engine.
 ///
@@ -58,7 +58,7 @@ impl FontData {
         })
     }
 
-    /// Loads the built-in default font (Inter Regular).
+    /// Loads the built-in default font (Inter Variable).
     ///
     /// # Errors
     ///
@@ -78,6 +78,20 @@ impl FontData {
         ttf_parser::Face::parse(&self.raw, self.face_index).map_err(|e| EngineError::Font {
             reason: format!("failed to create face: {e}"),
         })
+    }
+
+    /// Creates a `ttf_parser::Face` with the `wght` variation axis set.
+    ///
+    /// For variable fonts, this produces outlines at the requested weight.
+    /// For static fonts, the variation is silently ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EngineError::Font` if the face cannot be parsed.
+    pub fn face_with_weight(&self, weight: u16) -> Result<ttf_parser::Face<'_>, EngineError> {
+        let mut face = self.face()?;
+        face.set_variation(ttf_parser::Tag::from_bytes(b"wght"), f32::from(weight));
+        Ok(face)
     }
 
     /// Returns the font's units-per-em value.
@@ -179,5 +193,33 @@ mod tests {
     fn raw_bytes_matches_default() {
         let font = FontData::default_font().unwrap_or_else(|_| unreachable!());
         assert_eq!(font.raw_bytes().len(), DEFAULT_FONT_BYTES.len());
+    }
+
+    #[test]
+    fn face_with_weight_succeeds() {
+        let font = FontData::default_font().unwrap_or_else(|_| unreachable!());
+        let face = font.face_with_weight(700);
+        assert!(face.is_ok());
+    }
+
+    #[test]
+    fn face_with_weight_regular_matches_default() {
+        let font = FontData::default_font().unwrap_or_else(|_| unreachable!());
+        let default_face = font.face().unwrap_or_else(|_| unreachable!());
+        let weighted_face = font
+            .face_with_weight(400)
+            .unwrap_or_else(|_| unreachable!());
+        assert_eq!(default_face.units_per_em(), weighted_face.units_per_em());
+        assert_eq!(default_face.ascender(), weighted_face.ascender());
+    }
+
+    #[test]
+    fn face_with_weight_bold_succeeds() {
+        let font = FontData::default_font().unwrap_or_else(|_| unreachable!());
+        // Bold (700) should parse fine on a variable font.
+        let face = font
+            .face_with_weight(700)
+            .unwrap_or_else(|_| unreachable!());
+        assert!(face.units_per_em() > 0);
     }
 }

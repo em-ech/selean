@@ -29,16 +29,17 @@ use tracing::debug;
 
 use crate::scene::{DirtyFlags, SceneNode, SceneNodeKind, TextAlign};
 
-/// Extracts `text_align` and `line_height` from a `SceneNodeKind::Text`.
+/// Extracts `text_align`, `line_height`, and `font_weight` from a `SceneNodeKind::Text`.
 /// Returns defaults for non-text nodes.
-fn extract_text_props(kind: &SceneNodeKind) -> (TextAlign, f32) {
+fn extract_text_props(kind: &SceneNodeKind) -> (TextAlign, f32, u16) {
     match kind {
         SceneNodeKind::Text {
             text_align,
             line_height,
+            font_weight,
             ..
-        } => (*text_align, *line_height),
-        _ => (TextAlign::Left, 1.2),
+        } => (*text_align, *line_height, *font_weight),
+        _ => (TextAlign::Left, 1.2, 400),
     }
 }
 
@@ -52,6 +53,8 @@ struct CachedTextState {
     content: String,
     /// Font size used for layout.
     font_size: f32,
+    /// Font weight used for shaping and cache keys.
+    font_weight: u16,
     /// Node X position used for layout.
     node_x: f32,
     /// Node Y position used for layout.
@@ -180,7 +183,9 @@ impl TextSystem {
         }
 
         let sdf_size = self.sdf_size();
-        let action = Self::text_cache_action(&self.node_text_cache, node, content, font_size);
+        let (text_align, line_height, font_weight) = extract_text_props(&node.kind);
+        let action =
+            Self::text_cache_action(&self.node_text_cache, node, content, font_size, font_weight);
 
         match action {
             TextCacheAction::FullHit => {
@@ -191,7 +196,6 @@ impl TextSystem {
             }
             TextCacheAction::RelayoutOnly => {
                 // Content unchanged — re-layout from cached shaped run.
-                let (text_align, line_height) = extract_text_props(&node.kind);
                 let layout = if let Some(cached) = self.node_text_cache.get(&node.id) {
                     layout_text(
                         &cached.shaped,
@@ -204,6 +208,7 @@ impl TextSystem {
                         node.bounds.width,
                         text_align,
                         line_height,
+                        font_weight,
                     )
                 } else {
                     return Ok(());
@@ -220,13 +225,12 @@ impl TextSystem {
             }
             TextCacheAction::FullReshape => {
                 // Full re-shape + re-layout.
-                let Some(shaped) = shape_text(&self.font, content) else {
+                let Some(shaped) = shape_text(&self.font, content, font_weight) else {
                     return Ok(());
                 };
 
-                self.ensure_glyphs_cached(&shaped, device, queue)?;
+                self.ensure_glyphs_cached(&shaped, font_weight, device, queue)?;
 
-                let (text_align, line_height) = extract_text_props(&node.kind);
                 let layout = layout_text(
                     &shaped,
                     &self.cache,
@@ -238,6 +242,7 @@ impl TextSystem {
                     node.bounds.width,
                     text_align,
                     line_height,
+                    font_weight,
                 );
 
                 batch.push_text_node(node, &layout.glyphs, &self.cache, sdf_size);
@@ -247,6 +252,7 @@ impl TextSystem {
                     CachedTextState {
                         content: content.to_owned(),
                         font_size,
+                        font_weight,
                         node_x: node.bounds.x,
                         node_y: node.bounds.y,
                         shaped,
@@ -269,13 +275,17 @@ impl TextSystem {
         node: &SceneNode,
         content: &str,
         font_size: f32,
+        font_weight: u16,
     ) -> TextCacheAction {
         let Some(cached) = node_text_cache.get(&node.id) else {
             return TextCacheAction::FullReshape;
         };
 
-        // Check if content changed (dirty flag fast-path or string comparison).
-        if node.dirty.contains(DirtyFlags::TEXT) || cached.content != content {
+        // Check if content or weight changed (dirty flag fast-path or comparison).
+        if node.dirty.contains(DirtyFlags::TEXT)
+            || cached.content != content
+            || cached.font_weight != font_weight
+        {
             return TextCacheAction::FullReshape;
         }
 
@@ -297,16 +307,18 @@ impl TextSystem {
     fn ensure_glyphs_cached(
         &mut self,
         shaped: &ShapedRun,
+        font_weight: u16,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<(), EngineError> {
-        let face = self.font.face()?;
+        let face = self.font.face_with_weight(font_weight)?;
         let sdf_size = self.sdf_size();
 
         for sg in &shaped.glyphs {
             let key = GlyphCacheKey {
                 glyph_id: sg.glyph_id,
                 sdf_size,
+                font_weight,
             };
 
             if self.cache.contains(&key) {

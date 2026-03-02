@@ -397,7 +397,7 @@ fn bench_text_shaping(c: &mut Criterion) {
     for &(label, text) in inputs {
         group.bench_with_input(BenchmarkId::new("shape", label), &text, |b, &text| {
             b.iter(|| {
-                black_box(shape_text(&font, text));
+                black_box(shape_text(&font, text, 400));
             });
         });
     }
@@ -463,9 +463,9 @@ fn bench_text_layout(c: &mut Criterion) {
     let medium = "The quick brown fox jumps over the lazy dog nearby";
     let long: String = "Pack my box with five dozen liquor jugs. ".repeat(5);
 
-    let shaped_short = shape_text(&font, short).expect("shape short");
-    let shaped_medium = shape_text(&font, medium).expect("shape medium");
-    let shaped_long = shape_text(&font, &long).expect("shape long");
+    let shaped_short = shape_text(&font, short, 400).expect("shape short");
+    let shaped_medium = shape_text(&font, medium, 400).expect("shape medium");
+    let shaped_long = shape_text(&font, &long, 400).expect("shape long");
 
     // Build a cache containing all glyphs we'll need.
     let cache = build_bench_cache(&font, &[&shaped_short, &shaped_medium, &shaped_long]);
@@ -492,6 +492,7 @@ fn bench_text_layout(c: &mut Criterion) {
                     200.0,
                     TextAlign::Left,
                     1.2,
+                    400,
                 ));
             });
         });
@@ -523,7 +524,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
             |b, &text| {
                 b.iter(|| {
                     // Shape.
-                    let shaped = shape_text(&font, text).expect("shape");
+                    let shaped = shape_text(&font, text, 400).expect("shape");
 
                     // Generate SDFs (cold cache — worst case).
                     let face = font.face().expect("face");
@@ -533,6 +534,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                         let key = GlyphCacheKey {
                             glyph_id: sg.glyph_id,
                             sdf_size: params.render_size as u16,
+                            font_weight: 400,
                         };
                         if !cache.contains(&key) {
                             let glyph_id = ttf_parser::GlyphId(sg.glyph_id);
@@ -568,6 +570,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                         200.0,
                         TextAlign::Left,
                         1.2,
+                        400,
                     );
 
                     black_box(layout);
@@ -579,7 +582,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
     // Warm-cache benchmark: SDF generation only happens once, layout is repeated.
     group.bench_function("layout_warm_cache_sentence", |b| {
         let text = "The quick brown fox jumps over the lazy dog";
-        let shaped = shape_text(&font, text).expect("shape");
+        let shaped = shape_text(&font, text, 400).expect("shape");
         let cache = build_bench_cache(&font, &[&shaped]);
 
         b.iter(|| {
@@ -594,6 +597,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                 200.0,
                 TextAlign::Left,
                 1.2,
+                400,
             ));
         });
     });
@@ -1253,6 +1257,7 @@ fn build_bench_cache(font: &FontData, runs: &[&ShapedRun]) -> GlyphCache {
             let key = GlyphCacheKey {
                 glyph_id: sg.glyph_id,
                 sdf_size,
+                font_weight: 400,
             };
             if cache.contains(&key) {
                 continue;
