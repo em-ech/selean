@@ -27,6 +27,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/chat", post(chat_handler))
         .route("/api/import/pptx", post(import_pptx_handler))
         .route("/api/export/pptx", post(export_pptx_handler))
+        .route("/api/import/idml", post(import_idml_handler))
+        .route("/api/export/idml", post(export_idml_handler))
         .with_state(state)
 }
 
@@ -59,6 +61,9 @@ async fn chat_handler(
 /// PPTX content type for responses.
 const PPTX_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+/// IDML content type for responses.
+const IDML_CONTENT_TYPE: &str = "application/vnd.adobe.indesign-idml-package";
 
 /// Handles PPTX import. Accepts multipart form data with a `file` field
 /// containing the `.pptx` bytes. Returns the parsed `Document` as JSON.
@@ -145,6 +150,96 @@ async fn export_pptx_handler(body: axum::body::Bytes) -> impl IntoResponse {
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("pptx export failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles IDML import. Accepts multipart form data with a `file` field
+/// containing the `.idml` bytes. Returns the parsed `Document` as JSON.
+async fn import_idml_handler(mut multipart: Multipart) -> impl IntoResponse {
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            let bytes = match field.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("failed to read file: {e}") })),
+                    )
+                        .into_response();
+                }
+            };
+
+            return match selean_idml::import_idml(&bytes) {
+                Ok(doc) => {
+                    let json = match selean_engine::persistence::save_document(&doc) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({
+                                    "error": format!("serialization failed: {e}")
+                                })),
+                            )
+                                .into_response();
+                        }
+                    };
+
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "application/json")],
+                        json,
+                    )
+                        .into_response()
+                }
+                Err(e) => (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("idml import failed: {e}") })),
+                )
+                    .into_response(),
+            };
+        }
+    }
+
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": "missing 'file' field in multipart form" })),
+    )
+        .into_response()
+}
+
+/// Handles IDML export. Accepts a `Document` as JSON body and returns the
+/// `.idml` bytes with the appropriate content type.
+async fn export_idml_handler(body: axum::body::Bytes) -> impl IntoResponse {
+    let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(&body)) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid document JSON: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    match selean_idml::export_idml(&doc) {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, IDML_CONTENT_TYPE),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"export.idml\"",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("idml export failed: {e}") })),
         )
             .into_response(),
     }

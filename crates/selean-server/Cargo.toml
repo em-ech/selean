@@ -15,6 +15,7 @@ path = "src/main.rs"
 selean-llm = { path = "../selean-llm" }
 selean-common = { path = "../selean-common" }
 selean-pptx = { path = "../selean-pptx" }
+selean-idml = { path = "../selean-idml" }
 selean-engine = { path = "../selean-engine" }
 axum = { workspace = true, features = ["multipart"] }
 tokio.workspace = true

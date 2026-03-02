@@ -2176,6 +2176,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "selean-idml"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "selean-common",
+ "selean-engine",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "selean-llm"
 version = "0.1.0"
 dependencies = [
@@ -2210,6 +2224,7 @@ dependencies = [
  "reqwest",
  "selean-common",
  "selean-engine",
+ "selean-idml",
  "selean-llm",
  "selean-pptx",
  "serde",
