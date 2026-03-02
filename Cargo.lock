@@ -2176,6 +2176,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "selean-figma"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "selean-common",
+ "selean-engine",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "selean-idml"
 version = "0.1.0"
 dependencies = [
@@ -2224,6 +2238,7 @@ dependencies = [
  "reqwest",
  "selean-common",
  "selean-engine",
+ "selean-figma",
  "selean-idml",
  "selean-llm",
  "selean-pptx",

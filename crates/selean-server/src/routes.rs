@@ -29,6 +29,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/export/pptx", post(export_pptx_handler))
         .route("/api/import/idml", post(import_idml_handler))
         .route("/api/export/idml", post(export_idml_handler))
+        .route("/api/import/figma", post(import_figma_handler))
         .with_state(state)
 }
 
@@ -245,6 +246,80 @@ async fn export_idml_handler(body: axum::body::Bytes) -> impl IntoResponse {
     }
 }
 
+/// Request body for Figma import.
+#[derive(serde::Deserialize)]
+struct FigmaImportRequest {
+    /// Figma file key extracted from the Figma URL.
+    file_key: String,
+    /// Figma personal access token.
+    access_token: String,
+}
+
+/// Handles Figma import. Accepts a JSON body with `file_key` and `access_token`,
+/// fetches the file from the Figma REST API, and returns the parsed `Document` as JSON.
+async fn import_figma_handler(
+    State(state): State<AppState>,
+    Json(request): Json<FigmaImportRequest>,
+) -> impl IntoResponse {
+    if request.file_key.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "file_key is required" })),
+        )
+            .into_response();
+    }
+
+    if request.access_token.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "access_token is required" })),
+        )
+            .into_response();
+    }
+
+    match selean_figma::import_figma(&state.http_client, &request.access_token, &request.file_key)
+        .await
+    {
+        Ok(doc) => {
+            let json = match selean_engine::persistence::save_document(&doc) {
+                Ok(j) => j,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("serialization failed: {e}")
+                        })),
+                    )
+                        .into_response();
+                }
+            };
+
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                json,
+            )
+                .into_response()
+        }
+        Err(e) => {
+            let status = match &e {
+                selean_figma::FigmaError::Api(msg) if msg.starts_with("403") => {
+                    StatusCode::FORBIDDEN
+                }
+                selean_figma::FigmaError::Api(msg) if msg.starts_with("404") => {
+                    StatusCode::NOT_FOUND
+                }
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (
+                status,
+                Json(serde_json::json!({ "error": format!("figma import failed: {e}") })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -328,5 +403,80 @@ mod tests {
             content_type.contains("text/event-stream"),
             "expected SSE content type, got: {content_type}"
         );
+    }
+
+    #[tokio::test]
+    async fn figma_import_missing_file_key() {
+        let app = create_router(test_state());
+        let body = serde_json::json!({
+            "file_key": "",
+            "access_token": "test-token"
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/import/figma")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("file_key"));
+    }
+
+    #[tokio::test]
+    async fn figma_import_missing_access_token() {
+        let app = create_router(test_state());
+        let body = serde_json::json!({
+            "file_key": "some-key",
+            "access_token": ""
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/import/figma")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("access_token"));
+    }
+
+    #[tokio::test]
+    async fn figma_import_route_exists() {
+        let app = create_router(test_state());
+        // Sending invalid JSON should get a 4xx, not 404/405.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/import/figma")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Missing required fields returns 422 (Unprocessable Entity) from axum deserialization
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }
