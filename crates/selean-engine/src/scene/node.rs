@@ -323,6 +323,28 @@ impl BlendMode {
     pub fn is_native(&self) -> bool {
         matches!(self, Self::Normal | Self::Add)
     }
+
+    /// Returns the 0-based shader index for non-native blend modes.
+    ///
+    /// Used by the blend composite shader to dispatch to the correct formula.
+    /// Native modes (Normal, Add) return `u32::MAX` as a sentinel (never used).
+    #[must_use]
+    pub fn shader_index(&self) -> u32 {
+        match self {
+            Self::Multiply => 0,
+            Self::Screen => 1,
+            Self::Overlay => 2,
+            Self::Darken => 3,
+            Self::Lighten => 4,
+            Self::ColorDodge => 5,
+            Self::ColorBurn => 6,
+            Self::HardLight => 7,
+            Self::SoftLight => 8,
+            Self::Difference => 9,
+            Self::Exclusion => 10,
+            Self::Normal | Self::Add => u32::MAX,
+        }
+    }
 }
 
 impl std::fmt::Display for BlendMode {

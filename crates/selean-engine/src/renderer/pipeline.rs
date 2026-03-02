@@ -8,6 +8,7 @@ use selean_common::error::EngineError;
 use selean_common::types::NodeId;
 use tracing::{debug, info, warn};
 
+use super::blend_pipeline::BlendResources;
 use super::camera::Camera;
 use super::clip_stack::ClipStack;
 use super::draw_list::{DrawCommand, DrawList};
@@ -143,10 +144,14 @@ pub struct Renderer {
     vector_system: VectorSystem,
     /// RGBA atlas shared by images and vectors.
     image_atlas: TextureAtlas<4>,
-    /// Stencil texture for clip masking.
+    /// Stencil texture for clip masking (used only when blend resources are bypassed).
+    #[allow(dead_code)]
     stencil_texture: wgpu::Texture,
-    /// Stencil texture view for render pass attachment.
+    /// Stencil texture view for render pass attachment (used only when blend resources are bypassed).
+    #[allow(dead_code)]
     stencil_view: wgpu::TextureView,
+    /// GPU resources for shader-based blend mode compositing.
+    blend_resources: BlendResources,
     /// Background clear color.
     clear_color: wgpu::Color,
     /// The texture format used for the render target.
@@ -214,6 +219,15 @@ impl Renderer {
             descriptor.viewport_height as u32,
         );
 
+        // Create blend resources for shader-based blend mode compositing.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let blend_resources = BlendResources::new(
+            &gpu.device,
+            target_format,
+            descriptor.viewport_width as u32,
+            descriptor.viewport_height as u32,
+        );
+
         info!(
             viewport_w = descriptor.viewport_width,
             viewport_h = descriptor.viewport_height,
@@ -252,6 +266,7 @@ impl Renderer {
             image_atlas,
             stencil_texture,
             stencil_view,
+            blend_resources,
             clear_color: descriptor.clear_color,
             target_format,
             draw_list: DrawList::new(),
@@ -299,6 +314,10 @@ impl Renderer {
             create_stencil_texture(&self.gpu.device, width as u32, height as u32);
         self.stencil_texture = stencil_texture;
         self.stencil_view = stencil_view;
+
+        // Resize blend resources (intermediate RT, snapshot, stencil).
+        self.blend_resources
+            .resize(&self.gpu.device, width as u32, height as u32);
 
         debug!(width, height, "Viewport resized");
     }
@@ -626,12 +645,19 @@ impl Renderer {
                     blend,
                     stencil_test,
                 } => {
+                    if !blend.is_native() {
+                        self.draw_list.push(DrawCommand::CopyFramebuffer);
+                    }
                     self.draw_list.push(DrawCommand::DrawRects {
                         instance_start: *instance_start,
                         instance_count: *instance_count,
                         blend: *blend,
                         stencil_test: *stencil_test,
                     });
+                    if !blend.is_native() {
+                        self.draw_list
+                            .push(DrawCommand::ApplyBlend { mode: *blend });
+                    }
                 }
                 RenderOrderEntry::Text {
                     pending_start,
@@ -648,12 +674,19 @@ impl Renderer {
                     for inst in instances.iter_mut().skip(start).take(count) {
                         inst.clip_rect = clip_arr;
                     }
+                    if !blend.is_native() {
+                        self.draw_list.push(DrawCommand::CopyFramebuffer);
+                    }
                     self.draw_list.push(DrawCommand::DrawGlyphs {
                         instance_start: *pending_start,
                         instance_count: *pending_count,
                         blend: *blend,
                         stencil_test: *stencil_test,
                     });
+                    if !blend.is_native() {
+                        self.draw_list
+                            .push(DrawCommand::ApplyBlend { mode: *blend });
+                    }
                 }
                 RenderOrderEntry::Image {
                     pending_start,
@@ -669,12 +702,19 @@ impl Renderer {
                     for inst in instances.iter_mut().skip(start).take(count) {
                         inst.clip_rect = clip_arr;
                     }
+                    if !blend.is_native() {
+                        self.draw_list.push(DrawCommand::CopyFramebuffer);
+                    }
                     self.draw_list.push(DrawCommand::DrawImages {
                         instance_start: *pending_start,
                         instance_count: *pending_count,
                         blend: *blend,
                         stencil_test: *stencil_test,
                     });
+                    if !blend.is_native() {
+                        self.draw_list
+                            .push(DrawCommand::ApplyBlend { mode: *blend });
+                    }
                 }
                 RenderOrderEntry::Vector {
                     pending_start,
@@ -690,12 +730,19 @@ impl Renderer {
                     for inst in instances.iter_mut().skip(start).take(count) {
                         inst.clip_rect = clip_arr;
                     }
+                    if !blend.is_native() {
+                        self.draw_list.push(DrawCommand::CopyFramebuffer);
+                    }
                     self.draw_list.push(DrawCommand::DrawVectors {
                         instance_start: *pending_start,
                         instance_count: *pending_count,
                         blend: *blend,
                         stencil_test: *stencil_test,
                     });
+                    if !blend.is_native() {
+                        self.draw_list
+                            .push(DrawCommand::ApplyBlend { mode: *blend });
+                    }
                 }
                 RenderOrderEntry::PushScissor { clip_rect } => {
                     if let Some((x, y, w, h)) = clip_rect.to_scissor_rect(vp_size.0, vp_size.1) {
@@ -754,9 +801,34 @@ impl Renderer {
         self.render_order = render_order;
     }
 
-    /// Executes the draw list in a single render pass.
+    /// Executes the draw list, rendering to an intermediate texture and blitting to the swapchain.
+    ///
+    /// Non-native blend modes are handled by breaking the render pass:
+    /// 1. `CopyFramebuffer`: snapshot the intermediate to capture the destination.
+    /// 2. The element is drawn with REPLACE blend (overwriting the intermediate).
+    /// 3. `ApplyBlend`: a full-screen composite pass reads src+dst and writes the blended result.
+    ///
+    /// All native-blend commands render directly to the intermediate. At the end,
+    /// the intermediate is blitted to the swapchain.
     #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     fn execute_draw_list(&self, view: &wgpu::TextureView) {
+        let has_non_native = self.draw_list.commands().iter().any(|cmd| {
+            matches!(
+                cmd,
+                DrawCommand::CopyFramebuffer | DrawCommand::ApplyBlend { .. }
+            )
+        });
+
+        if has_non_native {
+            self.execute_draw_list_blended(view);
+        } else {
+            self.execute_draw_list_direct(view);
+        }
+    }
+
+    /// Fast path: no non-native blend modes, render directly to swapchain (single pass).
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    fn execute_draw_list_direct(&self, view: &wgpu::TextureView) {
         let mut encoder = self
             .gpu
             .device
@@ -776,7 +848,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.stencil_view,
+                    view: self.blend_resources.stencil_view(),
                     depth_ops: None,
                     stencil_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0),
@@ -787,167 +859,351 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            let (vp_w, vp_h) = self.camera.viewport_size();
-            let index_count = QUAD_INDICES.len() as u32;
-            let mut current_stencil_ref: u32 = 0;
+            self.execute_scene_commands(&mut pass);
+        }
 
-            for cmd in self.draw_list.commands() {
-                match cmd {
-                    DrawCommand::SetScissor {
-                        x,
-                        y,
-                        width,
-                        height,
-                    } => {
-                        pass.set_scissor_rect(*x, *y, *width, *height);
-                    }
-                    DrawCommand::ResetScissor => {
-                        #[allow(clippy::cast_sign_loss)]
-                        pass.set_scissor_rect(0, 0, vp_w as u32, vp_h as u32);
-                    }
-                    DrawCommand::SetStencilRef(ref_val) => {
-                        current_stencil_ref = *ref_val;
-                    }
-                    DrawCommand::StencilWrite {
-                        instance_start,
-                        instance_count,
-                    } => {
-                        pass.set_pipeline(self.rect_pipeline.stencil_write_pipeline());
-                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                        pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
-                        pass.set_index_buffer(
-                            self.shared.index_buffer().slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        pass.set_stencil_reference(current_stencil_ref);
-                        pass.draw_indexed(
-                            0..index_count,
-                            0,
-                            *instance_start..*instance_start + *instance_count,
-                        );
-                    }
-                    DrawCommand::StencilDecrement {
-                        instance_start,
-                        instance_count,
-                    } => {
-                        pass.set_pipeline(self.rect_pipeline.stencil_decrement_pipeline());
-                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                        pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
-                        pass.set_index_buffer(
-                            self.shared.index_buffer().slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        pass.set_stencil_reference(current_stencil_ref);
-                        pass.draw_indexed(
-                            0..index_count,
-                            0,
-                            *instance_start..*instance_start + *instance_count,
-                        );
-                    }
-                    DrawCommand::DrawRects {
-                        instance_start,
-                        instance_count,
-                        blend,
-                        stencil_test,
-                    } => {
-                        pass.set_pipeline(
-                            self.rect_pipeline.select_pipeline(*blend, *stencil_test),
-                        );
-                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                        pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
-                        pass.set_index_buffer(
-                            self.shared.index_buffer().slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        pass.set_stencil_reference(current_stencil_ref);
-                        pass.draw_indexed(
-                            0..index_count,
-                            0,
-                            *instance_start..*instance_start + *instance_count,
-                        );
-                    }
-                    DrawCommand::DrawGlyphs {
-                        instance_start,
-                        instance_count,
-                        blend,
-                        stencil_test,
-                    } => {
-                        pass.set_pipeline(
-                            self.text_pipeline.select_pipeline(*blend, *stencil_test),
-                        );
-                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                        pass.set_bind_group(1, self.text_system.atlas().bind_group(), &[]);
-                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                        pass.set_vertex_buffer(1, self.text_instance_buf.buffer().slice(..));
-                        pass.set_index_buffer(
-                            self.shared.index_buffer().slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        pass.set_stencil_reference(current_stencil_ref);
-                        pass.draw_indexed(
-                            0..index_count,
-                            0,
-                            *instance_start..*instance_start + *instance_count,
+        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Slow path: non-native blend modes present, render to intermediate and blit.
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    fn execute_draw_list_blended(&self, view: &wgpu::TextureView) {
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("blend_render_encoder"),
+            });
+
+        let (vp_w, vp_h) = self.camera.viewport_size();
+        let index_count = QUAD_INDICES.len() as u32;
+        let mut current_stencil_ref: u32 = 0;
+
+        // Track which commands need render pass breaks.
+        // We iterate commands, breaking the pass at CopyFramebuffer/ApplyBlend.
+        let commands: Vec<DrawCommand> = self.draw_list.commands().to_vec();
+        let mut cmd_idx = 0;
+        let mut is_first_pass = true;
+
+        while cmd_idx < commands.len() {
+            // Find the next CopyFramebuffer or ApplyBlend.
+            let break_at = commands[cmd_idx..]
+                .iter()
+                .position(|cmd| {
+                    matches!(
+                        cmd,
+                        DrawCommand::CopyFramebuffer | DrawCommand::ApplyBlend { .. }
+                    )
+                })
+                .map_or(commands.len(), |offset| cmd_idx + offset);
+
+            // Render scene commands [cmd_idx..break_at] in a render pass on the intermediate.
+            if break_at > cmd_idx {
+                let load_op = if is_first_pass {
+                    wgpu::LoadOp::Clear(self.clear_color)
+                } else {
+                    wgpu::LoadOp::Load
+                };
+                let stencil_load = if is_first_pass {
+                    wgpu::LoadOp::Clear(0)
+                } else {
+                    wgpu::LoadOp::Load
+                };
+
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("intermediate_render_pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: self.blend_resources.intermediate_view(),
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: load_op,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: self.blend_resources.stencil_view(),
+                            depth_ops: None,
+                            stencil_ops: Some(wgpu::Operations {
+                                load: stencil_load,
+                                store: wgpu::StoreOp::Store,
+                            }),
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    for cmd in &commands[cmd_idx..break_at] {
+                        self.execute_single_command(
+                            cmd,
+                            &mut pass,
+                            &mut current_stencil_ref,
+                            vp_w,
+                            vp_h,
+                            index_count,
                         );
                     }
-                    DrawCommand::DrawImages {
-                        instance_start,
-                        instance_count,
-                        blend,
-                        stencil_test,
-                    } => {
-                        pass.set_pipeline(
-                            self.textured_quad_pipeline
-                                .select_pipeline(*blend, *stencil_test),
-                        );
-                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                        pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
-                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                        pass.set_vertex_buffer(1, self.image_instance_buf.buffer().slice(..));
-                        pass.set_index_buffer(
-                            self.shared.index_buffer().slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        pass.set_stencil_reference(current_stencil_ref);
-                        pass.draw_indexed(
-                            0..index_count,
-                            0,
-                            *instance_start..*instance_start + *instance_count,
-                        );
+                }
+                is_first_pass = false;
+            }
+
+            cmd_idx = break_at;
+
+            // Handle the break command if present.
+            if cmd_idx < commands.len() {
+                match &commands[cmd_idx] {
+                    DrawCommand::CopyFramebuffer => {
+                        // If this is the very first command, clear the intermediate first.
+                        if is_first_pass {
+                            // Empty pass to clear the intermediate before snapshot.
+                            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("initial_clear_pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: self.blend_resources.intermediate_view(),
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(self.clear_color),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: Some(
+                                    wgpu::RenderPassDepthStencilAttachment {
+                                        view: self.blend_resources.stencil_view(),
+                                        depth_ops: None,
+                                        stencil_ops: Some(wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(0),
+                                            store: wgpu::StoreOp::Store,
+                                        }),
+                                    },
+                                ),
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            is_first_pass = false;
+                        }
+                        self.blend_resources.snapshot(&mut encoder);
+                        cmd_idx += 1;
                     }
-                    DrawCommand::DrawVectors {
-                        instance_start,
-                        instance_count,
-                        blend,
-                        stencil_test,
-                    } => {
-                        pass.set_pipeline(
-                            self.textured_quad_pipeline
-                                .select_pipeline(*blend, *stencil_test),
+                    DrawCommand::ApplyBlend { mode } => {
+                        self.blend_resources.blend_pass(
+                            &mut encoder,
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            *mode,
                         );
-                        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                        pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
-                        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                        pass.set_vertex_buffer(1, self.vector_instance_buf.buffer().slice(..));
-                        pass.set_index_buffer(
-                            self.shared.index_buffer().slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        pass.set_stencil_reference(current_stencil_ref);
-                        pass.draw_indexed(
-                            0..index_count,
-                            0,
-                            *instance_start..*instance_start + *instance_count,
-                        );
+                        cmd_idx += 1;
                     }
+                    _ => unreachable!(),
                 }
             }
         }
 
+        // If no commands were executed (empty draw list), still clear the intermediate.
+        if is_first_pass {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("empty_clear_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: self.blend_resources.intermediate_view(),
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(self.clear_color),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+
+        // Final blit: intermediate -> swapchain.
+        self.blend_resources
+            .blit_to_target(&mut encoder, &self.gpu.device, view);
+
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Executes all scene commands in a single render pass (no blend breaking).
+    #[allow(clippy::cast_possible_truncation)]
+    fn execute_scene_commands<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        let (vp_w, vp_h) = self.camera.viewport_size();
+        let index_count = QUAD_INDICES.len() as u32;
+        let mut current_stencil_ref: u32 = 0;
+
+        for cmd in self.draw_list.commands() {
+            self.execute_single_command(
+                cmd,
+                pass,
+                &mut current_stencil_ref,
+                vp_w,
+                vp_h,
+                index_count,
+            );
+        }
+    }
+
+    /// Executes a single draw command in the given render pass.
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    fn execute_single_command<'a>(
+        &'a self,
+        cmd: &DrawCommand,
+        pass: &mut wgpu::RenderPass<'a>,
+        current_stencil_ref: &mut u32,
+        vp_w: f32,
+        vp_h: f32,
+        index_count: u32,
+    ) {
+        match cmd {
+            DrawCommand::SetScissor {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                pass.set_scissor_rect(*x, *y, *width, *height);
+            }
+            DrawCommand::ResetScissor => {
+                #[allow(clippy::cast_sign_loss)]
+                pass.set_scissor_rect(0, 0, vp_w as u32, vp_h as u32);
+            }
+            DrawCommand::SetStencilRef(ref_val) => {
+                *current_stencil_ref = *ref_val;
+            }
+            DrawCommand::StencilWrite {
+                instance_start,
+                instance_count,
+            } => {
+                pass.set_pipeline(self.rect_pipeline.stencil_write_pipeline());
+                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
+                pass.set_index_buffer(
+                    self.shared.index_buffer().slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.set_stencil_reference(*current_stencil_ref);
+                pass.draw_indexed(
+                    0..index_count,
+                    0,
+                    *instance_start..*instance_start + *instance_count,
+                );
+            }
+            DrawCommand::StencilDecrement {
+                instance_start,
+                instance_count,
+            } => {
+                pass.set_pipeline(self.rect_pipeline.stencil_decrement_pipeline());
+                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
+                pass.set_index_buffer(
+                    self.shared.index_buffer().slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.set_stencil_reference(*current_stencil_ref);
+                pass.draw_indexed(
+                    0..index_count,
+                    0,
+                    *instance_start..*instance_start + *instance_count,
+                );
+            }
+            DrawCommand::DrawRects {
+                instance_start,
+                instance_count,
+                blend,
+                stencil_test,
+            } => {
+                pass.set_pipeline(self.rect_pipeline.select_pipeline(*blend, *stencil_test));
+                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
+                pass.set_index_buffer(
+                    self.shared.index_buffer().slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.set_stencil_reference(*current_stencil_ref);
+                pass.draw_indexed(
+                    0..index_count,
+                    0,
+                    *instance_start..*instance_start + *instance_count,
+                );
+            }
+            DrawCommand::DrawGlyphs {
+                instance_start,
+                instance_count,
+                blend,
+                stencil_test,
+            } => {
+                pass.set_pipeline(self.text_pipeline.select_pipeline(*blend, *stencil_test));
+                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                pass.set_bind_group(1, self.text_system.atlas().bind_group(), &[]);
+                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                pass.set_vertex_buffer(1, self.text_instance_buf.buffer().slice(..));
+                pass.set_index_buffer(
+                    self.shared.index_buffer().slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.set_stencil_reference(*current_stencil_ref);
+                pass.draw_indexed(
+                    0..index_count,
+                    0,
+                    *instance_start..*instance_start + *instance_count,
+                );
+            }
+            DrawCommand::DrawImages {
+                instance_start,
+                instance_count,
+                blend,
+                stencil_test,
+            } => {
+                pass.set_pipeline(
+                    self.textured_quad_pipeline
+                        .select_pipeline(*blend, *stencil_test),
+                );
+                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
+                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                pass.set_vertex_buffer(1, self.image_instance_buf.buffer().slice(..));
+                pass.set_index_buffer(
+                    self.shared.index_buffer().slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.set_stencil_reference(*current_stencil_ref);
+                pass.draw_indexed(
+                    0..index_count,
+                    0,
+                    *instance_start..*instance_start + *instance_count,
+                );
+            }
+            DrawCommand::DrawVectors {
+                instance_start,
+                instance_count,
+                blend,
+                stencil_test,
+            } => {
+                pass.set_pipeline(
+                    self.textured_quad_pipeline
+                        .select_pipeline(*blend, *stencil_test),
+                );
+                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+                pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
+                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+                pass.set_vertex_buffer(1, self.vector_instance_buf.buffer().slice(..));
+                pass.set_index_buffer(
+                    self.shared.index_buffer().slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.set_stencil_reference(*current_stencil_ref);
+                pass.draw_indexed(
+                    0..index_count,
+                    0,
+                    *instance_start..*instance_start + *instance_count,
+                );
+            }
+            // CopyFramebuffer and ApplyBlend are handled by the caller
+            // (execute_draw_list_blended) by breaking render passes.
+            DrawCommand::CopyFramebuffer | DrawCommand::ApplyBlend { .. } => {}
+        }
     }
 }
 

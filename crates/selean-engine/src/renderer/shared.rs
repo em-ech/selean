@@ -181,6 +181,16 @@ impl PersistentInstanceBuffer {
 
 // --- Blend state constants ---
 
+/// Replace blending: source color overwrites destination entirely.
+///
+/// Used when rendering elements with non-native blend modes. The element is
+/// written with no blending; the actual compositing is performed by a subsequent
+/// shader-based blend pass.
+pub const BLEND_STATE_REPLACE: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent::REPLACE,
+    alpha: wgpu::BlendComponent::REPLACE,
+};
+
 /// Additive blending: source color is added to destination.
 ///
 /// Used for the `BlendMode::Add` pipeline variant.

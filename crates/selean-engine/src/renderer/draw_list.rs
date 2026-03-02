@@ -64,6 +64,17 @@ pub enum DrawCommand {
         blend: BlendMode,
         stencil_test: bool,
     },
+    /// Copy the current framebuffer to the snapshot texture.
+    ///
+    /// Inserted before rendering a non-native blend mode element to capture
+    /// the destination state for the blend formula.
+    CopyFramebuffer,
+    /// Apply a shader-based blend mode composite.
+    ///
+    /// Inserted after rendering a non-native blend mode element. Reads the
+    /// snapshot (dst) and current framebuffer (src), applies the blend formula,
+    /// and writes the result.
+    ApplyBlend { mode: BlendMode },
 }
 
 /// Ordered list of draw commands for a single frame.
@@ -514,5 +525,83 @@ mod tests {
         let mut list = DrawList::new();
         list.merge_adjacent();
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn no_merge_across_copy_framebuffer() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 3,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::CopyFramebuffer);
+        list.push(DrawCommand::DrawRects {
+            instance_start: 3,
+            instance_count: 4,
+            blend: BlendMode::Multiply,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn no_merge_across_apply_blend() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 3,
+            blend: BlendMode::Multiply,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::ApplyBlend {
+            mode: BlendMode::Multiply,
+        });
+        list.push(DrawCommand::DrawRects {
+            instance_start: 3,
+            instance_count: 4,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn copy_and_apply_blend_sequence() {
+        let mut list = DrawList::new();
+        // Normal rect
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 2,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        // Non-native blend sequence
+        list.push(DrawCommand::CopyFramebuffer);
+        list.push(DrawCommand::DrawRects {
+            instance_start: 2,
+            instance_count: 1,
+            blend: BlendMode::Screen,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::ApplyBlend {
+            mode: BlendMode::Screen,
+        });
+        // More normal rects
+        list.push(DrawCommand::DrawRects {
+            instance_start: 3,
+            instance_count: 3,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        // Should be: DrawRects(Normal), CopyFramebuffer, DrawRects(Screen), ApplyBlend, DrawRects(Normal)
+        assert_eq!(list.len(), 5);
     }
 }

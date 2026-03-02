@@ -9,8 +9,8 @@ use tracing::warn;
 
 use crate::renderer::texture_atlas::AtlasRegion;
 use crate::renderer::{
-    BLEND_STATE_ADD, PersistentInstanceBuffer, QUAD_INDICES, QuadVertex, STENCIL_NOOP,
-    STENCIL_TEST, SharedPipelineResources, create_pipeline_with_blend,
+    BLEND_STATE_ADD, BLEND_STATE_REPLACE, PersistentInstanceBuffer, QUAD_INDICES, QuadVertex,
+    STENCIL_NOOP, STENCIL_TEST, SharedPipelineResources, create_pipeline_with_blend,
 };
 use crate::scene::{BlendMode, ClipRect, Color, SceneNode, TransformColumns};
 
@@ -349,10 +349,14 @@ pub struct TexturedQuadPipeline {
     pipeline_normal: wgpu::RenderPipeline,
     /// Pipeline variant for Additive blending.
     pipeline_add: wgpu::RenderPipeline,
+    /// Replace blending (for non-native blend modes, composited by blend pass).
+    pipeline_replace: wgpu::RenderPipeline,
     /// Normal blend with stencil Equal test (render inside stencil clip).
     pipeline_normal_stencil_test: wgpu::RenderPipeline,
     /// Additive blend with stencil Equal test (render inside stencil clip).
     pipeline_add_stencil_test: wgpu::RenderPipeline,
+    /// Replace blend with stencil Equal test.
+    pipeline_replace_stencil_test: wgpu::RenderPipeline,
 }
 
 impl TexturedQuadPipeline {
@@ -402,6 +406,18 @@ impl TexturedQuadPipeline {
             wgpu::ColorWrites::ALL,
         );
 
+        let pipeline_replace = create_pipeline_with_blend(
+            device,
+            "textured_quad_pipeline_replace",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            BLEND_STATE_REPLACE,
+            Some(STENCIL_NOOP),
+            wgpu::ColorWrites::ALL,
+        );
+
         let pipeline_normal_stencil_test = create_pipeline_with_blend(
             device,
             "textured_quad_pipeline_normal_stencil_test",
@@ -426,24 +442,41 @@ impl TexturedQuadPipeline {
             wgpu::ColorWrites::ALL,
         );
 
+        let pipeline_replace_stencil_test = create_pipeline_with_blend(
+            device,
+            "textured_quad_pipeline_replace_stencil_test",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            BLEND_STATE_REPLACE,
+            Some(STENCIL_TEST),
+            wgpu::ColorWrites::ALL,
+        );
+
         Self {
             pipeline_normal,
             pipeline_add,
+            pipeline_replace,
             pipeline_normal_stencil_test,
             pipeline_add_stencil_test,
+            pipeline_replace_stencil_test,
         }
     }
 
     /// Returns the pipeline variant for the given blend mode and stencil test state.
     ///
-    /// Non-native blend modes (Multiply, Screen, etc.) fall back to Normal.
+    /// Non-native blend modes use the Replace pipeline (composited by a subsequent
+    /// shader-based blend pass).
     #[must_use]
     pub fn select_pipeline(&self, blend: BlendMode, stencil_test: bool) -> &wgpu::RenderPipeline {
         match (blend, stencil_test) {
             (BlendMode::Add, false) => &self.pipeline_add,
             (BlendMode::Add, true) => &self.pipeline_add_stencil_test,
-            (_, false) => &self.pipeline_normal,
-            (_, true) => &self.pipeline_normal_stencil_test,
+            (BlendMode::Normal, false) => &self.pipeline_normal,
+            (BlendMode::Normal, true) => &self.pipeline_normal_stencil_test,
+            (_, false) => &self.pipeline_replace,
+            (_, true) => &self.pipeline_replace_stencil_test,
         }
     }
 

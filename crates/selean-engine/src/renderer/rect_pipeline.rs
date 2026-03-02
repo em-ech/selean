@@ -9,8 +9,8 @@ use tracing::warn;
 
 use super::quad::{QUAD_INDICES, QuadVertex};
 use super::shared::{
-    BLEND_STATE_ADD, PersistentInstanceBuffer, STENCIL_DECREMENT, STENCIL_NOOP, STENCIL_TEST,
-    STENCIL_WRITE, SharedPipelineResources, create_pipeline_with_blend,
+    BLEND_STATE_ADD, BLEND_STATE_REPLACE, PersistentInstanceBuffer, STENCIL_DECREMENT,
+    STENCIL_NOOP, STENCIL_TEST, STENCIL_WRITE, SharedPipelineResources, create_pipeline_with_blend,
 };
 use crate::scene::{BlendMode, ClipRect, Color, SceneNode, SceneNodeKind, TransformColumns};
 
@@ -330,10 +330,14 @@ pub struct RectPipeline {
     pipeline_normal: wgpu::RenderPipeline,
     /// Pipeline variant for Additive blending.
     pipeline_add: wgpu::RenderPipeline,
+    /// Replace blending (for non-native blend modes, composited by blend pass).
+    pipeline_replace: wgpu::RenderPipeline,
     /// Normal blend with stencil Equal test (render inside stencil clip).
     pipeline_normal_stencil_test: wgpu::RenderPipeline,
     /// Additive blend with stencil Equal test (render inside stencil clip).
     pipeline_add_stencil_test: wgpu::RenderPipeline,
+    /// Replace blend with stencil Equal test.
+    pipeline_replace_stencil_test: wgpu::RenderPipeline,
     /// Stencil write: `IncrementClamp`, no color output (clip push).
     pipeline_stencil_write: wgpu::RenderPipeline,
     /// Stencil decrement: `DecrementClamp`, no color output (clip pop).
@@ -343,6 +347,7 @@ pub struct RectPipeline {
 impl RectPipeline {
     /// Creates the rectangle pipeline variants for the given device and output format.
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn new(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
@@ -386,6 +391,18 @@ impl RectPipeline {
             wgpu::ColorWrites::ALL,
         );
 
+        let pipeline_replace = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_replace",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            BLEND_STATE_REPLACE,
+            Some(STENCIL_NOOP),
+            wgpu::ColorWrites::ALL,
+        );
+
         let pipeline_normal_stencil_test = create_pipeline_with_blend(
             device,
             "rect_pipeline_normal_stencil_test",
@@ -406,6 +423,18 @@ impl RectPipeline {
             &buffers,
             target_format,
             BLEND_STATE_ADD,
+            Some(STENCIL_TEST),
+            wgpu::ColorWrites::ALL,
+        );
+
+        let pipeline_replace_stencil_test = create_pipeline_with_blend(
+            device,
+            "rect_pipeline_replace_stencil_test",
+            &pipeline_layout,
+            &shader_module,
+            &buffers,
+            target_format,
+            BLEND_STATE_REPLACE,
             Some(STENCIL_TEST),
             wgpu::ColorWrites::ALL,
         );
@@ -437,8 +466,10 @@ impl RectPipeline {
         Self {
             pipeline_normal,
             pipeline_add,
+            pipeline_replace,
             pipeline_normal_stencil_test,
             pipeline_add_stencil_test,
+            pipeline_replace_stencil_test,
             pipeline_stencil_write,
             pipeline_stencil_decrement,
         }
@@ -446,14 +477,17 @@ impl RectPipeline {
 
     /// Returns the pipeline variant for the given blend mode and stencil test state.
     ///
-    /// Non-native blend modes (Multiply, Screen, etc.) fall back to Normal.
+    /// Non-native blend modes use the Replace pipeline (composited by a subsequent
+    /// shader-based blend pass).
     #[must_use]
     pub fn select_pipeline(&self, blend: BlendMode, stencil_test: bool) -> &wgpu::RenderPipeline {
         match (blend, stencil_test) {
             (BlendMode::Add, false) => &self.pipeline_add,
             (BlendMode::Add, true) => &self.pipeline_add_stencil_test,
-            (_, false) => &self.pipeline_normal,
-            (_, true) => &self.pipeline_normal_stencil_test,
+            (BlendMode::Normal, false) => &self.pipeline_normal,
+            (BlendMode::Normal, true) => &self.pipeline_normal_stencil_test,
+            (_, false) => &self.pipeline_replace,
+            (_, true) => &self.pipeline_replace_stencil_test,
         }
     }
 
