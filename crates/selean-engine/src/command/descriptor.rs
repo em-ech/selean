@@ -14,12 +14,12 @@ use crate::scene::{
 
 use super::{
     AddChildCommand, AddRootCommand, Command, RemoveNodeCommand, ReorderChildrenCommand,
-    ReparentCommand, SetAssetRefCommand, SetBlendModeCommand, SetBoundsCommand, SetClipModeCommand,
-    SetCornerRadiusCommand, SetFillCommand, SetFontFamilyCommand, SetFontSizeCommand,
-    SetFontStyleCommand, SetFontWeightCommand, SetLineHeightCommand, SetNameCommand,
-    SetOpacityCommand, SetPathDataCommand, SetScrollOffsetCommand, SetStrokeCommand,
-    SetStrokeWidthCommand, SetTextAlignCommand, SetTextColorCommand, SetTextContentCommand,
-    SetTransformCommand, SetVisibleCommand,
+    ReorderRootsCommand, ReparentCommand, SetAssetRefCommand, SetBlendModeCommand,
+    SetBoundsCommand, SetClipModeCommand, SetCornerRadiusCommand, SetFillCommand,
+    SetFontFamilyCommand, SetFontSizeCommand, SetFontStyleCommand, SetFontWeightCommand,
+    SetLineHeightCommand, SetNameCommand, SetOpacityCommand, SetPathDataCommand,
+    SetScrollOffsetCommand, SetStrokeCommand, SetStrokeWidthCommand, SetTextAlignCommand,
+    SetTextColorCommand, SetTextContentCommand, SetTransformCommand, SetVisibleCommand,
 };
 
 /// A serializable description of a scene graph mutation.
@@ -215,6 +215,11 @@ pub enum CommandDescriptor {
         /// New order of child IDs.
         new_order: Vec<NodeId>,
     },
+    /// Reorder root nodes.
+    ReorderRoots {
+        /// New order of root node IDs.
+        new_order: Vec<NodeId>,
+    },
 }
 
 impl CommandDescriptor {
@@ -300,6 +305,7 @@ impl CommandDescriptor {
                 parent_id,
                 new_order,
             } => Box::new(ReorderChildrenCommand::new(parent_id, new_order)),
+            Self::ReorderRoots { new_order } => Box::new(ReorderRootsCommand::new(new_order)),
         }
     }
 }
@@ -578,6 +584,18 @@ mod tests {
         let desc = CommandDescriptor::ReorderChildren {
             parent_id,
             new_order: vec![child2, child1],
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn reorder_roots_roundtrip() {
+        let r1 = sample_node_id();
+        let r2 = sample_node_id();
+        let desc = CommandDescriptor::ReorderRoots {
+            new_order: vec![r2, r1],
         };
         let json = serde_json::to_string(&desc).expect("serialize");
         let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");

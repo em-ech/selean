@@ -5,16 +5,22 @@ import type { SeleanEditor } from "../wasm/types";
 interface FileMenuProps {
   editorRef: React.RefObject<SeleanEditor | null>;
   onSceneChanged: () => void;
+  onClearAutoSave?: () => void;
 }
 
 /**
  * File menu dropdown in the header.
- * Provides New, Save, Open, Import PPTX, Export PPTX.
+ * Provides New, Save, Open, and import/export for PPTX, IDML, and Figma.
  */
-export function FileMenu({ editorRef, onSceneChanged }: FileMenuProps) {
+export function FileMenu({
+  editorRef,
+  onSceneChanged,
+  onClearAutoSave,
+}: FileMenuProps) {
   const [open, setOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pptxInputRef = useRef<HTMLInputElement>(null);
+  const idmlInputRef = useRef<HTMLInputElement>(null);
 
   const close = useCallback(() => setOpen(false), []);
 
@@ -35,9 +41,10 @@ export function FileMenu({ editorRef, onSceneChanged }: FileMenuProps) {
         ],
       }),
     );
+    onClearAutoSave?.();
     onSceneChanged();
     close();
-  }, [editorRef, onSceneChanged, close]);
+  }, [editorRef, onSceneChanged, onClearAutoSave, close]);
 
   const handleSave = useCallback(() => {
     const editor = editorRef.current;
@@ -135,6 +142,114 @@ export function FileMenu({ editorRef, onSceneChanged }: FileMenuProps) {
     close();
   }, [editorRef, close]);
 
+  const handleImportIdml = useCallback(() => {
+    idmlInputRef.current?.click();
+    close();
+  }, [close]);
+
+  const handleIdmlSelected = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const editor = editorRef.current;
+      if (!editor) return;
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch("/api/import/idml", {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) {
+          throw new Error(`Import failed: ${response.status}`);
+        }
+        const json = await response.text();
+        editor.import_document(json);
+        onSceneChanged();
+      } catch {
+        // Import failed
+      }
+      e.target.value = "";
+    },
+    [editorRef, onSceneChanged],
+  );
+
+  const handleExportIdml = useCallback(async () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    try {
+      const docJson = editor.export_document_json();
+      const response = await fetch("/api/export/idml", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: docJson,
+      });
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "document.idml";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Export failed
+    }
+    close();
+  }, [editorRef, close]);
+
+  const handleImportFigma = useCallback(async () => {
+    const input = window.prompt("Enter Figma file URL or key:");
+    if (!input) {
+      close();
+      return;
+    }
+    const editor = editorRef.current;
+    if (!editor) {
+      close();
+      return;
+    }
+    // Extract file key from URL or use raw input.
+    let fileKey = input.trim();
+    const urlMatch = fileKey.match(/\/(?:file|design)\/([a-zA-Z0-9]+)/);
+    if (urlMatch) {
+      fileKey = urlMatch[1];
+    }
+    try {
+      const response = await fetch("/api/import/figma", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_key: fileKey }),
+      });
+      if (!response.ok) {
+        const status = response.status;
+        if (status === 403) {
+          window.alert(
+            "Figma access denied. Check your access token permissions.",
+          );
+        } else if (status === 404) {
+          window.alert("Figma file not found. Check the file key or URL.");
+        } else if (status === 500) {
+          window.alert(
+            "Server error. Ensure FIGMA_ACCESS_TOKEN is configured.",
+          );
+        } else {
+          window.alert(`Figma import failed: ${status}`);
+        }
+        close();
+        return;
+      }
+      const json = await response.text();
+      editor.import_document(json);
+      onSceneChanged();
+    } catch {
+      // Import failed
+    }
+    close();
+  }, [editorRef, onSceneChanged, close]);
+
   return (
     <div style={containerStyle}>
       <button style={triggerStyle} onClick={() => setOpen(!open)}>
@@ -160,6 +275,17 @@ export function FileMenu({ editorRef, onSceneChanged }: FileMenuProps) {
             <button style={menuItemStyle} onClick={handleExportPptx}>
               Export PPTX
             </button>
+            <div style={dividerStyle} />
+            <button style={menuItemStyle} onClick={handleImportIdml}>
+              Import IDML...
+            </button>
+            <button style={menuItemStyle} onClick={handleExportIdml}>
+              Export IDML
+            </button>
+            <div style={dividerStyle} />
+            <button style={menuItemStyle} onClick={handleImportFigma}>
+              Import Figma...
+            </button>
           </div>
         </>
       )}
@@ -176,6 +302,13 @@ export function FileMenu({ editorRef, onSceneChanged }: FileMenuProps) {
         accept=".pptx"
         style={{ display: "none" }}
         onChange={handlePptxSelected}
+      />
+      <input
+        ref={idmlInputRef}
+        type="file"
+        accept=".idml"
+        style={{ display: "none" }}
+        onChange={handleIdmlSelected}
       />
     </div>
   );

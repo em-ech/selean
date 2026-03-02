@@ -1,0 +1,268 @@
+import { useCallback, useEffect, useRef } from "react";
+import { colors, fontSizes } from "../theme";
+import type { NodeInfo, SeleanEditor } from "../wasm/types";
+
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  editorRef: React.RefObject<SeleanEditor | null>;
+  onSceneChanged: () => void;
+  onClose: () => void;
+}
+
+interface MenuItem {
+  label: string;
+  action: () => void;
+  disabled?: boolean;
+  separator?: false;
+}
+
+interface Separator {
+  separator: true;
+}
+
+type MenuEntry = MenuItem | Separator;
+
+/**
+ * Right-click context menu for the canvas. Positioned at click coordinates.
+ * Supports Copy, Paste, Duplicate, Delete, z-order, Group, Ungroup.
+ */
+export function ContextMenu({
+  x,
+  y,
+  editorRef,
+  onSceneChanged,
+  onClose,
+}: ContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const clipboardRef = useRef<NodeInfo | null>(null);
+
+  // Close on outside click or Escape.
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [onClose]);
+
+  const editor = editorRef.current;
+  const selectedIds = getSelectedIds(editor);
+  const selectedNode = getFirstSelectedNode(editor, selectedIds);
+  const isGroup = selectedNode?.kind === "Group";
+  const hasSelection = selectedIds.length > 0;
+  const hasMultiSelection = selectedIds.length >= 2;
+
+  const handleCopy = useCallback(() => {
+    if (!editor || selectedIds.length === 0) return;
+    const json = editor.get_node_json(selectedIds[0]);
+    if (json !== "null") {
+      clipboardRef.current = JSON.parse(json);
+    }
+    onClose();
+  }, [editor, selectedIds, onClose]);
+
+  const handlePaste = useCallback(() => {
+    const node = clipboardRef.current;
+    if (!editor || !node) return;
+    pasteNode(editor, node);
+    onSceneChanged();
+    onClose();
+  }, [editor, onSceneChanged, onClose]);
+
+  const handleDuplicate = useCallback(() => {
+    if (!editor || !selectedNode) return;
+    pasteNode(editor, selectedNode);
+    onSceneChanged();
+    onClose();
+  }, [editor, selectedNode, onSceneChanged, onClose]);
+
+  const handleDelete = useCallback(() => {
+    if (!editor) return;
+    for (const id of selectedIds) {
+      editor.execute_tool_call("delete_node", JSON.stringify({ node_id: id }));
+    }
+    if (selectedIds.length > 0) onSceneChanged();
+    onClose();
+  }, [editor, selectedIds, onSceneChanged, onClose]);
+
+  const handleZOrder = useCallback(
+    (tool: string) => {
+      if (!editor || selectedIds.length !== 1) return;
+      editor.execute_tool_call(
+        tool,
+        JSON.stringify({ node_id: selectedIds[0] }),
+      );
+      onSceneChanged();
+      onClose();
+    },
+    [editor, selectedIds, onSceneChanged, onClose],
+  );
+
+  const handleGroup = useCallback(() => {
+    if (!editor || selectedIds.length < 2) return;
+    editor.execute_tool_call(
+      "group_nodes",
+      JSON.stringify({ node_ids: selectedIds }),
+    );
+    onSceneChanged();
+    onClose();
+  }, [editor, selectedIds, onSceneChanged, onClose]);
+
+  const handleUngroup = useCallback(() => {
+    if (!editor || selectedIds.length !== 1 || !isGroup) return;
+    editor.execute_tool_call(
+      "ungroup_node",
+      JSON.stringify({ node_id: selectedIds[0] }),
+    );
+    onSceneChanged();
+    onClose();
+  }, [editor, selectedIds, isGroup, onSceneChanged, onClose]);
+
+  const entries: MenuEntry[] = [
+    { label: "Copy", action: handleCopy, disabled: !hasSelection },
+    { label: "Paste", action: handlePaste, disabled: !clipboardRef.current },
+    { label: "Duplicate", action: handleDuplicate, disabled: !hasSelection },
+    { label: "Delete", action: handleDelete, disabled: !hasSelection },
+    { separator: true },
+    {
+      label: "Bring to Front",
+      action: () => handleZOrder("move_to_front"),
+      disabled: selectedIds.length !== 1,
+    },
+    {
+      label: "Bring Forward",
+      action: () => handleZOrder("move_forward"),
+      disabled: selectedIds.length !== 1,
+    },
+    {
+      label: "Send Backward",
+      action: () => handleZOrder("move_backward"),
+      disabled: selectedIds.length !== 1,
+    },
+    {
+      label: "Send to Back",
+      action: () => handleZOrder("move_to_back"),
+      disabled: selectedIds.length !== 1,
+    },
+    { separator: true },
+    { label: "Group", action: handleGroup, disabled: !hasMultiSelection },
+    {
+      label: "Ungroup",
+      action: handleUngroup,
+      disabled: !(selectedIds.length === 1 && isGroup),
+    },
+  ];
+
+  return (
+    <div
+      ref={menuRef}
+      style={{ ...menuStyle, left: x, top: y }}
+      data-testid="context-menu"
+    >
+      {entries.map((entry, i) =>
+        "separator" in entry && entry.separator ? (
+          <div key={`sep-${i}`} style={separatorStyle} />
+        ) : (
+          <button
+            key={(entry as MenuItem).label}
+            style={{
+              ...itemBtnStyle,
+              opacity: (entry as MenuItem).disabled ? 0.4 : 1,
+              cursor: (entry as MenuItem).disabled ? "default" : "pointer",
+            }}
+            disabled={(entry as MenuItem).disabled}
+            onClick={(entry as MenuItem).action}
+          >
+            {(entry as MenuItem).label}
+          </button>
+        ),
+      )}
+    </div>
+  );
+}
+
+function getSelectedIds(editor: SeleanEditor | null): string[] {
+  if (!editor) return [];
+  try {
+    return JSON.parse(editor.get_selected_ids());
+  } catch {
+    return [];
+  }
+}
+
+function getFirstSelectedNode(
+  editor: SeleanEditor | null,
+  ids: string[],
+): NodeInfo | null {
+  if (!editor || ids.length === 0) return null;
+  try {
+    const json = editor.get_node_json(ids[0]);
+    if (json === "null") return null;
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function pasteNode(editor: SeleanEditor, node: NodeInfo) {
+  const args: Record<string, unknown> = {
+    name: `${node.name} copy`,
+    kind: node.kind,
+    x: node.x + 10,
+    y: node.y + 10,
+    width: node.width,
+    height: node.height,
+  };
+  if (node.fill) {
+    args.fill_r = node.fill[0];
+    args.fill_g = node.fill[1];
+    args.fill_b = node.fill[2];
+    args.fill_a = node.fill[3];
+  }
+  if (node.text_content) args.text_content = node.text_content;
+  if (node.font_size) args.font_size = node.font_size;
+  if (node.asset_ref) args.asset_ref = node.asset_ref;
+  if (node.path_data) args.path_data = node.path_data;
+  editor.execute_tool_call("create_node", JSON.stringify(args));
+}
+
+const menuStyle: React.CSSProperties = {
+  position: "fixed",
+  zIndex: 1000,
+  background: colors.surface,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 6,
+  padding: "4px 0",
+  minWidth: 160,
+  boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+};
+
+const itemBtnStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  background: "none",
+  border: "none",
+  color: colors.text,
+  fontSize: fontSizes.sm,
+  padding: "6px 12px",
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+const separatorStyle: React.CSSProperties = {
+  height: 1,
+  background: colors.border,
+  margin: "4px 0",
+};

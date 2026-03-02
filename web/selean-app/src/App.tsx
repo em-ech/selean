@@ -8,7 +8,12 @@ import { PageBar } from "./components/PageBar";
 import { PropertyInspector } from "./components/PropertyInspector";
 import { SelectionOverlay } from "./components/SelectionOverlay";
 import { Toolbar, type ToolType } from "./components/Toolbar";
+import { AlignmentBar } from "./components/AlignmentBar";
+import { ContextMenu } from "./components/ContextMenu";
+import { InlineTextEditor } from "./components/InlineTextEditor";
+import { useAutoSave } from "./hooks/useAutoSave";
 import { useCreationTool } from "./hooks/useCreationTool";
+import { useMoveDrag } from "./hooks/useMoveDrag";
 import { useSeleanEditor } from "./hooks/useSeleanEditor";
 import { useSelection } from "./hooks/useSelection";
 import type { NodeInfo } from "./wasm/types";
@@ -30,14 +35,42 @@ export function App() {
   const [refreshTick, setRefreshTick] = useState(0);
   const clipboardRef = useRef<NodeInfo | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const [contextMenuPos, setContextMenuPos] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const lastClickNodeIdRef = useRef<string | null>(null);
+  const lastClickTimeRef = useRef(0);
 
   const { editorRef, status, error } = useSeleanEditor("selean-canvas");
-  const { selectedNode, refresh } = useSelection(editorRef, status === "ready");
+  const { selectedNode, selectedIds, refresh } = useSelection(
+    editorRef,
+    status === "ready",
+  );
+
+  const { markDirty, loadSavedDocument, clearSavedDocument } = useAutoSave({
+    editorRef,
+    isReady: status === "ready",
+  });
 
   const onSceneChanged = useCallback(() => {
     refresh();
     setRefreshTick((t) => t + 1);
-  }, [refresh]);
+    markDirty();
+  }, [refresh, markDirty]);
+
+  // Auto-load saved document on mount.
+  useEffect(() => {
+    if (status !== "ready") return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const saved = loadSavedDocument();
+    if (saved) {
+      editor.import_document(saved);
+      onSceneChanged();
+    }
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle tool changes, intercepting the image tool to open file picker.
   const handleToolChange = useCallback((tool: ToolType) => {
@@ -66,11 +99,12 @@ export function App() {
             "create_node",
             JSON.stringify({
               name: file.name.replace(/\.[^.]+$/, ""),
-              kind: "Frame",
+              kind: "Image",
               x: 100,
               y: 100,
               width: 400,
               height: 300,
+              asset_ref: assetRef,
             }),
           );
           onSceneChanged();
@@ -83,6 +117,9 @@ export function App() {
     [editorRef, onSceneChanged],
   );
 
+  // Move drag hook
+  const { handleDragEvent } = useMoveDrag({ editorRef, onSceneChanged });
+
   // Creation tool hook
   const { creationHandlers } = useCreationTool({
     editorRef,
@@ -91,16 +128,68 @@ export function App() {
     onSceneChanged,
   });
 
+  const handleContextMenu = useCallback((cx: number, cy: number) => {
+    setContextMenuPos({ x: cx, y: cy });
+  }, []);
+
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenuPos(null);
+  }, []);
+
   const handleInteractionEvents = useCallback(
     (events: InteractionEvent[]) => {
+      const editor = editorRef.current;
       for (const event of events) {
+        if (
+          event.type === "DragStarted" ||
+          event.type === "DragMoved" ||
+          event.type === "DragEnded"
+        ) {
+          handleDragEvent(event);
+          continue;
+        }
+
+        // Double-click detection for inline text editing.
+        if (event.type === "Clicked" && editor) {
+          const clickedId = event.node_id as string | undefined;
+          if (clickedId) {
+            const now = Date.now();
+            if (
+              clickedId === lastClickNodeIdRef.current &&
+              now - lastClickTimeRef.current < 300
+            ) {
+              // Double-click detected. Check if it's a Text node.
+              try {
+                const json = editor.get_node_json(clickedId);
+                if (json !== "null") {
+                  const node: NodeInfo = JSON.parse(json);
+                  if (node.kind === "Text") {
+                    setEditingNodeId(clickedId);
+                    lastClickNodeIdRef.current = null;
+                    lastClickTimeRef.current = 0;
+                    refresh();
+                    return;
+                  }
+                }
+              } catch {
+                // parse failure
+              }
+            }
+            lastClickNodeIdRef.current = clickedId;
+            lastClickTimeRef.current = now;
+          } else {
+            lastClickNodeIdRef.current = null;
+            lastClickTimeRef.current = 0;
+          }
+        }
+
         if (REFRESH_EVENT_TYPES.has(event.type)) {
           refresh();
           return;
         }
       }
     },
-    [refresh],
+    [refresh, handleDragEvent, editorRef],
   );
 
   const handleUndo = useCallback(() => {
@@ -145,6 +234,38 @@ export function App() {
         editor.redo();
         onSceneChanged();
         setUndoRedoTick((t) => t + 1);
+        return;
+      }
+
+      // Zoom: Cmd+= (zoom in)
+      if (isCtrlOrMeta && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        editor.zoom_by(1.25);
+        onSceneChanged();
+        return;
+      }
+
+      // Zoom: Cmd+- (zoom out)
+      if (isCtrlOrMeta && e.key === "-") {
+        e.preventDefault();
+        editor.zoom_by(0.8);
+        onSceneChanged();
+        return;
+      }
+
+      // Zoom: Cmd+0 (fit to all)
+      if (isCtrlOrMeta && e.key === "0") {
+        e.preventDefault();
+        editor.fit_to_all();
+        onSceneChanged();
+        return;
+      }
+
+      // Zoom: Cmd+1 (zoom to 100%)
+      if (isCtrlOrMeta && e.key === "1") {
+        e.preventDefault();
+        editor.zoom_to(1.0);
+        onSceneChanged();
         return;
       }
 
@@ -193,6 +314,120 @@ export function App() {
         if (node) {
           pasteNode(editor, node);
           onSceneChanged();
+        }
+        return;
+      }
+
+      // Cmd+G: Group selected nodes
+      if (isCtrlOrMeta && e.key === "g" && !e.shiftKey) {
+        e.preventDefault();
+        try {
+          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          if (ids.length >= 2) {
+            editor.execute_tool_call(
+              "group_nodes",
+              JSON.stringify({ node_ids: ids }),
+            );
+            onSceneChanged();
+          }
+        } catch {
+          // parse failure
+        }
+        return;
+      }
+
+      // Cmd+Shift+G: Ungroup selected group
+      if (isCtrlOrMeta && e.key === "g" && e.shiftKey) {
+        e.preventDefault();
+        try {
+          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          if (ids.length === 1) {
+            const nodeJson = editor.get_node_json(ids[0]);
+            if (nodeJson !== "null") {
+              const node: NodeInfo = JSON.parse(nodeJson);
+              if (node.kind === "Group") {
+                editor.execute_tool_call(
+                  "ungroup_node",
+                  JSON.stringify({ node_id: ids[0] }),
+                );
+                onSceneChanged();
+              }
+            }
+          }
+        } catch {
+          // parse failure
+        }
+        return;
+      }
+
+      // Cmd+]: Bring Forward
+      if (isCtrlOrMeta && e.key === "]" && !e.shiftKey) {
+        e.preventDefault();
+        try {
+          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          if (ids.length === 1) {
+            editor.execute_tool_call(
+              "move_forward",
+              JSON.stringify({ node_id: ids[0] }),
+            );
+            onSceneChanged();
+          }
+        } catch {
+          // parse failure
+        }
+        return;
+      }
+
+      // Cmd+[: Send Backward
+      if (isCtrlOrMeta && e.key === "[" && !e.shiftKey) {
+        e.preventDefault();
+        try {
+          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          if (ids.length === 1) {
+            editor.execute_tool_call(
+              "move_backward",
+              JSON.stringify({ node_id: ids[0] }),
+            );
+            onSceneChanged();
+          }
+        } catch {
+          // parse failure
+        }
+        return;
+      }
+
+      // Cmd+Shift+]: Bring to Front
+      if (isCtrlOrMeta && e.key === "}" && e.shiftKey) {
+        e.preventDefault();
+        try {
+          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          if (ids.length === 1) {
+            editor.execute_tool_call(
+              "move_to_front",
+              JSON.stringify({ node_id: ids[0] }),
+            );
+            onSceneChanged();
+          }
+        } catch {
+          // parse failure
+        }
+        return;
+      }
+
+      // Cmd+Shift+[: Send to Back
+      if (isCtrlOrMeta && e.key === "{" && e.shiftKey) {
+        e.preventDefault();
+        try {
+          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          if (ids.length === 1) {
+            editor.execute_tool_call(
+              "move_to_back",
+              JSON.stringify({ node_id: ids[0] }),
+            );
+            onSceneChanged();
+          }
+        } catch {
+          // parse failure
         }
         return;
       }
@@ -301,7 +536,11 @@ export function App() {
       <header style={headerStyle}>
         <span style={{ fontWeight: 600 }}>Selean</span>
         {status === "ready" && (
-          <FileMenu editorRef={editorRef} onSceneChanged={onSceneChanged} />
+          <FileMenu
+            editorRef={editorRef}
+            onSceneChanged={onSceneChanged}
+            onClearAutoSave={clearSavedDocument}
+          />
         )}
         <span style={statusStyle}>
           {status === "loading" && "Initializing..."}
@@ -362,12 +601,69 @@ export function App() {
               editorRef={editorRef}
               status={status}
               onInteractionEvents={handleInteractionEvents}
+              onContextMenu={handleContextMenu}
             />
           </ErrorBoundary>
           {status === "ready" && (
             <SelectionOverlay
               editorRef={editorRef}
               onSceneChanged={onSceneChanged}
+            />
+          )}
+          {editingNodeId &&
+            status === "ready" &&
+            (() => {
+              const editor = editorRef.current;
+              if (!editor) return null;
+              try {
+                const json = editor.get_node_json(editingNodeId);
+                if (json === "null") return null;
+                const node: NodeInfo = JSON.parse(json);
+                if (node.kind !== "Text") return null;
+                return (
+                  <InlineTextEditor
+                    nodeId={editingNodeId}
+                    initialContent={node.text_content ?? ""}
+                    bounds={{
+                      x: node.x,
+                      y: node.y,
+                      width: node.width,
+                      height: node.height,
+                    }}
+                    fontSize={node.font_size ?? 16}
+                    editorRef={editorRef}
+                    onCommit={(content) => {
+                      editor.execute_tool_call(
+                        "set_text",
+                        JSON.stringify({
+                          node_id: editingNodeId,
+                          content,
+                        }),
+                      );
+                      setEditingNodeId(null);
+                      onSceneChanged();
+                    }}
+                    onCancel={() => setEditingNodeId(null)}
+                  />
+                );
+              } catch {
+                return null;
+              }
+            })()}
+          {status === "ready" && (
+            <AlignmentBar
+              selectedIds={selectedIds}
+              editorRef={editorRef}
+              onSceneChanged={onSceneChanged}
+            />
+          )}
+          {contextMenuPos && (
+            <ContextMenu
+              x={contextMenuPos.x}
+              y={contextMenuPos.y}
+              editorRef={editorRef}
+              onSceneChanged={onSceneChanged}
+              onClose={handleCloseContextMenu}
             />
           )}
           {creationHandlers && (
@@ -431,6 +727,14 @@ function pasteNode(
 
   if (node.font_size) {
     args.font_size = node.font_size;
+  }
+
+  if (node.asset_ref) {
+    args.asset_ref = node.asset_ref;
+  }
+
+  if (node.path_data) {
+    args.path_data = node.path_data;
   }
 
   editor.execute_tool_call("create_node", JSON.stringify(args));

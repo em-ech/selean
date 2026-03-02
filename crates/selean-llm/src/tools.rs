@@ -7,7 +7,7 @@
 use selean_common::types::NodeId;
 use selean_engine::command::CommandDescriptor;
 use selean_engine::scene::{
-    BlendMode, BoundingBox, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign,
+    BlendMode, BoundingBox, ClipMode, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign,
 };
 
 use crate::schema::{ToolBuilder, ToolDefinition};
@@ -52,6 +52,16 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         tool_add_child_node(),
         tool_reparent_node(),
         tool_reorder_children(),
+        tool_set_font_style(),
+        tool_set_clip_mode(),
+        tool_set_rotation(),
+        tool_group_nodes(),
+        tool_ungroup_node(),
+        tool_move_to_front(),
+        tool_move_to_back(),
+        tool_move_forward(),
+        tool_move_backward(),
+        tool_align_nodes(),
         tool_get_pages(),
         tool_add_page(),
         tool_remove_page(),
@@ -74,6 +84,37 @@ pub fn is_read_only_tool(name: &str) -> bool {
 #[must_use]
 pub fn is_page_tool(name: &str) -> bool {
     matches!(name, "add_page" | "remove_page" | "set_active_page")
+}
+
+/// Returns `true` if the given tool name is the alignment tool, which
+/// requires direct scene access and is handled by the caller.
+#[must_use]
+pub fn is_align_tool(name: &str) -> bool {
+    name == "align_nodes"
+}
+
+/// Returns `true` if the given tool name is the rotation tool, which
+/// requires scene access to read node bounds for center computation.
+#[must_use]
+pub fn is_rotation_tool(name: &str) -> bool {
+    name == "set_rotation"
+}
+
+/// Returns `true` if the given tool name is a grouping tool, which
+/// requires scene access for hierarchy operations.
+#[must_use]
+pub fn is_group_tool(name: &str) -> bool {
+    matches!(name, "group_nodes" | "ungroup_node")
+}
+
+/// Returns `true` if the given tool name is a z-order tool, which
+/// requires scene access to compute new ordering.
+#[must_use]
+pub fn is_z_order_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "move_to_front" | "move_to_back" | "move_forward" | "move_backward"
+    )
 }
 
 /// Maps a tool call (name + JSON args) to a list of `CommandDescriptor` values.
@@ -112,6 +153,8 @@ pub fn map_tool_call(
         "add_child_node" => map_add_child_node(args),
         "reparent_node" => map_reparent_node(args),
         "reorder_children" => map_reorder_children(args),
+        "set_font_style" => map_set_font_style(args),
+        "set_clip_mode" => map_set_clip_mode(args),
         _ => Err(ToolCallError::UnknownTool(name.to_string())),
     }
 }
@@ -266,7 +309,7 @@ fn tool_create_node() -> ToolDefinition {
     .enum_param(
         "kind",
         "The visual type of the node",
-        &["Frame", "Text", "Group"],
+        &["Frame", "Text", "Group", "Image", "Vector"],
     )
     .number_param("x", "Left edge x coordinate")
     .number_param("y", "Top edge y coordinate")
@@ -282,6 +325,8 @@ fn tool_create_node() -> ToolDefinition {
         "corner_radius",
         "Corner radius for Frame nodes (default 0.0)",
     )
+    .optional_string_param("asset_ref", "Asset reference (required if kind is Image)")
+    .optional_string_param("path_data", "SVG path data (required if kind is Vector)")
     .build()
 }
 
@@ -372,7 +417,7 @@ fn tool_add_child_node() -> ToolDefinition {
     .enum_param(
         "kind",
         "The visual type of the node",
-        &["Frame", "Text", "Group"],
+        &["Frame", "Text", "Group", "Image", "Vector"],
     )
     .number_param("x", "Left edge x coordinate")
     .number_param("y", "Top edge y coordinate")
@@ -388,6 +433,8 @@ fn tool_add_child_node() -> ToolDefinition {
         "corner_radius",
         "Corner radius for Frame nodes (default 0.0)",
     )
+    .optional_string_param("asset_ref", "Asset reference (required if kind is Image)")
+    .optional_string_param("path_data", "SVG path data (required if kind is Vector)")
     .build()
 }
 
@@ -536,24 +583,19 @@ fn map_set_blend_mode(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>
     }])
 }
 
-fn map_create_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
-    let name = get_string(args, "name")?;
-    let kind_str = get_string(args, "kind")?;
-    let x = get_f32(args, "x")?;
-    let y = get_f32(args, "y")?;
-    let width = get_f32(args, "width")?;
-    let height = get_f32(args, "height")?;
-
+fn parse_node_kind(
+    args: &serde_json::Value,
+    kind_str: &str,
+) -> Result<SceneNodeKind, ToolCallError> {
     let corner_radius = get_optional_f32(args, "corner_radius").unwrap_or(0.0);
-
-    let kind = match kind_str.as_str() {
-        "Frame" => SceneNodeKind::Frame {
+    match kind_str {
+        "Frame" => Ok(SceneNodeKind::Frame {
             corner_radius: [corner_radius; 4],
-        },
+        }),
         "Text" => {
             let content = get_string(args, "text_content").unwrap_or_else(|_| String::new());
             let font_size = get_optional_f32(args, "font_size").unwrap_or(16.0);
-            SceneNodeKind::Text {
+            Ok(SceneNodeKind::Text {
                 content,
                 font_size,
                 font_family: "Inter".to_string(),
@@ -562,15 +604,32 @@ fn map_create_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, T
                 text_align: TextAlign::Left,
                 line_height: 1.2,
                 text_color: None,
-            }
+            })
         }
-        "Group" => SceneNodeKind::Group,
-        _ => {
-            return Err(ToolCallError::InvalidArgs(format!(
-                "unknown node kind: {kind_str}"
-            )));
+        "Image" => {
+            let asset_ref = get_string(args, "asset_ref").unwrap_or_default();
+            Ok(SceneNodeKind::Image { asset_ref })
         }
-    };
+        "Vector" => {
+            let path_data = get_string(args, "path_data").unwrap_or_default();
+            Ok(SceneNodeKind::Vector { path_data })
+        }
+        "Group" => Ok(SceneNodeKind::Group),
+        _ => Err(ToolCallError::InvalidArgs(format!(
+            "unknown node kind: {kind_str}"
+        ))),
+    }
+}
+
+fn map_create_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let name = get_string(args, "name")?;
+    let kind_str = get_string(args, "kind")?;
+    let x = get_f32(args, "x")?;
+    let y = get_f32(args, "y")?;
+    let width = get_f32(args, "width")?;
+    let height = get_f32(args, "height")?;
+
+    let kind = parse_node_kind(args, &kind_str)?;
 
     let mut node = SceneNode::new(
         NodeId::new(),
@@ -659,33 +718,7 @@ fn map_add_child_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>
     let width = get_f32(args, "width")?;
     let height = get_f32(args, "height")?;
 
-    let corner_radius = get_optional_f32(args, "corner_radius").unwrap_or(0.0);
-
-    let kind = match kind_str.as_str() {
-        "Frame" => SceneNodeKind::Frame {
-            corner_radius: [corner_radius; 4],
-        },
-        "Text" => {
-            let content = get_string(args, "text_content").unwrap_or_else(|_| String::new());
-            let font_size = get_optional_f32(args, "font_size").unwrap_or(16.0);
-            SceneNodeKind::Text {
-                content,
-                font_size,
-                font_family: "Inter".to_string(),
-                font_weight: 400,
-                font_style: FontStyle::Normal,
-                text_align: TextAlign::Left,
-                line_height: 1.2,
-                text_color: None,
-            }
-        }
-        "Group" => SceneNodeKind::Group,
-        _ => {
-            return Err(ToolCallError::InvalidArgs(format!(
-                "unknown node kind: {kind_str}"
-            )));
-        }
-    };
+    let kind = parse_node_kind(args, &kind_str)?;
 
     let mut node = SceneNode::new(
         NodeId::new(),
@@ -730,6 +763,80 @@ fn map_reorder_children(args: &serde_json::Value) -> Result<Vec<CommandDescripto
     }])
 }
 
+fn tool_set_font_style() -> ToolDefinition {
+    ToolBuilder::new("set_font_style", "Set the font style of a Text node.")
+        .string_param("node_id", "The UUID of the Text node to modify")
+        .enum_param("font_style", "Font style", &["Normal", "Italic"])
+        .build()
+}
+
+fn tool_set_clip_mode() -> ToolDefinition {
+    ToolBuilder::new(
+        "set_clip_mode",
+        "Set the clip mode of a node, controlling how children are clipped to the node's bounds.",
+    )
+    .string_param("node_id", "The UUID of the node to modify")
+    .enum_param(
+        "clip_mode",
+        "The clipping mode to apply",
+        &["None", "Scissor", "Stencil", "ShaderRect"],
+    )
+    .build()
+}
+
+fn map_set_font_style(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node_id = parse_node_id(args, "node_id")?;
+    let style_str = get_string(args, "font_style")?;
+    let font_style: FontStyle = style_str.parse().map_err(ToolCallError::InvalidArgs)?;
+    Ok(vec![CommandDescriptor::SetFontStyle {
+        node_id,
+        font_style,
+    }])
+}
+
+fn map_set_clip_mode(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node_id = parse_node_id(args, "node_id")?;
+    let mode_str = get_string(args, "clip_mode")?;
+    let clip_mode = match mode_str.as_str() {
+        "None" => ClipMode::None,
+        "Scissor" => ClipMode::Scissor,
+        "Stencil" => ClipMode::Stencil,
+        "ShaderRect" => ClipMode::ShaderRect,
+        _ => {
+            return Err(ToolCallError::InvalidArgs(format!(
+                "unknown clip mode: {mode_str}"
+            )));
+        }
+    };
+    Ok(vec![CommandDescriptor::SetClipMode { node_id, clip_mode }])
+}
+
+fn tool_align_nodes() -> ToolDefinition {
+    ToolBuilder::new(
+        "align_nodes",
+        "Align or distribute multiple nodes. Requires at least 2 node IDs. Alignment adjusts node positions without changing their sizes.",
+    )
+    .array_param(
+        "node_ids",
+        "Array of node UUID strings to align (minimum 2)",
+    )
+    .enum_param(
+        "alignment",
+        "The alignment or distribution to apply",
+        &[
+            "Left",
+            "Right",
+            "Top",
+            "Bottom",
+            "CenterH",
+            "CenterV",
+            "DistributeH",
+            "DistributeV",
+        ],
+    )
+    .build()
+}
+
 // --- Page management tool definitions ---
 
 fn tool_get_pages() -> ToolDefinition {
@@ -769,6 +876,70 @@ fn tool_set_active_page() -> ToolDefinition {
     .build()
 }
 
+fn tool_move_to_front() -> ToolDefinition {
+    ToolBuilder::new(
+        "move_to_front",
+        "Move a node to the front of the layer order (drawn on top of all siblings).",
+    )
+    .string_param("node_id", "The UUID of the node to move to front")
+    .build()
+}
+
+fn tool_move_to_back() -> ToolDefinition {
+    ToolBuilder::new(
+        "move_to_back",
+        "Move a node to the back of the layer order (drawn behind all siblings).",
+    )
+    .string_param("node_id", "The UUID of the node to move to back")
+    .build()
+}
+
+fn tool_move_forward() -> ToolDefinition {
+    ToolBuilder::new(
+        "move_forward",
+        "Move a node one step forward in the layer order.",
+    )
+    .string_param("node_id", "The UUID of the node to move forward")
+    .build()
+}
+
+fn tool_move_backward() -> ToolDefinition {
+    ToolBuilder::new(
+        "move_backward",
+        "Move a node one step backward in the layer order.",
+    )
+    .string_param("node_id", "The UUID of the node to move backward")
+    .build()
+}
+
+fn tool_group_nodes() -> ToolDefinition {
+    ToolBuilder::new(
+        "group_nodes",
+        "Group multiple nodes into a single Group node. The group's bounds become the union of all selected nodes. Child order is preserved.",
+    )
+    .array_param("node_ids", "Array of node ID strings to group together")
+    .build()
+}
+
+fn tool_ungroup_node() -> ToolDefinition {
+    ToolBuilder::new(
+        "ungroup_node",
+        "Dissolve a Group node, reparenting its children to the group's parent at the group's position in the layer order.",
+    )
+    .string_param("node_id", "The UUID of the Group node to ungroup")
+    .build()
+}
+
+fn tool_set_rotation() -> ToolDefinition {
+    ToolBuilder::new(
+        "set_rotation",
+        "Set the rotation angle of a node in degrees. Rotates around the node's bounding box center.",
+    )
+    .string_param("node_id", "The UUID of the node to rotate")
+    .number_param("angle_degrees", "Rotation angle in degrees (0-360)")
+    .build()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
@@ -777,7 +948,7 @@ mod tests {
     #[test]
     fn all_tools_returns_expected_count() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 26);
+        assert_eq!(tools.len(), 36);
     }
 
     #[test]
@@ -1399,6 +1570,136 @@ mod tests {
             "new_order": ["not-a-uuid"]
         });
         let result = map_tool_call("reorder_children", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_create_node_image_kind() {
+        let args = serde_json::json!({
+            "name": "Photo",
+            "kind": "Image",
+            "x": 0.0, "y": 0.0, "width": 400.0, "height": 300.0,
+            "asset_ref": "img_12345"
+        });
+        let cmds = map_tool_call("create_node", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::AddRoot { node } => {
+                assert_eq!(node.name, "Photo");
+                match &node.kind {
+                    SceneNodeKind::Image { asset_ref } => {
+                        assert_eq!(asset_ref, "img_12345");
+                    }
+                    _ => panic!("expected Image kind"),
+                }
+            }
+            _ => panic!("expected AddRoot"),
+        }
+    }
+
+    #[test]
+    fn map_create_node_vector_kind() {
+        let args = serde_json::json!({
+            "name": "Arrow",
+            "kind": "Vector",
+            "x": 10.0, "y": 10.0, "width": 100.0, "height": 50.0,
+            "path_data": "M 0 0 L 100 50"
+        });
+        let cmds = map_tool_call("create_node", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::AddRoot { node } => match &node.kind {
+                SceneNodeKind::Vector { path_data } => {
+                    assert_eq!(path_data, "M 0 0 L 100 50");
+                }
+                _ => panic!("expected Vector kind"),
+            },
+            _ => panic!("expected AddRoot"),
+        }
+    }
+
+    #[test]
+    fn map_add_child_node_image_kind() {
+        let parent_id = test_node_id();
+        let args = serde_json::json!({
+            "parent_id": parent_id.to_string(),
+            "name": "Child Image",
+            "kind": "Image",
+            "x": 0.0, "y": 0.0, "width": 200.0, "height": 150.0,
+            "asset_ref": "img_child"
+        });
+        let cmds = map_tool_call("add_child_node", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::AddChild {
+                parent_id: pid,
+                node,
+            } => {
+                assert_eq!(*pid, parent_id);
+                match &node.kind {
+                    SceneNodeKind::Image { asset_ref } => {
+                        assert_eq!(asset_ref, "img_child");
+                    }
+                    _ => panic!("expected Image kind"),
+                }
+            }
+            _ => panic!("expected AddChild"),
+        }
+    }
+
+    #[test]
+    fn map_set_font_style_valid() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "font_style": "Italic"
+        });
+        let cmds = map_tool_call("set_font_style", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::SetFontStyle { font_style, .. } => {
+                assert_eq!(*font_style, FontStyle::Italic);
+            }
+            _ => panic!("expected SetFontStyle"),
+        }
+    }
+
+    #[test]
+    fn map_set_font_style_invalid() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "font_style": "Bold"
+        });
+        let result = map_tool_call("set_font_style", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_set_clip_mode_valid() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "clip_mode": "Scissor"
+        });
+        let cmds = map_tool_call("set_clip_mode", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::SetClipMode { clip_mode, .. } => {
+                assert_eq!(*clip_mode, ClipMode::Scissor);
+            }
+            _ => panic!("expected SetClipMode"),
+        }
+    }
+
+    #[test]
+    fn map_set_clip_mode_invalid() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "clip_mode": "InvalidMode"
+        });
+        let result = map_tool_call("set_clip_mode", &args);
         assert!(result.is_err());
     }
 }

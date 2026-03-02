@@ -34,28 +34,8 @@ export function LayerPanel({
     (nodeId: string) => {
       const editor = editorRef.current;
       if (!editor) return;
-      // Use a click on the node's position to select it.
-      // For now, get the node info and use execute_tool_call to set selection
-      // indirectly. The real selection happens via pointer events on canvas.
-      // For the layer panel, we'll need a direct selection API.
-      // Workaround: use get_node_json to find bounds, then simulate click.
-      const nodeJson = editor.get_node_json(nodeId);
-      if (nodeJson === "null") return;
-      const node = JSON.parse(nodeJson);
-      // Simulate a click at the node's center position
-      const cx = node.x + node.width / 2;
-      const cy = node.y + node.height / 2;
-      // Convert world to screen using camera
-      try {
-        const cam = JSON.parse(editor.get_camera_json());
-        const sx = (cx - cam.pan_x) * cam.zoom + cam.viewport_width / 2;
-        const sy = (cy - cam.pan_y) * cam.zoom + cam.viewport_height / 2;
-        editor.on_pointer_down(sx, sy, 0, false, false, false, false);
-        editor.on_pointer_up(sx, sy, 0, false, false, false, false);
-        onSceneChanged();
-      } catch {
-        // Camera query failed
-      }
+      editor.select_node_by_id(nodeId);
+      onSceneChanged();
     },
     [editorRef, onSceneChanged],
   );
@@ -67,6 +47,32 @@ export function LayerPanel({
       editor.execute_tool_call(
         "set_visible",
         JSON.stringify({ node_id: nodeId, visible: !currentVisible }),
+      );
+      onSceneChanged();
+    },
+    [editorRef, onSceneChanged],
+  );
+
+  const handleMoveUp = useCallback(
+    (nodeId: string) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.execute_tool_call(
+        "move_forward",
+        JSON.stringify({ node_id: nodeId }),
+      );
+      onSceneChanged();
+    },
+    [editorRef, onSceneChanged],
+  );
+
+  const handleMoveDown = useCallback(
+    (nodeId: string) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.execute_tool_call(
+        "move_backward",
+        JSON.stringify({ node_id: nodeId }),
       );
       onSceneChanged();
     },
@@ -85,6 +91,8 @@ export function LayerPanel({
             depth={0}
             onSelect={handleSelect}
             onToggleVisible={handleToggleVisible}
+            onMoveUp={handleMoveUp}
+            onMoveDown={handleMoveDown}
           />
         ))}
       </div>
@@ -97,9 +105,18 @@ interface LayerItemProps {
   depth: number;
   onSelect: (id: string) => void;
   onToggleVisible: (id: string, current: boolean) => void;
+  onMoveUp: (id: string) => void;
+  onMoveDown: (id: string) => void;
 }
 
-function LayerItem({ node, depth, onSelect, onToggleVisible }: LayerItemProps) {
+function LayerItem({
+  node,
+  depth,
+  onSelect,
+  onToggleVisible,
+  onMoveUp,
+  onMoveDown,
+}: LayerItemProps) {
   return (
     <>
       <div
@@ -112,6 +129,26 @@ function LayerItem({ node, depth, onSelect, onToggleVisible }: LayerItemProps) {
       >
         <span style={kindBadgeStyle}>{node.kind[0]}</span>
         <span style={nameStyle}>{node.name}</span>
+        <button
+          style={zOrderBtnStyle}
+          title="Move forward"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMoveUp(node.id);
+          }}
+        >
+          ^
+        </button>
+        <button
+          style={zOrderBtnStyle}
+          title="Move backward"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMoveDown(node.id);
+          }}
+        >
+          v
+        </button>
         <button
           style={visToggleStyle}
           onClick={(e) => {
@@ -129,6 +166,8 @@ function LayerItem({ node, depth, onSelect, onToggleVisible }: LayerItemProps) {
           depth={depth + 1}
           onSelect={onSelect}
           onToggleVisible={onToggleVisible}
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
         />
       ))}
     </>
@@ -194,6 +233,17 @@ const nameStyle: React.CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+};
+
+const zOrderBtnStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: colors.textDim,
+  cursor: "pointer",
+  fontSize: fontSizes.xs,
+  padding: "2px 2px",
+  flexShrink: 0,
+  lineHeight: 1,
 };
 
 const visToggleStyle: React.CSSProperties = {

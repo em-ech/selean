@@ -229,4 +229,60 @@ describe("PropertyInspector", () => {
     expect(parsed.visible).toBe(false);
     expect(onChanged).toHaveBeenCalled();
   });
+
+  it("renders Image section with asset_ref for Image nodes", () => {
+    const node = makeNodeInfo({
+      kind: "Image",
+      asset_ref: "img_12345",
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    // "Image" appears as both kind label and section header
+    const imageTexts = screen.getAllByText("Image");
+    expect(imageTexts.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("img_12345")).toBeInTheDocument();
+    expect(screen.getByText("Replace Image")).toBeInTheDocument();
+  });
+
+  it("renders Vector section with path_data for Vector nodes", () => {
+    const node = makeNodeInfo({
+      kind: "Vector",
+      path_data: "M 0 0 L 100 100 L 200 0 Z",
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    // "Vector" appears as both kind label and section header
+    const vectorTexts = screen.getAllByText("Vector");
+    expect(vectorTexts.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("M 0 0 L 100 100 L 200 0 Z")).toBeInTheDocument();
+  });
+
+  it("truncates long path_data in Vector section", () => {
+    const longPath = "M 0 0 L 100 100 L 200 0 L 300 100 L 400 0 Z";
+    const node = makeNodeInfo({
+      kind: "Vector",
+      path_data: longPath,
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    expect(screen.getByText(`${longPath.slice(0, 30)}...`)).toBeInTheDocument();
+  });
 });

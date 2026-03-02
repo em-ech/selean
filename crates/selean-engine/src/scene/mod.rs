@@ -4,6 +4,7 @@
 //! via dirty flag bitmasks. Only nodes with non-zero dirty flags are processed
 //! during rendering.
 
+pub mod align;
 pub mod clip;
 mod dirty;
 mod node;

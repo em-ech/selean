@@ -294,6 +294,46 @@ impl Command for ReparentCommand {
     }
 }
 
+// --- ReorderRootsCommand ---
+
+/// Reorders the root nodes of the scene graph.
+///
+/// Captures the old root order on execute so it can be restored on undo.
+#[derive(Debug)]
+pub struct ReorderRootsCommand {
+    new_order: Vec<NodeId>,
+    old_order: Option<Vec<NodeId>>,
+}
+
+impl ReorderRootsCommand {
+    /// Creates a command that will reorder the root nodes.
+    #[must_use]
+    pub fn new(new_order: Vec<NodeId>) -> Self {
+        Self {
+            new_order,
+            old_order: None,
+        }
+    }
+}
+
+impl Command for ReorderRootsCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        self.old_order = Some(scene.roots().to_vec());
+        scene.reorder_roots(&self.new_order)
+    }
+
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old) = self.old_order.take() else {
+            return false;
+        };
+        scene.reorder_roots(&old)
+    }
+
+    fn description(&self) -> &str {
+        "Reorder Roots"
+    }
+}
+
 // --- ReorderChildrenCommand ---
 
 /// Reorders the children of a node.
@@ -618,6 +658,54 @@ mod tests {
         assert_eq!(scene.roots().len(), 2);
         assert_eq!(scene.roots()[0], a_id);
         assert_eq!(scene.roots()[1], b_id);
+    }
+
+    // --- ReorderRootsCommand ---
+
+    #[test]
+    fn reorder_roots_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let r1 = make_frame("R1");
+        let r1_id = scene.add_root(r1);
+        let r2 = make_frame("R2");
+        let r2_id = scene.add_root(r2);
+        let r3 = make_frame("R3");
+        let r3_id = scene.add_root(r3);
+
+        let mut cmd = ReorderRootsCommand::new(vec![r3_id, r1_id, r2_id]);
+        assert!(cmd.execute(&mut scene));
+        assert_eq!(scene.roots(), &[r3_id, r1_id, r2_id]);
+
+        assert!(cmd.undo(&mut scene));
+        assert_eq!(scene.roots(), &[r1_id, r2_id, r3_id]);
+    }
+
+    #[test]
+    fn reorder_roots_invalid_permutation_fails() {
+        let mut scene = SceneGraph::new();
+        let r1 = make_frame("R1");
+        let r1_id = scene.add_root(r1);
+        let r2 = make_frame("R2");
+        scene.add_root(r2);
+
+        // Wrong length.
+        let mut cmd = ReorderRootsCommand::new(vec![r1_id]);
+        assert!(!cmd.execute(&mut scene));
+    }
+
+    #[test]
+    fn reorder_roots_redo_works() {
+        let mut scene = SceneGraph::new();
+        let r1 = make_frame("R1");
+        let r1_id = scene.add_root(r1);
+        let r2 = make_frame("R2");
+        let r2_id = scene.add_root(r2);
+
+        let mut cmd = ReorderRootsCommand::new(vec![r2_id, r1_id]);
+        cmd.execute(&mut scene);
+        cmd.undo(&mut scene);
+        assert!(cmd.execute(&mut scene));
+        assert_eq!(scene.roots(), &[r2_id, r1_id]);
     }
 
     #[test]

@@ -199,6 +199,368 @@ impl EditorState {
         self.input.state_mut().selection.clear();
     }
 
+    /// Aligns the given nodes according to the specified alignment kind.
+    ///
+    /// `node_ids_json` is a JSON array of node ID strings.
+    /// `alignment` is a variant name from `AlignmentKind`.
+    ///
+    /// Returns `true` if the alignment was applied successfully.
+    pub fn align_nodes(&mut self, node_ids_json: &str, alignment: &str) -> bool {
+        use selean_engine::scene::align::{AlignmentKind, compute_alignment};
+
+        let Some(kind) = AlignmentKind::parse(alignment) else {
+            return false;
+        };
+
+        let Ok(ids_raw) = serde_json::from_str::<Vec<String>>(node_ids_json) else {
+            return false;
+        };
+
+        let mut node_ids = Vec::with_capacity(ids_raw.len());
+        for s in &ids_raw {
+            let Ok(uuid) = uuid::Uuid::parse_str(s) else {
+                return false;
+            };
+            node_ids.push(selean_common::types::NodeId::from_uuid(uuid));
+        }
+
+        let results = compute_alignment(self.scene(), &node_ids, kind);
+        if results.is_empty() {
+            return false;
+        }
+
+        self.history_mut().begin_group("Align");
+        for result in results {
+            let desc = command_descriptor::CommandDescriptor::SetBounds {
+                node_id: result.node_id,
+                bounds: result.new_bounds,
+            };
+            self.execute_descriptor(desc);
+        }
+        self.history_mut().end_group();
+        true
+    }
+
+    /// Executes the `set_rotation` tool, which needs scene access to compute
+    /// the bounds center for rotation.
+    #[allow(clippy::cast_possible_truncation)]
+    fn execute_rotation_tool(&mut self, args: &serde_json::Value) -> String {
+        let node_id_str = args
+            .get("node_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let angle_degrees = args
+            .get("angle_degrees")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0) as f32;
+
+        let Ok(uuid) = uuid::Uuid::parse_str(node_id_str) else {
+            return serde_json::json!({
+                "success": false,
+                "error": "invalid node ID"
+            })
+            .to_string();
+        };
+        let node_id = selean_common::types::NodeId::from_uuid(uuid);
+
+        let Some(node) = self.scene().get(node_id) else {
+            return serde_json::json!({
+                "success": false,
+                "error": "node not found"
+            })
+            .to_string();
+        };
+
+        let cx = node.bounds.x + node.bounds.width / 2.0;
+        let cy = node.bounds.y + node.bounds.height / 2.0;
+        let angle_rad = angle_degrees.to_radians();
+        let transform = selean_engine::scene::Transform2D::from_rotation_around(angle_rad, cx, cy);
+
+        let desc = CommandDescriptor::SetTransform {
+            node_id,
+            transform: *transform.raw(),
+        };
+        let ok = self.execute_descriptor(desc);
+
+        serde_json::json!({
+            "success": ok,
+            "result": { "executed": i32::from(ok) }
+        })
+        .to_string()
+    }
+
+    /// Executes a grouping tool (`group_nodes` or `ungroup_node`).
+    #[allow(clippy::cast_possible_truncation)]
+    fn execute_group_tool(&mut self, tool_name: &str, args: &serde_json::Value) -> String {
+        match tool_name {
+            "group_nodes" => self.execute_group_nodes(args),
+            "ungroup_node" => self.execute_ungroup_node(args),
+            _ => serde_json::json!({
+                "success": false,
+                "error": format!("unknown group tool: {tool_name}")
+            })
+            .to_string(),
+        }
+    }
+
+    /// Groups the given nodes under a new Group node.
+    #[allow(clippy::cast_possible_truncation)]
+    fn execute_group_nodes(&mut self, args: &serde_json::Value) -> String {
+        use selean_engine::scene::{BoundingBox, SceneNode, SceneNodeKind};
+
+        let ids_raw: Vec<String> = match args.get("node_ids") {
+            Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+            None => {
+                return serde_json::json!({
+                    "success": false,
+                    "error": "missing node_ids"
+                })
+                .to_string();
+            }
+        };
+
+        if ids_raw.len() < 2 {
+            return serde_json::json!({
+                "success": false,
+                "error": "need at least 2 nodes to group"
+            })
+            .to_string();
+        }
+
+        let mut node_ids = Vec::with_capacity(ids_raw.len());
+        for s in &ids_raw {
+            let Ok(uuid) = uuid::Uuid::parse_str(s) else {
+                return serde_json::json!({
+                    "success": false,
+                    "error": format!("invalid node ID: {s}")
+                })
+                .to_string();
+            };
+            node_ids.push(selean_common::types::NodeId::from_uuid(uuid));
+        }
+
+        // Compute union bounds.
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        for &nid in &node_ids {
+            let Some(node) = self.scene().get(nid) else {
+                return serde_json::json!({
+                    "success": false,
+                    "error": format!("node not found: {nid}")
+                })
+                .to_string();
+            };
+            let b = &node.bounds;
+            min_x = min_x.min(b.x);
+            min_y = min_y.min(b.y);
+            max_x = max_x.max(b.x + b.width);
+            max_y = max_y.max(b.y + b.height);
+        }
+
+        // Find the earliest root index among selected nodes (for insertion position).
+        let roots = self.scene().roots().to_vec();
+        let _first_root_index = roots
+            .iter()
+            .position(|r| node_ids.contains(r))
+            .unwrap_or(roots.len());
+
+        // Create Group node.
+        let group_id = selean_common::types::NodeId::new();
+        let group_node = SceneNode::new(
+            group_id,
+            "Group".to_string(),
+            SceneNodeKind::Group,
+            BoundingBox::new(min_x, min_y, max_x - min_x, max_y - min_y),
+        );
+
+        self.history_mut().begin_group("Group");
+
+        // Add group as root.
+        let desc = CommandDescriptor::AddRoot { node: group_node };
+        self.execute_descriptor(desc);
+
+        // Reparent each node into the group.
+        for &nid in &node_ids {
+            let desc = CommandDescriptor::Reparent {
+                node_id: nid,
+                new_parent_id: group_id,
+            };
+            self.execute_descriptor(desc);
+        }
+
+        self.history_mut().end_group();
+
+        serde_json::json!({
+            "success": true,
+            "result": { "group_id": group_id.to_string() }
+        })
+        .to_string()
+    }
+
+    /// Dissolves a Group node, reparenting its children to the group's parent.
+    fn execute_ungroup_node(&mut self, args: &serde_json::Value) -> String {
+        let node_id_str = args
+            .get("node_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        let Ok(uuid) = uuid::Uuid::parse_str(node_id_str) else {
+            return serde_json::json!({
+                "success": false,
+                "error": "invalid node ID"
+            })
+            .to_string();
+        };
+        let group_id = selean_common::types::NodeId::from_uuid(uuid);
+
+        let Some(node) = self.scene().get(group_id) else {
+            return serde_json::json!({
+                "success": false,
+                "error": "node not found"
+            })
+            .to_string();
+        };
+
+        if !matches!(node.kind, selean_engine::scene::SceneNodeKind::Group) {
+            return serde_json::json!({
+                "success": false,
+                "error": "node is not a Group"
+            })
+            .to_string();
+        }
+
+        let children: Vec<selean_common::types::NodeId> = node.children.clone();
+        let parent_id = node.parent;
+
+        if children.is_empty() {
+            // Empty group: just remove it.
+            self.execute_descriptor(CommandDescriptor::RemoveNode { node_id: group_id });
+            return serde_json::json!({
+                "success": true,
+                "result": { "ungrouped": 0 }
+            })
+            .to_string();
+        }
+
+        self.history_mut().begin_group("Ungroup");
+
+        // Reparent children to the group's parent (or make them roots).
+        for &child_id in &children {
+            if let Some(pid) = parent_id {
+                let desc = CommandDescriptor::Reparent {
+                    node_id: child_id,
+                    new_parent_id: pid,
+                };
+                self.execute_descriptor(desc);
+            } else {
+                // Group was a root. Use reparent_to_root via internal method.
+                // We need to detach from group first, which reparent does.
+                // Since there's no "make root" descriptor, we use remove + add root pattern.
+                // Actually, we can use the scene's reparent_to_root directly with a command wrapper.
+                // For simplicity, we'll remove the child from group and re-add as root.
+                // This is handled by the scene's internal operations.
+                // Let's just use remove + add root.
+                let Some(child_node) = self.scene().get(child_id) else {
+                    continue;
+                };
+                let child_clone = child_node.clone();
+                let desc_remove = CommandDescriptor::RemoveNode { node_id: child_id };
+                self.execute_descriptor(desc_remove);
+                let mut root_node = child_clone;
+                root_node.parent = None;
+                root_node.children.clear();
+                let desc_add = CommandDescriptor::AddRoot { node: root_node };
+                self.execute_descriptor(desc_add);
+            }
+        }
+
+        // Remove the now-empty group.
+        let desc = CommandDescriptor::RemoveNode { node_id: group_id };
+        self.execute_descriptor(desc);
+
+        self.history_mut().end_group();
+
+        let count = children.len();
+        serde_json::json!({
+            "success": true,
+            "result": { "ungrouped": count }
+        })
+        .to_string()
+    }
+
+    /// Executes a z-order tool (`move_to_front`, `move_to_back`, `move_forward`, `move_backward`).
+    fn execute_z_order_tool(&mut self, tool_name: &str, args: &serde_json::Value) -> String {
+        let node_id_str = args
+            .get("node_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        let Ok(uuid) = uuid::Uuid::parse_str(node_id_str) else {
+            return z_error("invalid node ID");
+        };
+        let node_id = selean_common::types::NodeId::from_uuid(uuid);
+
+        let Some(node) = self.scene().get(node_id) else {
+            return z_error("node not found");
+        };
+        let parent_id = node.parent;
+
+        let (siblings, is_root) = if let Some(pid) = parent_id {
+            let Some(children) = self.scene().children(pid) else {
+                return z_error("parent not found");
+            };
+            (children.to_vec(), false)
+        } else {
+            (self.scene().roots().to_vec(), true)
+        };
+
+        let Some(new_order) = compute_z_reorder(&siblings, node_id, tool_name) else {
+            return z_noop();
+        };
+
+        let desc = if is_root {
+            CommandDescriptor::ReorderRoots { new_order }
+        } else {
+            // `is_root` is false only when `parent_id` is `Some`.
+            let pid = parent_id.unwrap_or_else(|| unreachable!());
+            CommandDescriptor::ReorderChildren {
+                parent_id: pid,
+                new_order,
+            }
+        };
+
+        let ok = self.execute_descriptor(desc);
+        serde_json::json!({
+            "success": ok,
+            "result": { "moved": ok }
+        })
+        .to_string()
+    }
+
+    /// Returns the current zoom level.
+    #[must_use]
+    pub fn get_zoom(&self) -> f32 {
+        // Zoom is stored on the Camera, which lives on the Renderer (WASM only).
+        // For non-WASM (EditorState) we don't own a Camera. Returning 1.0 is the
+        // safe default for tests; the WASM facade overrides this.
+        1.0
+    }
+
+    /// Selects a single node by ID string. Returns `true` if the node exists.
+    pub fn select_node_by_id(&mut self, node_id: &str) -> bool {
+        let Ok(uuid) = uuid::Uuid::parse_str(node_id) else {
+            return false;
+        };
+        let id = selean_common::types::NodeId::from_uuid(uuid);
+        if self.scene().get(id).is_none() {
+            return false;
+        }
+        self.input.state_mut().selection.select_one(id);
+        true
+    }
+
     /// Executes a page-level tool call (`add_page`, `remove_page`, `set_active_page`).
     #[allow(clippy::cast_possible_truncation)]
     fn execute_page_tool(&mut self, tool_name: &str, args: &serde_json::Value) -> String {
@@ -325,6 +687,39 @@ impl EditorState {
             return self.execute_page_tool(tool_name, &args);
         }
 
+        // Handle alignment tool (operates directly on scene via align_nodes).
+        if selean_llm::is_align_tool(tool_name) {
+            let node_ids_json = args
+                .get("node_ids")
+                .map(|v| serde_json::to_string(v).unwrap_or_default())
+                .unwrap_or_default();
+            let alignment = args
+                .get("alignment")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let ok = self.align_nodes(&node_ids_json, alignment);
+            return serde_json::json!({
+                "success": ok,
+                "result": { "aligned": ok }
+            })
+            .to_string();
+        }
+
+        // Handle rotation tool (requires scene access for bounds center).
+        if selean_llm::is_rotation_tool(tool_name) {
+            return self.execute_rotation_tool(&args);
+        }
+
+        // Handle grouping tools (require scene access for hierarchy operations).
+        if selean_llm::is_group_tool(tool_name) {
+            return self.execute_group_tool(tool_name, &args);
+        }
+
+        // Handle z-order tools (require scene access for ordering).
+        if selean_llm::is_z_order_tool(tool_name) {
+            return self.execute_z_order_tool(tool_name, &args);
+        }
+
         // Map tool call to command descriptors.
         let descriptors = match selean_llm::map_tool_call(tool_name, &args) {
             Ok(descs) => descs,
@@ -440,6 +835,61 @@ impl EditorState {
             meta,
         }
     }
+}
+
+/// Computes the new sibling order after applying a z-order tool.
+///
+/// Returns `None` if the node is already at the boundary (no-op) or the tool is unknown.
+/// Returns `Some(new_order)` with the reordered sibling list.
+fn compute_z_reorder(
+    siblings: &[selean_common::types::NodeId],
+    node_id: selean_common::types::NodeId,
+    tool_name: &str,
+) -> Option<Vec<selean_common::types::NodeId>> {
+    let current_idx = siblings.iter().position(|&id| id == node_id)?;
+    let last = siblings.len() - 1;
+    let mut order = siblings.to_vec();
+
+    match tool_name {
+        "move_to_front" => {
+            if current_idx == last {
+                return None;
+            }
+            order.remove(current_idx);
+            order.push(node_id);
+        }
+        "move_to_back" => {
+            if current_idx == 0 {
+                return None;
+            }
+            order.remove(current_idx);
+            order.insert(0, node_id);
+        }
+        "move_forward" => {
+            if current_idx == last {
+                return None;
+            }
+            order.swap(current_idx, current_idx + 1);
+        }
+        "move_backward" => {
+            if current_idx == 0 {
+                return None;
+            }
+            order.swap(current_idx, current_idx - 1);
+        }
+        _ => return None,
+    }
+    Some(order)
+}
+
+/// Returns a JSON error response for z-order tools.
+fn z_error(msg: &str) -> String {
+    serde_json::json!({ "success": false, "error": msg }).to_string()
+}
+
+/// Returns a JSON no-op response for z-order tools.
+fn z_noop() -> String {
+    serde_json::json!({ "success": true, "result": { "moved": false } }).to_string()
 }
 
 impl Default for EditorState {
@@ -768,6 +1218,16 @@ mod wasm {
             self.state.clear_selection();
         }
 
+        /// Selects a single node by ID. Returns `true` if the node exists.
+        pub fn select_node_by_id(&mut self, node_id: &str) -> bool {
+            self.state.select_node_by_id(node_id)
+        }
+
+        /// Aligns the given nodes according to the specified alignment kind.
+        pub fn align_nodes(&mut self, node_ids_json: &str, alignment: &str) -> bool {
+            self.state.align_nodes(node_ids_json, alignment)
+        }
+
         /// Begins a command group (for drag gestures).
         pub fn begin_group(&mut self, label: &str) {
             self.state.begin_group(label);
@@ -787,6 +1247,72 @@ mod wasm {
         /// Returns `true` on success.
         pub fn register_image_asset(&mut self, asset_ref: &str, data: &[u8]) -> bool {
             self.renderer.register_image_asset(asset_ref, data).is_ok()
+        }
+
+        /// Sets the camera zoom to an absolute level (clamped to [0.1, 100]).
+        pub fn zoom_to(&mut self, level: f32) {
+            self.renderer.camera_mut().set_zoom(level);
+        }
+
+        /// Multiplies the current camera zoom by a factor.
+        pub fn zoom_by(&mut self, factor: f32) {
+            self.renderer.camera_mut().zoom_by(factor);
+        }
+
+        /// Pans the camera by a delta in world coordinates.
+        pub fn pan_by(&mut self, dx: f32, dy: f32) {
+            self.renderer.camera_mut().pan_by(dx, dy);
+        }
+
+        /// Returns the current zoom level.
+        pub fn get_zoom(&self) -> f32 {
+            self.renderer.camera().zoom()
+        }
+
+        /// Computes the bounding box of all root nodes and sets camera to fit them.
+        pub fn fit_to_all(&mut self) {
+            let scene = &self.state.document.active_page().scene;
+            let roots = scene.roots();
+            if roots.is_empty() {
+                return;
+            }
+
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+
+            for &root_id in roots {
+                if let Some(node) = scene.get(root_id) {
+                    let b = &node.bounds;
+                    min_x = min_x.min(b.x);
+                    min_y = min_y.min(b.y);
+                    max_x = max_x.max(b.x + b.width);
+                    max_y = max_y.max(b.y + b.height);
+                }
+            }
+
+            let content_w = max_x - min_x;
+            let content_h = max_y - min_y;
+            if content_w <= 0.0 || content_h <= 0.0 {
+                return;
+            }
+
+            let (vp_w, vp_h) = self.renderer.camera().viewport_size();
+            let margin = 0.9; // 10% padding on each side
+            let zoom_x = (vp_w * margin) / content_w;
+            let zoom_y = (vp_h * margin) / content_h;
+            let zoom = zoom_x.min(zoom_y).clamp(0.1, 100.0);
+
+            let center_x = (min_x + max_x) / 2.0;
+            let center_y = (min_y + max_y) / 2.0;
+
+            let cam = self.renderer.camera_mut();
+            cam.set_zoom(zoom);
+            cam.set_pan(
+                center_x - vp_w / (2.0 * zoom),
+                center_y - vp_h / (2.0 * zoom),
+            );
         }
     }
 }
@@ -1248,5 +1774,441 @@ mod tests {
         assert_eq!(state.scene().get(id).unwrap().bounds, original_bounds);
         // No undo entry should exist for the cancelled group.
         assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn align_nodes_left() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let ids: Vec<String> = state
+            .scene()
+            .roots()
+            .iter()
+            .take(2)
+            .map(std::string::ToString::to_string)
+            .collect();
+        let json = serde_json::to_string(&ids).unwrap();
+        assert!(state.align_nodes(&json, "Left"));
+        // Both should now have the same x
+        let b0 = state.scene().get(state.scene().roots()[0]).unwrap().bounds;
+        let b1 = state.scene().get(state.scene().roots()[1]).unwrap().bounds;
+        assert!((b0.x - b1.x).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn align_nodes_invalid_kind() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let ids: Vec<String> = state
+            .scene()
+            .roots()
+            .iter()
+            .take(2)
+            .map(std::string::ToString::to_string)
+            .collect();
+        let json = serde_json::to_string(&ids).unwrap();
+        assert!(!state.align_nodes(&json, "InvalidKind"));
+    }
+
+    #[test]
+    fn align_nodes_single_node_fails() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let ids = vec![state.scene().roots()[0].to_string()];
+        let json = serde_json::to_string(&ids).unwrap();
+        assert!(!state.align_nodes(&json, "Left"));
+    }
+
+    #[test]
+    fn select_node_by_id_valid() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        assert!(state.select_node_by_id(&id.to_string()));
+        assert!(state.input.state().selection.contains(id));
+    }
+
+    #[test]
+    fn select_node_by_id_invalid_returns_false() {
+        let mut state = EditorState::new();
+        assert!(!state.select_node_by_id("not-a-uuid"));
+        assert!(!state.select_node_by_id("00000000-0000-0000-0000-000000000000"));
+    }
+
+    #[test]
+    fn get_zoom_default() {
+        let state = EditorState::new();
+        assert!((state.get_zoom() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn execute_rotation_tool_success() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "angle_degrees": 45.0
+        });
+        let result = state.execute_rotation_tool(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        // Verify the transform was changed from identity
+        let node = state.scene().get(id).unwrap();
+        assert!(!node.local_transform.is_identity());
+    }
+
+    #[test]
+    fn execute_rotation_tool_zero_degrees() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "angle_degrees": 0.0
+        });
+        let result = state.execute_rotation_tool(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+    }
+
+    #[test]
+    fn execute_rotation_tool_invalid_node() {
+        let mut state = EditorState::new();
+        let args = serde_json::json!({
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "angle_degrees": 45.0
+        });
+        let result = state.execute_rotation_tool(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], false);
+    }
+
+    #[test]
+    fn execute_rotation_tool_invalid_uuid() {
+        let mut state = EditorState::new();
+        let args = serde_json::json!({
+            "node_id": "not-a-uuid",
+            "angle_degrees": 45.0
+        });
+        let result = state.execute_rotation_tool(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], false);
+    }
+
+    #[test]
+    fn execute_rotation_tool_undo_restores_transform() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let original = state.scene().get(id).unwrap().local_transform;
+
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "angle_degrees": 90.0
+        });
+        state.execute_rotation_tool(&args);
+        assert_ne!(state.scene().get(id).unwrap().local_transform, original);
+
+        state.undo();
+        assert_eq!(state.scene().get(id).unwrap().local_transform, original);
+    }
+
+    #[test]
+    fn group_nodes_success() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let ids: Vec<String> = state
+            .scene()
+            .roots()
+            .iter()
+            .take(2)
+            .map(std::string::ToString::to_string)
+            .collect();
+        let args = serde_json::json!({ "node_ids": ids });
+        let result = state.execute_group_nodes(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert!(parsed["result"]["group_id"].as_str().is_some());
+        // The two nodes should now be children of the group.
+        // Roots should be: remaining 3 original + 1 group = 4
+        assert_eq!(state.scene().roots().len(), 4);
+    }
+
+    #[test]
+    fn group_nodes_too_few() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let args = serde_json::json!({
+            "node_ids": [state.scene().roots()[0].to_string()]
+        });
+        let result = state.execute_group_nodes(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], false);
+    }
+
+    #[test]
+    fn group_nodes_via_tool_call() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let ids: Vec<String> = state
+            .scene()
+            .roots()
+            .iter()
+            .take(3)
+            .map(std::string::ToString::to_string)
+            .collect();
+        let args = serde_json::json!({ "node_ids": ids });
+        let result = state.execute_tool_call("group_nodes", &serde_json::to_string(&args).unwrap());
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+    }
+
+    #[test]
+    fn group_nodes_undo_restores() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let original_roots = state.scene().roots().to_vec();
+        let ids: Vec<String> = original_roots
+            .iter()
+            .take(2)
+            .map(std::string::ToString::to_string)
+            .collect();
+        let args = serde_json::json!({ "node_ids": ids });
+        state.execute_group_nodes(&args);
+        // Undo the group (single undo for the command group).
+        state.undo();
+        assert_eq!(state.scene().roots().len(), 5);
+    }
+
+    #[test]
+    fn ungroup_node_success() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let ids: Vec<String> = state
+            .scene()
+            .roots()
+            .iter()
+            .take(2)
+            .map(std::string::ToString::to_string)
+            .collect();
+
+        // First group them.
+        let args = serde_json::json!({ "node_ids": ids });
+        let result = state.execute_group_nodes(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let group_id = parsed["result"]["group_id"].as_str().unwrap();
+
+        // Now ungroup.
+        let args = serde_json::json!({ "node_id": group_id });
+        let result = state.execute_ungroup_node(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+    }
+
+    #[test]
+    fn ungroup_non_group_fails() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let args = serde_json::json!({ "node_id": id.to_string() });
+        let result = state.execute_ungroup_node(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], false);
+        assert!(parsed["error"].as_str().unwrap().contains("not a Group"));
+    }
+
+    #[test]
+    fn ungroup_via_tool_call() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let ids: Vec<String> = state
+            .scene()
+            .roots()
+            .iter()
+            .take(2)
+            .map(std::string::ToString::to_string)
+            .collect();
+        let group_args = serde_json::json!({ "node_ids": ids });
+        let result = state.execute_group_nodes(&group_args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let group_id = parsed["result"]["group_id"].as_str().unwrap();
+
+        let args = format!(r#"{{"node_id":"{group_id}"}}"#);
+        let result = state.execute_tool_call("ungroup_node", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+    }
+
+    #[test]
+    fn execute_rotation_tool_via_execute_tool_call() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let args = format!(r#"{{"node_id":"{id}","angle_degrees":30}}"#);
+        let result = state.execute_tool_call("set_rotation", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+    }
+
+    // --- Z-order tool tests ---
+
+    #[test]
+    fn z_order_move_to_front() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let roots = state.scene().roots().to_vec();
+        let first_id = roots[0];
+        let last_id = *roots.last().unwrap();
+
+        let args = serde_json::json!({ "node_id": first_id.to_string() });
+        let result = state.execute_z_order_tool("move_to_front", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["result"]["moved"], true);
+
+        // First root should now be last.
+        let new_roots = state.scene().roots().to_vec();
+        assert_eq!(*new_roots.last().unwrap(), first_id);
+        // Original last should be second-to-last.
+        assert_eq!(new_roots[new_roots.len() - 2], last_id);
+    }
+
+    #[test]
+    fn z_order_move_to_back() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let roots = state.scene().roots().to_vec();
+        let last_id = *roots.last().unwrap();
+
+        let args = serde_json::json!({ "node_id": last_id.to_string() });
+        let result = state.execute_z_order_tool("move_to_back", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+
+        assert_eq!(state.scene().roots()[0], last_id);
+    }
+
+    #[test]
+    fn z_order_move_forward() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let roots = state.scene().roots().to_vec();
+        let id = roots[1]; // second node
+
+        let args = serde_json::json!({ "node_id": id.to_string() });
+        let result = state.execute_z_order_tool("move_forward", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+
+        // Should now be at index 2.
+        assert_eq!(state.scene().roots()[2], id);
+    }
+
+    #[test]
+    fn z_order_move_backward() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let roots = state.scene().roots().to_vec();
+        let id = roots[2]; // third node
+
+        let args = serde_json::json!({ "node_id": id.to_string() });
+        let result = state.execute_z_order_tool("move_backward", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+
+        // Should now be at index 1.
+        assert_eq!(state.scene().roots()[1], id);
+    }
+
+    #[test]
+    fn z_order_already_at_front_is_noop() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let roots = state.scene().roots().to_vec();
+        let last_id = *roots.last().unwrap();
+
+        let args = serde_json::json!({ "node_id": last_id.to_string() });
+        let result = state.execute_z_order_tool("move_to_front", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["result"]["moved"], false);
+
+        // Roots unchanged.
+        assert_eq!(state.scene().roots(), &roots);
+    }
+
+    #[test]
+    fn z_order_already_at_back_is_noop() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let roots = state.scene().roots().to_vec();
+        let first_id = roots[0];
+
+        let args = serde_json::json!({ "node_id": first_id.to_string() });
+        let result = state.execute_z_order_tool("move_to_back", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["result"]["moved"], false);
+    }
+
+    #[test]
+    fn z_order_undo_restores_order() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let original_roots = state.scene().roots().to_vec();
+        let first_id = original_roots[0];
+
+        let args = serde_json::json!({ "node_id": first_id.to_string() });
+        state.execute_z_order_tool("move_to_front", &args);
+        assert_ne!(state.scene().roots(), &original_roots);
+
+        state.undo();
+        assert_eq!(state.scene().roots(), &original_roots);
+    }
+
+    #[test]
+    fn z_order_via_execute_tool_call() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let roots = state.scene().roots().to_vec();
+        let first_id = roots[0];
+
+        let args = format!(r#"{{"node_id":"{first_id}"}}"#);
+        let result = state.execute_tool_call("move_forward", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+
+        // Should be at index 1 now.
+        assert_eq!(state.scene().roots()[1], first_id);
+    }
+
+    #[test]
+    fn z_order_invalid_node() {
+        let mut state = EditorState::new();
+        let args = serde_json::json!({ "node_id": "00000000-0000-0000-0000-000000000000" });
+        let result = state.execute_z_order_tool("move_forward", &args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], false);
+    }
+
+    #[test]
+    fn compute_z_reorder_forward() {
+        use selean_common::types::NodeId;
+        let a = NodeId::new();
+        let b = NodeId::new();
+        let c = NodeId::new();
+        let siblings = vec![a, b, c];
+
+        let result = compute_z_reorder(&siblings, a, "move_forward");
+        assert_eq!(result, Some(vec![b, a, c]));
+    }
+
+    #[test]
+    fn compute_z_reorder_unknown_tool() {
+        use selean_common::types::NodeId;
+        let a = NodeId::new();
+        let siblings = vec![a];
+        assert_eq!(compute_z_reorder(&siblings, a, "unknown"), None);
     }
 }

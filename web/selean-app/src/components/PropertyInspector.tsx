@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { colors, fontSizes } from "../theme";
 import type { NodeInfo, SeleanEditor } from "../wasm/types";
 
@@ -145,6 +145,27 @@ export function PropertyInspector({
               />
             </Field>
           </div>
+          <Field label="Rotate">
+            <NumberInput
+              value={extractRotationDegrees(node.transform)}
+              min={-360}
+              max={360}
+              step={1}
+              onCommit={(degrees) => {
+                const editor = editorRef.current;
+                if (!editor) return;
+                editor.execute_tool_call(
+                  "set_rotation",
+                  JSON.stringify({
+                    node_id: node.id,
+                    angle_degrees: degrees,
+                  }),
+                );
+                onSceneChanged();
+              }}
+              suffix="deg"
+            />
+          </Field>
         </Section>
 
         <Section label="Appearance">
@@ -264,6 +285,28 @@ export function PropertyInspector({
                 }
                 suffix="px"
               />
+            </Field>
+          </Section>
+        )}
+
+        {node.kind === "Image" && (
+          <ImageSection
+            node={node}
+            editorRef={editorRef}
+            onSceneChanged={onSceneChanged}
+          />
+        )}
+
+        {node.kind === "Vector" && (
+          <Section label="Vector">
+            <Field label="Path">
+              <span style={readonlyStyle} title={node.path_data ?? ""}>
+                {node.path_data
+                  ? node.path_data.length > 30
+                    ? `${node.path_data.slice(0, 30)}...`
+                    : node.path_data
+                  : "none"}
+              </span>
             </Field>
           </Section>
         )}
@@ -561,6 +604,83 @@ function ColorInput({
   );
 }
 
+function ImageSection({
+  node,
+  editorRef,
+  onSceneChanged,
+}: {
+  node: NodeInfo;
+  editorRef: React.RefObject<SeleanEditor | null>;
+  onSceneChanged: () => void;
+}) {
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+
+  const handleReplace = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const editor = editorRef.current;
+      if (!editor) return;
+      try {
+        const buffer = await file.arrayBuffer();
+        const data = new Uint8Array(buffer);
+        const assetRef = `img_${Date.now()}`;
+        if (editor.register_image_asset(assetRef, data)) {
+          editor.execute_command(
+            JSON.stringify({
+              type: "SetAssetRef",
+              node_id: node.id,
+              asset_ref: assetRef,
+            }),
+          );
+          onSceneChanged();
+        }
+      } catch {
+        // Replace failed
+      }
+      e.target.value = "";
+    },
+    [editorRef, node.id, onSceneChanged],
+  );
+
+  return (
+    <Section label="Image">
+      <Field label="Asset">
+        <span style={readonlyStyle}>{node.asset_ref ?? "none"}</span>
+      </Field>
+      <Field label="">
+        <button
+          style={replaceButtonStyle}
+          onClick={() => replaceInputRef.current?.click()}
+        >
+          Replace Image
+        </button>
+        <input
+          ref={replaceInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          style={{ display: "none" }}
+          onChange={handleReplace}
+        />
+      </Field>
+    </Section>
+  );
+}
+
+// --- Transform utilities ---
+
+/**
+ * Extracts the rotation angle in degrees from a 3x2 affine transform.
+ * Transform layout: [a, b, c, d, tx, ty] where rotation = atan2(b, a).
+ */
+export function extractRotationDegrees(
+  transform: [number, number, number, number, number, number],
+): number {
+  const [a, b] = transform;
+  const rad = Math.atan2(b, a);
+  return Math.round(rad * (180 / Math.PI) * 10) / 10;
+}
+
 // --- Color utilities ---
 
 function rgbaToHex(rgba: [number, number, number, number]): string {
@@ -681,4 +801,14 @@ const clearBtnStyle: React.CSSProperties = {
   cursor: "pointer",
   fontSize: fontSizes.base,
   padding: "0 4px",
+};
+
+const replaceButtonStyle: React.CSSProperties = {
+  background: colors.surface,
+  border: `1px solid ${colors.borderHover}`,
+  color: colors.text,
+  padding: "3px 8px",
+  borderRadius: 3,
+  fontSize: fontSizes.sm,
+  cursor: "pointer",
 };

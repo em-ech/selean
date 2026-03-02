@@ -8,4 +8,7 @@ pub mod schema;
 pub mod tools;
 
 pub use schema::{ToolDefinition, ToolParameter, ToolParameterType};
-pub use tools::{ToolCallError, all_tools, is_page_tool, is_read_only_tool, map_tool_call};
+pub use tools::{
+    ToolCallError, all_tools, is_align_tool, is_group_tool, is_page_tool, is_read_only_tool,
+    is_rotation_tool, is_z_order_tool, map_tool_call,
+};

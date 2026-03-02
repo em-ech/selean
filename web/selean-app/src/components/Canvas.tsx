@@ -7,6 +7,7 @@ interface CanvasProps {
   editorRef: React.RefObject<SeleanEditor | null>;
   status: EditorStatus;
   onInteractionEvents?: (events: InteractionEvent[]) => void;
+  onContextMenu?: (x: number, y: number) => void;
 }
 
 /** Subset of InteractionEvent variants relevant to the frontend. */
@@ -25,6 +26,7 @@ export function Canvas({
   editorRef,
   status,
   onInteractionEvents,
+  onContextMenu: onContextMenuProp,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
@@ -188,7 +190,10 @@ export function Canvas({
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
         onWheel={handleWheel}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onContextMenuProp?.(e.clientX, e.clientY);
+        }}
       />
       {status === "loading" && (
         <div style={overlayStyle}>Loading editor...</div>

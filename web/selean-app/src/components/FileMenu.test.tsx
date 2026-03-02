@@ -27,6 +27,9 @@ describe("FileMenu", () => {
     expect(screen.getByText("Open...")).toBeInTheDocument();
     expect(screen.getByText("Import PPTX...")).toBeInTheDocument();
     expect(screen.getByText("Export PPTX")).toBeInTheDocument();
+    expect(screen.getByText("Import IDML...")).toBeInTheDocument();
+    expect(screen.getByText("Export IDML")).toBeInTheDocument();
+    expect(screen.getByText("Import Figma...")).toBeInTheDocument();
   });
 
   it("calls import_document when New is clicked", () => {
@@ -89,5 +92,97 @@ describe("FileMenu", () => {
     // Close via toggling File button
     fireEvent.click(screen.getByText("File"));
     expect(screen.queryByText("New")).not.toBeInTheDocument();
+  });
+
+  it("calls Export IDML via fetch", async () => {
+    const revokeUrl = vi.fn();
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn().mockReturnValue("blob:idml"),
+      revokeObjectURL: revokeUrl,
+    });
+    const mockBlob = new Blob(["idml-data"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(mockBlob),
+      }),
+    );
+
+    const ref = createMockEditorRef();
+    render(<FileMenu editorRef={ref} onSceneChanged={() => {}} />);
+
+    fireEvent.click(screen.getByText("File"));
+    fireEvent.click(screen.getByText("Export IDML"));
+
+    // Wait for async fetch
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/export/idml",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("calls Import Figma via fetch", async () => {
+    vi.stubGlobal(
+      "prompt",
+      vi.fn().mockReturnValue("https://www.figma.com/file/abc123/MyFile"),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve('{"format_version":2,"pages":[]}'),
+      }),
+    );
+
+    const ref = createMockEditorRef();
+    const onChanged = vi.fn();
+    render(<FileMenu editorRef={ref} onSceneChanged={onChanged} />);
+
+    fireEvent.click(screen.getByText("File"));
+    fireEvent.click(screen.getByText("Import Figma..."));
+
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/import/figma",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ file_key: "abc123" }),
+        }),
+      );
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("shows alert on Figma 403 error", async () => {
+    vi.stubGlobal("prompt", vi.fn().mockReturnValue("abc123"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+      }),
+    );
+    const alertFn = vi.fn();
+    vi.stubGlobal("alert", alertFn);
+
+    const ref = createMockEditorRef();
+    render(<FileMenu editorRef={ref} onSceneChanged={() => {}} />);
+
+    fireEvent.click(screen.getByText("File"));
+    fireEvent.click(screen.getByText("Import Figma..."));
+
+    await vi.waitFor(() => {
+      expect(alertFn).toHaveBeenCalledWith(
+        expect.stringContaining("access denied"),
+      );
+    });
+
+    vi.unstubAllGlobals();
   });
 });

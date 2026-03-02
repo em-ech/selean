@@ -63,7 +63,14 @@ export interface SeleanEditor {
   get_selected_bounds_json(): string;
   get_camera_json(): string;
   clear_selection(): void;
+  select_node_by_id(node_id: string): boolean;
   register_image_asset(asset_ref: string, data: Uint8Array): boolean;
+  align_nodes(node_ids_json: string, alignment: string): boolean;
+  zoom_to(level: number): void;
+  zoom_by(factor: number): void;
+  pan_by(dx: number, dy: number): void;
+  get_zoom(): number;
+  fit_to_all(): void;
   begin_group(label: string): void;
   end_group(): void;
   cancel_group(): void;

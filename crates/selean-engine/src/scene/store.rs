@@ -416,6 +416,25 @@ impl SceneGraph {
         true
     }
 
+    /// Reorders root nodes. `new_order` must be a permutation of the current roots.
+    ///
+    /// Returns `false` if the new order is not a valid permutation.
+    pub fn reorder_roots(&mut self, new_order: &[NodeId]) -> bool {
+        if new_order.len() != self.roots.len() {
+            return false;
+        }
+        let mut sorted_current = self.roots.clone();
+        sorted_current.sort();
+        let mut sorted_new: Vec<NodeId> = new_order.to_vec();
+        sorted_new.sort();
+        if sorted_current != sorted_new {
+            return false;
+        }
+        self.roots = new_order.to_vec();
+        self.z_dirty = true;
+        true
+    }
+
     // --- Property mutations (auto-sync spatial index + dirty propagation) ---
 
     /// Updates a node's bounding box.

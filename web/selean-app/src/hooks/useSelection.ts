@@ -18,6 +18,7 @@ export function useSelection(
   ready: boolean,
 ) {
   const [selectedNode, setSelectedNode] = useState<NodeInfo | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const lastSelectedIdRef = useRef<string | null>(null);
   const refreshCounterRef = useRef(0);
   const [, setRefreshCounter] = useState(0);
@@ -42,6 +43,8 @@ export function useSelection(
       try {
         const idsJson = editor.get_selected_ids();
         const ids: string[] = JSON.parse(idsJson);
+
+        setSelectedIds(ids);
 
         if (ids.length === 0) {
           if (lastSelectedIdRef.current !== null) {
@@ -80,5 +83,5 @@ export function useSelection(
     };
   }, [ready, editorRef]);
 
-  return { selectedNode, refresh };
+  return { selectedNode, selectedIds, refresh };
 }

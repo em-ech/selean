@@ -19,7 +19,8 @@ pub mod history;
 pub use batch::CommandGroup;
 pub use descriptor::{CommandDescriptor, create_frame_node};
 pub use hierarchy::{
-    AddChildCommand, AddRootCommand, RemoveNodeCommand, ReorderChildrenCommand, ReparentCommand,
+    AddChildCommand, AddRootCommand, RemoveNodeCommand, ReorderChildrenCommand,
+    ReorderRootsCommand, ReparentCommand,
 };
 pub use history::CommandHistory;
 pub use property::{
