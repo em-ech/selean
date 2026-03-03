@@ -1,6 +1,6 @@
 //! Converts `SceneNode` to OOXML shape XML.
 
-use selean_engine::scene::{FontStyle, SceneNode, SceneNodeKind, TextAlign};
+use selean_engine::scene::{Effect, FontStyle, Gradient, SceneNode, SceneNodeKind, TextAlign};
 
 use crate::coord::{color_to_ooxml_hex, px_to_emu, px_to_ooxml_font_size};
 
@@ -62,15 +62,13 @@ fn build_text_shape_xml(
         TextAlign::Justify => "just",
     };
 
-    let fill_xml = node
-        .fill
-        .map(|c| {
-            format!(
-                "<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>",
-                color_to_ooxml_hex(&c)
-            )
-        })
-        .unwrap_or_default();
+    let fill_xml = if node.fill_gradient.is_some() || node.fill.is_some() {
+        build_fill_xml(node)
+    } else {
+        String::new()
+    };
+
+    let effects_xml = build_effects_xml(&node.effects);
 
     let text_color_xml = text_color
         .map(|c| {
@@ -84,7 +82,7 @@ fn build_text_shape_xml(
     let font_xml = format!(r#"<a:latin typeface="{font_family}"/>"#);
 
     format!(
-        r#"<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{fill_xml}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="{algn}"/><a:r><a:rPr lang="en-US" sz="{sz}"{bold}{italic}>{text_color_xml}{font_xml}</a:rPr><a:t>{content}</a:t></a:r></a:p></p:txBody></p:sp>"#,
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{fill_xml}{effects_xml}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="{algn}"/><a:r><a:rPr lang="en-US" sz="{sz}"{bold}{italic}>{text_color_xml}{font_xml}</a:rPr><a:t>{content}</a:t></a:r></a:p></p:txBody></p:sp>"#,
         name = xml_escape(&node.name),
         content = xml_escape(content),
     )
@@ -96,18 +94,120 @@ fn build_frame_shape_xml(node: &SceneNode, shape_id: u32) -> String {
     let cx = px_to_emu(node.bounds.width);
     let cy = px_to_emu(node.bounds.height);
 
-    let fill_xml = match node.fill {
+    let fill_xml = build_fill_xml(node);
+    let effects_xml = build_effects_xml(&node.effects);
+
+    format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{fill_xml}{effects_xml}</p:spPr></p:sp>"#,
+        name = xml_escape(&node.name),
+    )
+}
+
+/// Generates the fill XML for a shape, preferring gradient over solid.
+fn build_fill_xml(node: &SceneNode) -> String {
+    if let Some(ref gradient) = node.fill_gradient {
+        return gradient_to_ooxml(gradient);
+    }
+    match node.fill {
         Some(c) => format!(
             "<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>",
             color_to_ooxml_hex(&c)
         ),
         None => "<a:noFill/>".to_string(),
-    };
+    }
+}
 
-    format!(
-        r#"<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{fill_xml}</p:spPr></p:sp>"#,
-        name = xml_escape(&node.name),
-    )
+/// Converts an engine Gradient to OOXML `<a:gradFill>` XML.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn gradient_to_ooxml(gradient: &Gradient) -> String {
+    match gradient {
+        Gradient::Linear { start, end, stops } => {
+            let gs_list = gradient_stops_to_ooxml(stops);
+            let angle = gradient_points_to_ooxml_angle(*start, *end);
+            format!(
+                "<a:gradFill><a:gsLst>{gs_list}</a:gsLst><a:lin ang=\"{angle}\" scaled=\"1\"/></a:gradFill>"
+            )
+        }
+        Gradient::Radial { stops, .. } => {
+            let gs_list = gradient_stops_to_ooxml(stops);
+            // Radial: use path fill type
+            format!(
+                "<a:gradFill><a:gsLst>{gs_list}</a:gsLst><a:path path=\"circle\"><a:fillToRect l=\"50000\" t=\"50000\" r=\"50000\" b=\"50000\"/></a:path></a:gradFill>"
+            )
+        }
+    }
+}
+
+/// Converts gradient stops to OOXML `<a:gs>` elements.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn gradient_stops_to_ooxml(stops: &[selean_engine::scene::GradientStop]) -> String {
+    use std::fmt::Write;
+    let mut result = String::new();
+    for s in stops {
+        let pos = (s.position * 100_000.0).round() as i64;
+        let hex = color_to_ooxml_hex(&s.color);
+        let _ = write!(
+            result,
+            "<a:gs pos=\"{pos}\"><a:srgbClr val=\"{hex}\"/></a:gs>"
+        );
+    }
+    result
+}
+
+/// Converts gradient start/end points to OOXML angle (60,000ths of a degree).
+///
+/// OOXML convention: 0 = left-to-right, 90 = top-to-bottom.
+#[allow(clippy::cast_possible_truncation)]
+fn gradient_points_to_ooxml_angle(start: [f32; 2], end: [f32; 2]) -> i64 {
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    let radians = dy.atan2(dx);
+    let degrees = radians.to_degrees();
+    let normalized = if degrees < 0.0 {
+        degrees + 360.0
+    } else {
+        degrees
+    };
+    (normalized * 60_000.0).round() as i64
+}
+
+/// Generates `<a:effectLst>` XML for a node's effects.
+///
+/// Returns an empty string if the node has no exportable effects.
+#[allow(clippy::cast_possible_truncation)]
+fn build_effects_xml(effects: &[Effect]) -> String {
+    let mut inner = String::new();
+    for effect in effects {
+        if let Effect::DropShadow {
+            color,
+            offset_x,
+            offset_y,
+            blur_radius,
+        } = effect
+        {
+            use std::fmt::Write;
+            let blur_emu = (*blur_radius * 12_700.0).round() as i64;
+            let dist = (offset_x * offset_x + offset_y * offset_y).sqrt();
+            let dist_emu = (dist * 12_700.0).round() as i64;
+            let dir_deg = offset_y.atan2(*offset_x).to_degrees();
+            let dir_normalized = if dir_deg < 0.0 {
+                dir_deg + 360.0
+            } else {
+                dir_deg
+            };
+            let dir_60k = (dir_normalized * 60_000.0).round() as i64;
+            let hex = color_to_ooxml_hex(color);
+            let _ = write!(
+                inner,
+                "<a:outerShdw blurRad=\"{blur_emu}\" dist=\"{dist_emu}\" dir=\"{dir_60k}\"><a:srgbClr val=\"{hex}\"/></a:outerShdw>"
+            );
+        }
+    }
+    if inner.is_empty() {
+        String::new()
+    } else {
+        format!("<a:effectLst>{inner}</a:effectLst>")
+    }
 }
 
 fn build_fallback_shape_xml(node: &SceneNode, shape_id: u32) -> String {
@@ -134,7 +234,7 @@ fn xml_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use selean_common::types::NodeId;
-    use selean_engine::scene::{BoundingBox, Color};
+    use selean_engine::scene::{BoundingBox, Color, Effect};
 
     #[test]
     fn frame_to_shape_xml() {
@@ -235,6 +335,149 @@ mod tests {
         );
         let xml = node_to_shape_xml(&node, 2);
         assert!(xml.contains("FF0000"));
+    }
+
+    #[test]
+    fn frame_with_gradient_to_xml() {
+        use selean_engine::scene::GradientStop;
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "Gradient".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 50.0),
+        );
+        node.fill_gradient = Some(Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::new(1.0, 0.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ],
+        });
+        let xml = node_to_shape_xml(&node, 2);
+        assert!(xml.contains("gradFill"));
+        assert!(xml.contains("FF0000"));
+        assert!(xml.contains("0000FF"));
+        assert!(xml.contains("a:lin"));
+        assert!(!xml.contains("noFill"));
+        assert!(!xml.contains("solidFill"));
+    }
+
+    #[test]
+    fn gradient_takes_priority_over_solid_fill() {
+        use selean_engine::scene::GradientStop;
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "Both".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 50.0),
+        );
+        node.fill = Some(Color::new(0.0, 1.0, 0.0, 1.0));
+        node.fill_gradient = Some(Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            stops: vec![GradientStop {
+                position: 0.0,
+                color: Color::new(1.0, 0.0, 0.0, 1.0),
+            }],
+        });
+        let xml = node_to_shape_xml(&node, 2);
+        assert!(xml.contains("gradFill"));
+        assert!(!xml.contains("solidFill"));
+    }
+
+    #[test]
+    fn frame_with_drop_shadow_to_xml() {
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "Shadow".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 50.0),
+        );
+        node.effects = vec![Effect::DropShadow {
+            color: Color::new(0.0, 0.0, 0.0, 1.0),
+            offset_x: 0.0,
+            offset_y: 3.0,
+            blur_radius: 4.0,
+        }];
+        let xml = node_to_shape_xml(&node, 2);
+        assert!(xml.contains("effectLst"));
+        assert!(xml.contains("outerShdw"));
+        // blurRad = 4 * 12700 = 50800
+        assert!(xml.contains("blurRad=\"50800\""));
+        assert!(xml.contains("000000"));
+    }
+
+    #[test]
+    fn frame_no_effects_no_effect_lst() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "NoFx".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 50.0),
+        );
+        let xml = node_to_shape_xml(&node, 2);
+        assert!(!xml.contains("effectLst"));
+        assert!(!xml.contains("outerShdw"));
+    }
+
+    #[test]
+    fn text_with_drop_shadow_to_xml() {
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "ShadowText".to_string(),
+            SceneNodeKind::Text {
+                content: "Hi".to_string(),
+                font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 30.0),
+        );
+        node.effects = vec![Effect::DropShadow {
+            color: Color::new(1.0, 0.0, 0.0, 1.0),
+            offset_x: 3.0,
+            offset_y: 0.0,
+            blur_radius: 2.0,
+        }];
+        let xml = node_to_shape_xml(&node, 2);
+        assert!(xml.contains("effectLst"));
+        assert!(xml.contains("outerShdw"));
+        assert!(xml.contains("FF0000"));
+    }
+
+    #[test]
+    fn blur_effect_not_exported() {
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "BlurOnly".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 50.0),
+        );
+        node.effects = vec![Effect::Blur { radius: 10.0 }];
+        let xml = node_to_shape_xml(&node, 2);
+        // Blur has no OOXML equivalent for outerShdw, so effectLst should not appear
+        assert!(!xml.contains("effectLst"));
     }
 
     #[test]

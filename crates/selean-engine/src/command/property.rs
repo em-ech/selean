@@ -9,7 +9,8 @@ use super::traits::Command;
 use crate::scene::clip::ClipMode;
 use crate::scene::transform::Transform2D;
 use crate::scene::{
-    BlendMode, BoundingBox, Color, FontStyle, SceneGraph, SceneNodeKind, TextAlign,
+    BlendMode, BoundingBox, Color, Effect, FontStyle, Gradient, SceneGraph, SceneNodeKind,
+    TextAlign,
 };
 
 /// Generates a property command struct and its `Command` impl.
@@ -138,6 +139,22 @@ define_property_command!(
     "Set Fill",
     |node| node.fill,
     set_fill
+);
+
+define_property_command!(
+    SetFillGradientCommand,
+    Option<Gradient>,
+    "Set Fill Gradient",
+    |node| node.fill_gradient.clone(),
+    set_fill_gradient
+);
+
+define_property_command!(
+    SetEffectsCommand,
+    Vec<Effect>,
+    "Set Effects",
+    |node| node.effects.clone(),
+    set_effects
 );
 
 define_property_command!(
@@ -689,7 +706,7 @@ mod tests {
     #![allow(clippy::float_cmp, clippy::unwrap_used)]
 
     use super::*;
-    use crate::scene::{BoundingBox, SceneNode, SceneNodeKind};
+    use crate::scene::{BoundingBox, GradientStop, SceneNode, SceneNodeKind};
 
     fn make_frame(name: &str) -> SceneNode {
         SceneNode::new(
@@ -777,6 +794,53 @@ mod tests {
 
         assert!(cmd.undo(&mut scene));
         assert!(scene.get(id).unwrap().fill.is_none());
+    }
+
+    #[test]
+    fn set_fill_gradient_execute_and_undo() {
+        let mut scene = SceneGraph::new();
+        let node = make_frame("A");
+        let id = scene.add_root(node);
+
+        let grad = Some(Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::new(1.0, 0.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ],
+        });
+        let mut cmd = SetFillGradientCommand::new(id, grad.clone());
+        assert!(cmd.execute(&mut scene));
+        assert_eq!(scene.get(id).unwrap().fill_gradient, grad);
+
+        assert!(cmd.undo(&mut scene));
+        assert!(scene.get(id).unwrap().fill_gradient.is_none());
+    }
+
+    #[test]
+    fn set_fill_gradient_none_roundtrip() {
+        let mut scene = SceneGraph::new();
+        let mut node = make_frame("A");
+        node.fill_gradient = Some(Gradient::Radial {
+            center: [0.5, 0.5],
+            radius: 1.0,
+            stops: vec![],
+        });
+        let id = scene.add_root(node);
+
+        let mut cmd = SetFillGradientCommand::new(id, None);
+        assert!(cmd.execute(&mut scene));
+        assert!(scene.get(id).unwrap().fill_gradient.is_none());
+
+        assert!(cmd.undo(&mut scene));
+        assert!(scene.get(id).unwrap().fill_gradient.is_some());
     }
 
     #[test]

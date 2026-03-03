@@ -13,7 +13,9 @@ use selean_common::types::NodeId;
 
 use super::clip::ClipMode;
 use super::dirty::DirtyFlags;
-use super::node::{BlendMode, BoundingBox, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign};
+use super::node::{
+    BlendMode, BoundingBox, Color, Effect, FontStyle, Gradient, SceneNode, SceneNodeKind, TextAlign,
+};
 use super::transform::Transform2D;
 use crate::spatial::SpatialIndex;
 
@@ -465,6 +467,28 @@ impl SceneGraph {
     pub fn set_fill(&mut self, id: NodeId, fill: Option<Color>) -> bool {
         self.mutate_node(id, DirtyFlags::STYLE, |node| {
             node.fill = fill;
+            true
+        })
+    }
+
+    /// Updates a node's gradient fill.
+    ///
+    /// Marks the node with `DIRTY_STYLE`.
+    /// Returns `false` if the node doesn't exist.
+    pub fn set_fill_gradient(&mut self, id: NodeId, fill_gradient: Option<Gradient>) -> bool {
+        self.mutate_node(id, DirtyFlags::STYLE, |node| {
+            node.fill_gradient = fill_gradient;
+            true
+        })
+    }
+
+    /// Updates a node's visual effects list.
+    ///
+    /// Marks the node with `DIRTY_EFFECTS`.
+    /// Returns `false` if the node doesn't exist.
+    pub fn set_effects(&mut self, id: NodeId, effects: Vec<Effect>) -> bool {
+        self.mutate_node(id, DirtyFlags::EFFECTS, |node| {
+            node.effects = effects;
             true
         })
     }
@@ -1411,7 +1435,7 @@ impl std::fmt::Debug for SceneGraph {
 #[allow(clippy::expect_used, clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::scene::SceneNodeKind;
+    use crate::scene::{GradientStop, SceneNodeKind};
 
     /// Helper: creates a simple frame node with the given name and bounds.
     fn frame_node(name: &str, x: f32, y: f32, w: f32, h: f32) -> SceneNode {
@@ -1732,6 +1756,121 @@ mod tests {
         graph.set_fill(id, Some(Color::new(1.0, 0.0, 0.0, 1.0)));
         let node = graph.get(id).expect("node should exist");
         assert!(node.dirty.contains(DirtyFlags::STYLE));
+    }
+
+    #[test]
+    fn set_fill_gradient_linear() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        let grad = Some(Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 1.0],
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::new(1.0, 0.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ],
+        });
+        assert!(graph.set_fill_gradient(id, grad.clone()));
+        assert_eq!(graph.get(id).expect("exists").fill_gradient, grad);
+    }
+
+    #[test]
+    fn set_fill_gradient_clear() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        let grad = Some(Gradient::Radial {
+            center: [0.5, 0.5],
+            radius: 1.0,
+            stops: vec![],
+        });
+        graph.set_fill_gradient(id, grad);
+        assert!(graph.get(id).expect("exists").fill_gradient.is_some());
+
+        assert!(graph.set_fill_gradient(id, None));
+        assert!(graph.get(id).expect("exists").fill_gradient.is_none());
+    }
+
+    #[test]
+    fn set_fill_gradient_missing_node() {
+        let mut graph = SceneGraph::new();
+        let missing = NodeId::new();
+        assert!(!graph.set_fill_gradient(missing, None));
+    }
+
+    #[test]
+    fn set_fill_gradient_marks_style_dirty() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("Node", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        let grad = Some(Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            stops: vec![],
+        });
+        graph.set_fill_gradient(id, grad);
+        let node = graph.get(id).expect("exists");
+        assert!(node.dirty.contains(DirtyFlags::STYLE));
+    }
+
+    #[test]
+    fn set_effects_drop_shadow() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("FX", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        let effects = vec![Effect::DropShadow {
+            color: Color::new(0.0, 0.0, 0.0, 0.5),
+            offset_x: 4.0,
+            offset_y: 4.0,
+            blur_radius: 8.0,
+        }];
+        assert!(graph.set_effects(id, effects));
+        assert_eq!(graph.get(id).expect("exists").effects.len(), 1);
+    }
+
+    #[test]
+    fn set_effects_clear() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("FX", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+
+        let effects = vec![Effect::Blur { radius: 5.0 }];
+        graph.set_effects(id, effects);
+        assert_eq!(graph.get(id).expect("exists").effects.len(), 1);
+
+        assert!(graph.set_effects(id, Vec::new()));
+        assert!(graph.get(id).expect("exists").effects.is_empty());
+    }
+
+    #[test]
+    fn set_effects_missing_node() {
+        let mut graph = SceneGraph::new();
+        let missing = NodeId::new();
+        assert!(!graph.set_effects(missing, Vec::new()));
+    }
+
+    #[test]
+    fn set_effects_marks_effects_dirty() {
+        let mut graph = SceneGraph::new();
+        let node = frame_node("FX", 0.0, 0.0, 100.0, 100.0);
+        let id = graph.add_root(node);
+        graph.clear_all_dirty();
+
+        graph.set_effects(id, vec![Effect::Blur { radius: 3.0 }]);
+        let node = graph.get(id).expect("exists");
+        assert!(node.dirty.contains(DirtyFlags::EFFECTS));
     }
 
     #[test]

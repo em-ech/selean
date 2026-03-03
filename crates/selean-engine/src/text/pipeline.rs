@@ -193,6 +193,7 @@ impl TextBatch {
         positioned: &[PositionedGlyph],
         cache: &GlyphCache,
         sdf_size: u16,
+        font_id: super::font::FontId,
     ) {
         if !node.visible || positioned.is_empty() {
             return;
@@ -225,6 +226,7 @@ impl TextBatch {
                 glyph_id: glyph.glyph_id,
                 sdf_size,
                 font_weight,
+                font_id,
             };
 
             if let Some(cached) = cache.get(&key) {
@@ -691,6 +693,7 @@ mod tests {
             glyph_id: 42,
             sdf_size: 48,
             font_weight: 400,
+            font_id: 0,
         };
         cache.insert(
             key,
@@ -716,7 +719,7 @@ mod tests {
             height: 12.0,
         }];
 
-        batch.push_text_node(&node, &positioned, &cache, 48);
+        batch.push_text_node(&node, &positioned, &cache, 48, 0);
 
         // Before finalization, instances should be empty.
         assert!(batch.is_empty());
@@ -766,6 +769,7 @@ mod tests {
             glyph_id: 1,
             sdf_size: 48,
             font_weight: 400,
+            font_id: 0,
         };
         cache.insert(
             key,
@@ -791,7 +795,7 @@ mod tests {
             height: 12.0,
         }];
 
-        batch.push_text_node(&node, &positioned, &cache, 48);
+        batch.push_text_node(&node, &positioned, &cache, 48, 0);
         batch.finalize_uvs(1024, 1024);
         assert_eq!(batch.len(), 1);
 
@@ -837,6 +841,7 @@ mod tests {
             glyph_id: 1,
             sdf_size: 48,
             font_weight: 400,
+            font_id: 0,
         };
         cache.insert(
             key,
@@ -862,7 +867,7 @@ mod tests {
             height: 12.0,
         }];
 
-        batch.push_text_node(&node, &positioned, &cache, 48);
+        batch.push_text_node(&node, &positioned, &cache, 48, 0);
         batch.finalize_uvs(1024, 1024);
         assert_eq!(batch.len(), 1);
 

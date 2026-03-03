@@ -131,6 +131,20 @@ fn inverse_property(
                 offset: node.scroll_offset,
             })
         }
+        CommandDescriptor::SetFillGradient { node_id, .. } => {
+            let node = scene.get(*node_id)?;
+            Some(CommandDescriptor::SetFillGradient {
+                node_id: *node_id,
+                fill_gradient: node.fill_gradient.clone(),
+            })
+        }
+        CommandDescriptor::SetEffects { node_id, .. } => {
+            let node = scene.get(*node_id)?;
+            Some(CommandDescriptor::SetEffects {
+                node_id: *node_id,
+                effects: node.effects.clone(),
+            })
+        }
         _ => inverse_kind_specific(descriptor, scene),
     }
 }
@@ -286,6 +300,7 @@ pub fn target_node_id(descriptor: &CommandDescriptor) -> Option<NodeId> {
     match descriptor {
         CommandDescriptor::SetBounds { node_id, .. }
         | CommandDescriptor::SetFill { node_id, .. }
+        | CommandDescriptor::SetFillGradient { node_id, .. }
         | CommandDescriptor::SetStroke { node_id, .. }
         | CommandDescriptor::SetStrokeWidth { node_id, .. }
         | CommandDescriptor::SetOpacity { node_id, .. }
@@ -306,6 +321,7 @@ pub fn target_node_id(descriptor: &CommandDescriptor) -> Option<NodeId> {
         | CommandDescriptor::SetTextAlign { node_id, .. }
         | CommandDescriptor::SetLineHeight { node_id, .. }
         | CommandDescriptor::SetTextColor { node_id, .. }
+        | CommandDescriptor::SetEffects { node_id, .. }
         | CommandDescriptor::RemoveNode { node_id }
         | CommandDescriptor::Reparent { node_id, .. } => Some(*node_id),
         CommandDescriptor::AddRoot { node } | CommandDescriptor::AddChild { node, .. } => {
@@ -409,6 +425,42 @@ mod tests {
                 assert_eq!(c.g, 0.0);
             }
             _ => panic!("expected SetFill inverse"),
+        }
+    }
+
+    #[test]
+    fn inverse_set_fill_gradient() {
+        use selean_engine::scene::{Gradient, GradientStop};
+
+        let mut scene = SceneGraph::new();
+        let mut node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        node.fill_gradient = Some(Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::new(1.0, 0.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ],
+        });
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetFillGradient {
+            node_id: id,
+            fill_gradient: None,
+        };
+        let inv = compute_inverse(&desc, &scene).unwrap();
+        match inv {
+            CommandDescriptor::SetFillGradient { fill_gradient, .. } => {
+                assert!(fill_gradient.is_some());
+            }
+            _ => panic!("expected SetFillGradient inverse"),
         }
     }
 
@@ -969,6 +1021,34 @@ mod tests {
     }
 
     // --- Edge cases ---
+
+    #[test]
+    fn inverse_set_effects() {
+        use selean_engine::scene::{Color, Effect};
+
+        let mut scene = SceneGraph::new();
+        let mut node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        node.effects = vec![Effect::DropShadow {
+            color: Color::new(0.0, 0.0, 0.0, 0.5),
+            offset_x: 4.0,
+            offset_y: 4.0,
+            blur_radius: 8.0,
+        }];
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetEffects {
+            node_id: id,
+            effects: vec![],
+        };
+        let inv = compute_inverse(&desc, &scene).unwrap();
+        match inv {
+            CommandDescriptor::SetEffects { effects, .. } => {
+                assert_eq!(effects.len(), 1);
+            }
+            _ => panic!("expected SetEffects inverse"),
+        }
+    }
 
     #[test]
     fn inverse_deleted_node_returns_none() {

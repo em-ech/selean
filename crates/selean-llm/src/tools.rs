@@ -7,7 +7,8 @@
 use selean_common::types::NodeId;
 use selean_engine::command::CommandDescriptor;
 use selean_engine::scene::{
-    BlendMode, BoundingBox, ClipMode, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign,
+    BlendMode, BoundingBox, ClipMode, Color, Effect, FontStyle, Gradient, GradientStop, SceneNode,
+    SceneNodeKind, TextAlign,
 };
 
 use crate::schema::{ToolBuilder, ToolDefinition};
@@ -66,6 +67,11 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         tool_add_page(),
         tool_remove_page(),
         tool_set_active_page(),
+        tool_set_linear_gradient(),
+        tool_set_radial_gradient(),
+        tool_set_drop_shadow(),
+        tool_set_blur(),
+        tool_remove_effects(),
     ]
 }
 
@@ -155,6 +161,11 @@ pub fn map_tool_call(
         "reorder_children" => map_reorder_children(args),
         "set_font_style" => map_set_font_style(args),
         "set_clip_mode" => map_set_clip_mode(args),
+        "set_linear_gradient" => map_set_linear_gradient(args),
+        "set_radial_gradient" => map_set_radial_gradient(args),
+        "set_drop_shadow" => map_set_drop_shadow(args),
+        "set_blur" => map_set_blur(args),
+        "remove_effects" => map_remove_effects(args),
         _ => Err(ToolCallError::UnknownTool(name.to_string())),
     }
 }
@@ -930,6 +941,203 @@ fn tool_ungroup_node() -> ToolDefinition {
     .build()
 }
 
+fn tool_set_linear_gradient() -> ToolDefinition {
+    ToolBuilder::new(
+        "set_linear_gradient",
+        "Set a linear gradient fill on a node. Specify start and end points as fractions of node bounds (0.0-1.0) and an array of color stops. Each stop has a position (0.0-1.0) and RGBA color. Maximum 4 stops.",
+    )
+    .string_param("node_id", "The UUID of the node to modify")
+    .number_param("start_x", "Gradient start X as fraction of width (0.0-1.0)")
+    .number_param("start_y", "Gradient start Y as fraction of height (0.0-1.0)")
+    .number_param("end_x", "Gradient end X as fraction of width (0.0-1.0)")
+    .number_param("end_y", "Gradient end Y as fraction of height (0.0-1.0)")
+    .array_param("stops", "Array of color stops: [{position, r, g, b, a}]")
+    .build()
+}
+
+fn tool_set_radial_gradient() -> ToolDefinition {
+    ToolBuilder::new(
+        "set_radial_gradient",
+        "Set a radial gradient fill on a node. Specify center point as fractions of node bounds (0.0-1.0), radius (1.0 = half smaller dimension), and an array of color stops. Each stop has a position (0.0-1.0) and RGBA color. Maximum 4 stops.",
+    )
+    .string_param("node_id", "The UUID of the node to modify")
+    .number_param("center_x", "Gradient center X as fraction of width (0.0-1.0)")
+    .number_param("center_y", "Gradient center Y as fraction of height (0.0-1.0)")
+    .number_param("radius", "Gradient radius (1.0 = half the smaller dimension)")
+    .array_param("stops", "Array of color stops: [{position, r, g, b, a}]")
+    .build()
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::redundant_closure_for_method_calls
+)]
+fn parse_gradient_stops(args: &serde_json::Value) -> Result<Vec<GradientStop>, ToolCallError> {
+    let stops_val = args
+        .get("stops")
+        .ok_or_else(|| ToolCallError::InvalidArgs("missing 'stops' array".to_string()))?;
+    let stops_arr = stops_val
+        .as_array()
+        .ok_or_else(|| ToolCallError::InvalidArgs("'stops' must be an array".to_string()))?;
+
+    let mut stops = Vec::with_capacity(stops_arr.len().min(4));
+    for (i, stop_val) in stops_arr.iter().take(4).enumerate() {
+        let position = stop_val
+            .get("position")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| ToolCallError::InvalidArgs(format!("stop {i}: missing 'position'")))?
+            as f32;
+        let r = stop_val
+            .get("r")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| ToolCallError::InvalidArgs(format!("stop {i}: missing 'r'")))?
+            as f32;
+        let g = stop_val
+            .get("g")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| ToolCallError::InvalidArgs(format!("stop {i}: missing 'g'")))?
+            as f32;
+        let b = stop_val
+            .get("b")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| ToolCallError::InvalidArgs(format!("stop {i}: missing 'b'")))?
+            as f32;
+        let a = stop_val.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+
+        stops.push(GradientStop {
+            position,
+            color: Color::new(r, g, b, a),
+        });
+    }
+    Ok(stops)
+}
+
+fn map_set_linear_gradient(
+    args: &serde_json::Value,
+) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node_id = parse_node_id(args, "node_id")?;
+    let start_x = get_f32(args, "start_x")?;
+    let start_y = get_f32(args, "start_y")?;
+    let end_x = get_f32(args, "end_x")?;
+    let end_y = get_f32(args, "end_y")?;
+    let stops = parse_gradient_stops(args)?;
+
+    Ok(vec![CommandDescriptor::SetFillGradient {
+        node_id,
+        fill_gradient: Some(Gradient::Linear {
+            start: [start_x, start_y],
+            end: [end_x, end_y],
+            stops,
+        }),
+    }])
+}
+
+fn map_set_radial_gradient(
+    args: &serde_json::Value,
+) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node_id = parse_node_id(args, "node_id")?;
+    let center_x = get_f32(args, "center_x")?;
+    let center_y = get_f32(args, "center_y")?;
+    let radius = get_f32(args, "radius")?;
+    let stops = parse_gradient_stops(args)?;
+
+    Ok(vec![CommandDescriptor::SetFillGradient {
+        node_id,
+        fill_gradient: Some(Gradient::Radial {
+            center: [center_x, center_y],
+            radius,
+            stops,
+        }),
+    }])
+}
+
+fn tool_set_drop_shadow() -> ToolDefinition {
+    ToolBuilder::new(
+        "set_drop_shadow",
+        "Add or replace a drop shadow effect on a node. Specify shadow color (RGBA), x/y offset in pixels, and blur radius.",
+    )
+    .string_param("node_id", "The UUID of the node to modify")
+    .number_param("offset_x", "Shadow horizontal offset in pixels")
+    .number_param("offset_y", "Shadow vertical offset in pixels")
+    .number_param("blur_radius", "Shadow blur radius in pixels (0 = sharp)")
+    .optional_number_param("r", "Shadow red component (0.0-1.0), defaults to 0.0")
+    .optional_number_param("g", "Shadow green component (0.0-1.0), defaults to 0.0")
+    .optional_number_param("b", "Shadow blue component (0.0-1.0), defaults to 0.0")
+    .optional_number_param("a", "Shadow alpha component (0.0-1.0), defaults to 0.5")
+    .build()
+}
+
+fn tool_set_blur() -> ToolDefinition {
+    ToolBuilder::new(
+        "set_blur",
+        "Add or replace a blur effect on a node. Specify the blur radius in pixels.",
+    )
+    .string_param("node_id", "The UUID of the node to modify")
+    .number_param("radius", "Blur radius in pixels")
+    .build()
+}
+
+fn tool_remove_effects() -> ToolDefinition {
+    ToolBuilder::new(
+        "remove_effects",
+        "Remove all effects (drop shadow, blur) from a node.",
+    )
+    .string_param("node_id", "The UUID of the node to clear effects from")
+    .build()
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn map_set_drop_shadow(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node_id = parse_node_id(args, "node_id")?;
+    let offset_x = get_f32(args, "offset_x")?;
+    let offset_y = get_f32(args, "offset_y")?;
+    let blur_radius = get_f32(args, "blur_radius")?;
+    let r = args
+        .get("r")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0) as f32;
+    let g = args
+        .get("g")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0) as f32;
+    let b = args
+        .get("b")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0) as f32;
+    let a = args
+        .get("a")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5) as f32;
+
+    Ok(vec![CommandDescriptor::SetEffects {
+        node_id,
+        effects: vec![Effect::DropShadow {
+            color: Color::new(r, g, b, a),
+            offset_x,
+            offset_y,
+            blur_radius,
+        }],
+    }])
+}
+
+fn map_set_blur(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node_id = parse_node_id(args, "node_id")?;
+    let radius = get_f32(args, "radius")?;
+
+    Ok(vec![CommandDescriptor::SetEffects {
+        node_id,
+        effects: vec![Effect::Blur { radius }],
+    }])
+}
+
+fn map_remove_effects(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node_id = parse_node_id(args, "node_id")?;
+    Ok(vec![CommandDescriptor::SetEffects {
+        node_id,
+        effects: vec![],
+    }])
+}
+
 fn tool_set_rotation() -> ToolDefinition {
     ToolBuilder::new(
         "set_rotation",
@@ -948,7 +1156,7 @@ mod tests {
     #[test]
     fn all_tools_returns_expected_count() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 41);
     }
 
     #[test]
@@ -1701,5 +1909,270 @@ mod tests {
         });
         let result = map_tool_call("set_clip_mode", &args);
         assert!(result.is_err());
+    }
+
+    // --- Gradient tool tests ---
+
+    #[test]
+    fn map_set_linear_gradient() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "start_x": 0.0,
+            "start_y": 0.0,
+            "end_x": 1.0,
+            "end_y": 1.0,
+            "stops": [
+                {"position": 0.0, "r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0},
+                {"position": 1.0, "r": 0.0, "g": 0.0, "b": 1.0, "a": 1.0}
+            ]
+        });
+        let cmds = map_tool_call("set_linear_gradient", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::SetFillGradient {
+                node_id,
+                fill_gradient,
+            } => {
+                assert_eq!(*node_id, id);
+                let grad = fill_gradient.as_ref().unwrap();
+                match grad {
+                    Gradient::Linear { start, end, stops } => {
+                        assert_eq!(*start, [0.0, 0.0]);
+                        assert_eq!(*end, [1.0, 1.0]);
+                        assert_eq!(stops.len(), 2);
+                        assert_eq!(stops[0].position, 0.0);
+                        assert_eq!(stops[1].position, 1.0);
+                    }
+                    Gradient::Radial { .. } => panic!("expected Linear gradient"),
+                }
+            }
+            _ => panic!("expected SetFillGradient"),
+        }
+    }
+
+    #[test]
+    fn map_set_radial_gradient() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "radius": 1.0,
+            "stops": [
+                {"position": 0.0, "r": 1.0, "g": 1.0, "b": 1.0},
+                {"position": 1.0, "r": 0.0, "g": 0.0, "b": 0.0}
+            ]
+        });
+        let cmds = map_tool_call("set_radial_gradient", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::SetFillGradient { fill_gradient, .. } => {
+                let grad = fill_gradient.as_ref().unwrap();
+                match grad {
+                    Gradient::Radial {
+                        center,
+                        radius,
+                        stops,
+                    } => {
+                        assert_eq!(*center, [0.5, 0.5]);
+                        assert_eq!(*radius, 1.0);
+                        assert_eq!(stops.len(), 2);
+                        // Alpha defaults to 1.0 when omitted
+                        assert_eq!(stops[0].color.a, 1.0);
+                    }
+                    Gradient::Linear { .. } => panic!("expected Radial gradient"),
+                }
+            }
+            _ => panic!("expected SetFillGradient"),
+        }
+    }
+
+    #[test]
+    fn map_set_linear_gradient_missing_stops() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "start_x": 0.0,
+            "start_y": 0.0,
+            "end_x": 1.0,
+            "end_y": 1.0
+        });
+        let result = map_tool_call("set_linear_gradient", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_set_linear_gradient_invalid_stop() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "start_x": 0.0,
+            "start_y": 0.0,
+            "end_x": 1.0,
+            "end_y": 1.0,
+            "stops": [{"position": 0.0}]
+        });
+        let result = map_tool_call("set_linear_gradient", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_set_linear_gradient_caps_at_four_stops() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "start_x": 0.0,
+            "start_y": 0.0,
+            "end_x": 1.0,
+            "end_y": 0.0,
+            "stops": [
+                {"position": 0.0, "r": 1.0, "g": 0.0, "b": 0.0},
+                {"position": 0.25, "r": 0.0, "g": 1.0, "b": 0.0},
+                {"position": 0.5, "r": 0.0, "g": 0.0, "b": 1.0},
+                {"position": 0.75, "r": 1.0, "g": 1.0, "b": 0.0},
+                {"position": 1.0, "r": 0.0, "g": 1.0, "b": 1.0}
+            ]
+        });
+        let cmds = map_tool_call("set_linear_gradient", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetFillGradient { fill_gradient, .. } => {
+                if let Gradient::Linear { stops, .. } = fill_gradient.as_ref().unwrap() {
+                    assert_eq!(stops.len(), 4);
+                } else {
+                    panic!("expected Linear");
+                }
+            }
+            _ => panic!("expected SetFillGradient"),
+        }
+    }
+
+    #[test]
+    fn map_set_radial_gradient_missing_radius() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "stops": [{"position": 0.0, "r": 1.0, "g": 0.0, "b": 0.0}]
+        });
+        let result = map_tool_call("set_radial_gradient", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_set_drop_shadow_with_defaults() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "offset_x": 4.0,
+            "offset_y": 4.0,
+            "blur_radius": 8.0
+        });
+        let cmds = map_tool_call("set_drop_shadow", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::SetEffects { node_id, effects } => {
+                assert_eq!(*node_id, id);
+                assert_eq!(effects.len(), 1);
+                match &effects[0] {
+                    Effect::DropShadow {
+                        color,
+                        offset_x,
+                        offset_y,
+                        blur_radius,
+                    } => {
+                        assert!((color.r).abs() < f32::EPSILON);
+                        assert!((color.a - 0.5).abs() < f32::EPSILON);
+                        assert!((*offset_x - 4.0).abs() < f32::EPSILON);
+                        assert!((*offset_y - 4.0).abs() < f32::EPSILON);
+                        assert!((*blur_radius - 8.0).abs() < f32::EPSILON);
+                    }
+                    Effect::Blur { .. } => panic!("expected DropShadow"),
+                }
+            }
+            _ => panic!("expected SetEffects"),
+        }
+    }
+
+    #[test]
+    fn map_set_drop_shadow_with_color() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "offset_x": 2.0,
+            "offset_y": 2.0,
+            "blur_radius": 4.0,
+            "r": 1.0, "g": 0.0, "b": 0.0, "a": 0.8
+        });
+        let cmds = map_tool_call("set_drop_shadow", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetEffects { effects, .. } => match &effects[0] {
+                Effect::DropShadow { color, .. } => {
+                    assert!((color.r - 1.0).abs() < f32::EPSILON);
+                    assert!((color.a - 0.8).abs() < f32::EPSILON);
+                }
+                Effect::Blur { .. } => panic!("expected DropShadow"),
+            },
+            _ => panic!("expected SetEffects"),
+        }
+    }
+
+    #[test]
+    fn map_set_drop_shadow_missing_offset() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "blur_radius": 8.0
+        });
+        let result = map_tool_call("set_drop_shadow", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_set_blur() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "radius": 10.0
+        });
+        let cmds = map_tool_call("set_blur", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::SetEffects { node_id, effects } => {
+                assert_eq!(*node_id, id);
+                assert_eq!(effects.len(), 1);
+                match &effects[0] {
+                    Effect::Blur { radius } => {
+                        assert!((*radius - 10.0).abs() < f32::EPSILON);
+                    }
+                    Effect::DropShadow { .. } => panic!("expected Blur"),
+                }
+            }
+            _ => panic!("expected SetEffects"),
+        }
+    }
+
+    #[test]
+    fn map_set_blur_missing_radius() {
+        let id = test_node_id();
+        let args = serde_json::json!({ "node_id": id.to_string() });
+        let result = map_tool_call("set_blur", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn map_remove_effects() {
+        let id = test_node_id();
+        let args = serde_json::json!({ "node_id": id.to_string() });
+        let cmds = map_tool_call("remove_effects", &args).unwrap();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            CommandDescriptor::SetEffects { node_id, effects } => {
+                assert_eq!(*node_id, id);
+                assert!(effects.is_empty());
+            }
+            _ => panic!("expected SetEffects"),
+        }
     }
 }

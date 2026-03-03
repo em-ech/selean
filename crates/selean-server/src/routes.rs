@@ -5,7 +5,7 @@
 
 use axum::{
     Json, Router,
-    extract::{Multipart, State},
+    extract::{Multipart, Path, State},
     http::{StatusCode, header},
     response::{
         IntoResponse,
@@ -40,6 +40,7 @@ pub fn create_router_with_collab(state: AppState, collab_state: CollabState) -> 
         .route("/api/import/idml", post(import_idml_handler))
         .route("/api/export/idml", post(export_idml_handler))
         .route("/api/import/figma", post(import_figma_handler))
+        .route("/api/fonts/{family}", get(serve_font))
         .with_state(state)
         .merge(collab_routes)
 }
@@ -324,6 +325,37 @@ async fn import_figma_handler(
     }
 }
 
+/// Serves a font file by family name from the `fonts/` directory.
+///
+/// Font files are looked up as `fonts/{family}.ttf` or `fonts/{family}.otf`
+/// (case-insensitive). Returns 404 if the font is not found.
+async fn serve_font(Path(family): Path<String>) -> impl IntoResponse {
+    let key = family.to_lowercase();
+
+    // Try .ttf first, then .otf.
+    let candidates = [format!("fonts/{key}.ttf"), format!("fonts/{key}.otf")];
+
+    for path in &candidates {
+        if let Ok(data) = tokio::fs::read(path).await {
+            let content_type = if std::path::Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("otf"))
+            {
+                "font/otf"
+            } else {
+                "font/ttf"
+            };
+            return (StatusCode::OK, [(header::CONTENT_TYPE, content_type)], data).into_response();
+        }
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": format!("font '{family}' not found") })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -371,7 +403,7 @@ mod tests {
             .await
             .unwrap();
         let tools: Vec<selean_llm::ToolDefinition> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 41);
     }
 
     #[tokio::test]
@@ -486,5 +518,77 @@ mod tests {
         // Missing required fields returns 422 (Unprocessable Entity) from axum deserialization
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
         assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn font_endpoint_unknown_returns_404() {
+        let app = create_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/fonts/nonexistent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn font_endpoint_serves_valid_font() {
+        // Create a temporary fonts/ directory with a test font.
+        let dir = std::path::Path::new("fonts");
+        let _ = tokio::fs::create_dir_all(dir).await;
+        let font_path = dir.join("testfont.ttf");
+        let sample_data = b"fake-font-data";
+        tokio::fs::write(&font_path, sample_data).await.unwrap();
+
+        let app = create_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/fonts/testfont")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let ct = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(ct, "font/ttf");
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), sample_data);
+
+        // Clean up.
+        let _ = tokio::fs::remove_file(&font_path).await;
+    }
+
+    #[tokio::test]
+    async fn font_endpoint_case_insensitive() {
+        let app = create_router(test_state());
+        // Request with uppercase should still match lowercase file.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/fonts/NoSuchFont")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should be 404, but importantly the route itself matches (not 405).
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

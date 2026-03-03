@@ -42,6 +42,7 @@ export function makeNodeInfo(overrides: Partial<NodeInfo> = {}): NodeInfo {
     text_color: null,
     children: [],
     parent: null,
+    effects: [],
     ...overrides,
   };
 }

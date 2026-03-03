@@ -1,7 +1,7 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useCollab } from "../collab/CollabContext";
 import { colors, fontSizes } from "../theme";
-import type { NodeInfo, SeleanEditor } from "../wasm/types";
+import type { Effect, NodeInfo, SeleanEditor } from "../wasm/types";
 
 interface PropertyInspectorProps {
   node: NodeInfo | null;
@@ -436,6 +436,12 @@ export function PropertyInspector({
             </Field>
           </Section>
         )}
+
+        <EffectsSection
+          nodeId={node.id}
+          effects={node.effects ?? []}
+          executeCommand={executeCommand}
+        />
       </div>
     </div>
   );
@@ -675,6 +681,192 @@ function ImageSection({
   );
 }
 
+const EFFECT_TYPES = ["Drop Shadow", "Blur"] as const;
+
+type EffectType = (typeof EFFECT_TYPES)[number];
+
+function makeDefaultEffect(effectType: EffectType): Effect {
+  if (effectType === "Drop Shadow") {
+    return {
+      type: "DropShadow",
+      color: { r: 0, g: 0, b: 0, a: 0.5 },
+      offset_x: 4,
+      offset_y: 4,
+      blur_radius: 8,
+    };
+  }
+  return { type: "Blur", radius: 10 };
+}
+
+function EffectsSection({
+  nodeId,
+  effects,
+  executeCommand,
+}: {
+  nodeId: string;
+  effects: Effect[];
+  executeCommand: (command: Record<string, unknown>) => void;
+}) {
+  const [addType, setAddType] = useState<EffectType>("Drop Shadow");
+
+  const emitEffects = useCallback(
+    (updated: Effect[]) => {
+      executeCommand({
+        type: "SetEffects",
+        node_id: nodeId,
+        effects: updated,
+      });
+    },
+    [executeCommand, nodeId],
+  );
+
+  const updateEffect = useCallback(
+    (index: number, patch: Partial<Effect>) => {
+      const updated = effects.map((e, i) =>
+        i === index ? { ...e, ...patch } : e,
+      );
+      emitEffects(updated);
+    },
+    [effects, emitEffects],
+  );
+
+  const removeEffect = useCallback(
+    (index: number) => {
+      const updated = effects.filter((_, i) => i !== index);
+      emitEffects(updated);
+    },
+    [effects, emitEffects],
+  );
+
+  const addEffect = useCallback(() => {
+    emitEffects([...effects, makeDefaultEffect(addType)]);
+  }, [effects, addType, emitEffects]);
+
+  return (
+    <Section label="Effects">
+      {effects.map((effect, index) => (
+        <div key={index} style={effectItemStyle}>
+          <div style={effectHeaderStyle}>
+            <span style={effectTypeLabel}>
+              {effect.type === "DropShadow" ? "Drop Shadow" : "Blur"}
+            </span>
+            <button
+              style={removeEffectBtnStyle}
+              onClick={() => removeEffect(index)}
+              title="Remove effect"
+            >
+              x
+            </button>
+          </div>
+          {effect.type === "DropShadow" && (
+            <DropShadowFields
+              effect={effect}
+              onChange={(patch) => updateEffect(index, patch)}
+            />
+          )}
+          {effect.type === "Blur" && (
+            <BlurFields
+              effect={effect}
+              onChange={(patch) => updateEffect(index, patch)}
+            />
+          )}
+        </div>
+      ))}
+      <div style={addEffectRowStyle}>
+        <select
+          value={addType}
+          onChange={(e) => setAddType(e.target.value as EffectType)}
+          style={{ ...selectStyle, flex: 1 }}
+        >
+          {EFFECT_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <button style={addEffectBtnStyle} onClick={addEffect}>
+          Add Effect
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+function DropShadowFields({
+  effect,
+  onChange,
+}: {
+  effect: Extract<Effect, { type: "DropShadow" }>;
+  onChange: (patch: Partial<Extract<Effect, { type: "DropShadow" }>>) => void;
+}) {
+  const colorTuple: [number, number, number, number] = [
+    effect.color.r,
+    effect.color.g,
+    effect.color.b,
+    effect.color.a,
+  ];
+
+  return (
+    <>
+      <Field label="Color">
+        <ColorInput
+          value={colorTuple}
+          onCommit={(c) => {
+            if (c) {
+              onChange({ color: { r: c[0], g: c[1], b: c[2], a: c[3] } });
+            }
+          }}
+        />
+      </Field>
+      <Field label="X Off">
+        <NumberInput
+          value={effect.offset_x}
+          step={1}
+          onCommit={(offset_x) => onChange({ offset_x })}
+          suffix="px"
+        />
+      </Field>
+      <Field label="Y Off">
+        <NumberInput
+          value={effect.offset_y}
+          step={1}
+          onCommit={(offset_y) => onChange({ offset_y })}
+          suffix="px"
+        />
+      </Field>
+      <Field label="Blur">
+        <NumberInput
+          value={effect.blur_radius}
+          min={0}
+          step={1}
+          onCommit={(blur_radius) => onChange({ blur_radius })}
+          suffix="px"
+        />
+      </Field>
+    </>
+  );
+}
+
+function BlurFields({
+  effect,
+  onChange,
+}: {
+  effect: Extract<Effect, { type: "Blur" }>;
+  onChange: (patch: Partial<Extract<Effect, { type: "Blur" }>>) => void;
+}) {
+  return (
+    <Field label="Radius">
+      <NumberInput
+        value={effect.radius}
+        min={0}
+        step={1}
+        onCommit={(radius) => onChange({ radius })}
+        suffix="px"
+      />
+    </Field>
+  );
+}
+
 // --- Transform utilities ---
 
 /**
@@ -819,4 +1011,52 @@ const replaceButtonStyle: React.CSSProperties = {
   borderRadius: 3,
   fontSize: fontSizes.sm,
   cursor: "pointer",
+};
+
+const effectItemStyle: React.CSSProperties = {
+  background: colors.surface,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 4,
+  padding: 8,
+  marginBottom: 8,
+};
+
+const effectHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  marginBottom: 6,
+};
+
+const effectTypeLabel: React.CSSProperties = {
+  fontSize: fontSizes.sm,
+  fontWeight: 600,
+  color: colors.textMuted,
+};
+
+const removeEffectBtnStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: colors.textDim,
+  cursor: "pointer",
+  fontSize: fontSizes.base,
+  padding: "0 4px",
+  lineHeight: 1,
+};
+
+const addEffectRowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 6,
+  alignItems: "center",
+};
+
+const addEffectBtnStyle: React.CSSProperties = {
+  background: colors.surface,
+  border: `1px solid ${colors.borderHover}`,
+  color: colors.text,
+  padding: "3px 8px",
+  borderRadius: 3,
+  fontSize: fontSizes.sm,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };

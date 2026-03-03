@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use super::atlas::AtlasRegion;
+use super::font::FontId;
 
 /// Key for looking up a cached glyph.
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
@@ -18,6 +19,8 @@ pub struct GlyphCacheKey {
     pub sdf_size: u16,
     /// Font weight (100-900). Variable fonts produce different outlines per weight.
     pub font_weight: u16,
+    /// Font ID within the `FontRegistry`. Different fonts produce different glyph outlines.
+    pub font_id: FontId,
 }
 
 /// Cached information about a glyph stored in the atlas.
@@ -113,6 +116,7 @@ mod tests {
             glyph_id,
             sdf_size: 48,
             font_weight: 400,
+            font_id: 0,
         }
     }
 
@@ -178,11 +182,13 @@ mod tests {
             glyph_id: 42,
             sdf_size: 48,
             font_weight: 400,
+            font_id: 0,
         };
         let key2 = GlyphCacheKey {
             glyph_id: 42,
             sdf_size: 64,
             font_weight: 400,
+            font_id: 0,
         };
 
         cache.insert(key1, test_cached_glyph());
@@ -198,16 +204,40 @@ mod tests {
             glyph_id: 42,
             sdf_size: 48,
             font_weight: 400,
+            font_id: 0,
         };
         let key_bold = GlyphCacheKey {
             glyph_id: 42,
             sdf_size: 48,
             font_weight: 700,
+            font_id: 0,
         };
 
         cache.insert(key_regular, test_cached_glyph());
         assert!(cache.contains(&key_regular));
         assert!(!cache.contains(&key_bold));
+    }
+
+    #[test]
+    fn different_font_ids_are_different_keys() {
+        let mut cache = GlyphCache::new();
+
+        let key_font0 = GlyphCacheKey {
+            glyph_id: 42,
+            sdf_size: 48,
+            font_weight: 400,
+            font_id: 0,
+        };
+        let key_font1 = GlyphCacheKey {
+            glyph_id: 42,
+            sdf_size: 48,
+            font_weight: 400,
+            font_id: 1,
+        };
+
+        cache.insert(key_font0, test_cached_glyph());
+        assert!(cache.contains(&key_font0));
+        assert!(!cache.contains(&key_font1));
     }
 
     #[test]

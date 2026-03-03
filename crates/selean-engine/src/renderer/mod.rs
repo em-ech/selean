@@ -7,6 +7,8 @@
 pub mod blend;
 /// GPU resources for shader-based blend mode compositing.
 pub mod blend_pipeline;
+/// Dual Kawase blur pipeline for drop shadow and layer blur effects.
+pub mod blur_pipeline;
 mod camera;
 /// Hierarchical clip state stack for DFS scene traversal.
 pub mod clip_stack;

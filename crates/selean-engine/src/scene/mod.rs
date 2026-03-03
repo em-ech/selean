@@ -13,6 +13,9 @@ pub mod transform;
 
 pub use clip::{ClipMode, ClipRect};
 pub use dirty::DirtyFlags;
-pub use node::{BlendMode, BoundingBox, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign};
+pub use node::{
+    BlendMode, BoundingBox, Color, Effect, FontStyle, Gradient, GradientStop, SceneNode,
+    SceneNodeKind, TextAlign,
+};
 pub use store::SceneGraph;
 pub use transform::{Transform2D, TransformColumns};

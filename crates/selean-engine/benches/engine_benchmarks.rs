@@ -493,6 +493,7 @@ fn bench_text_layout(c: &mut Criterion) {
                     TextAlign::Left,
                     1.2,
                     400,
+                    0,
                 ));
             });
         });
@@ -535,6 +536,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                             glyph_id: sg.glyph_id,
                             sdf_size: params.render_size as u16,
                             font_weight: 400,
+                            font_id: 0,
                         };
                         if !cache.contains(&key) {
                             let glyph_id = ttf_parser::GlyphId(sg.glyph_id);
@@ -571,6 +573,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                         TextAlign::Left,
                         1.2,
                         400,
+                        0,
                     );
 
                     black_box(layout);
@@ -598,6 +601,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                 TextAlign::Left,
                 1.2,
                 400,
+                0,
             ));
         });
     });
@@ -1258,6 +1262,7 @@ fn build_bench_cache(font: &FontData, runs: &[&ShapedRun]) -> GlyphCache {
                 glyph_id: sg.glyph_id,
                 sdf_size,
                 font_weight: 400,
+                font_id: 0,
             };
             if cache.contains(&key) {
                 continue;

@@ -4,7 +4,9 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use selean_common::types::NodeId;
-use selean_engine::scene::{BoundingBox, Color, SceneNode, SceneNodeKind};
+use selean_engine::scene::{
+    BoundingBox, Color, Effect, Gradient, GradientStop, SceneNode, SceneNodeKind,
+};
 
 use super::text::parse_text_body;
 use crate::coord::{emu_to_px, parse_ooxml_color};
@@ -79,9 +81,21 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
     let mut ext_cx: i64 = 0;
     let mut ext_cy: i64 = 0;
     let mut fill_color: Option<Color> = None;
+    let mut fill_gradient: Option<Gradient> = None;
     let mut has_text_body = false;
     let mut in_txbody = false;
     let mut in_sppr = false;
+    let mut in_grad_fill = false;
+    let mut grad_stops: Vec<GradientStop> = Vec::new();
+    let mut grad_angle: f32 = 0.0;
+    let mut current_gs_pos: Option<f32> = None;
+    let mut effects: Vec<Effect> = Vec::new();
+    let mut in_effect_lst = false;
+    let mut in_outer_shdw = false;
+    let mut shdw_blur_rad: f32 = 0.0;
+    let mut shdw_dist: f32 = 0.0;
+    let mut shdw_dir: f32 = 0.0;
+    let mut shdw_color: Option<Color> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -103,7 +117,67 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
                         has_text_body = true;
                         in_txbody = true;
                     }
+                    b"effectLst" if in_sppr && !in_txbody => {
+                        in_effect_lst = true;
+                    }
+                    b"outerShdw" if in_effect_lst => {
+                        in_outer_shdw = true;
+                        shdw_blur_rad = 0.0;
+                        shdw_dist = 0.0;
+                        shdw_dir = 0.0;
+                        shdw_color = None;
+                        for attr in e.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"blurRad" => {
+                                    if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                        let emu: f32 = v.parse().unwrap_or(0.0);
+                                        shdw_blur_rad = emu / 12_700.0;
+                                    }
+                                }
+                                b"dist" => {
+                                    if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                        let emu: f32 = v.parse().unwrap_or(0.0);
+                                        shdw_dist = emu / 12_700.0;
+                                    }
+                                }
+                                b"dir" => {
+                                    if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                        shdw_dir = v.parse::<f32>().unwrap_or(0.0);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"gradFill" if in_sppr && !in_txbody => {
+                        in_grad_fill = true;
+                        grad_stops.clear();
+                        grad_angle = 0.0;
+                    }
+                    b"gs" if in_grad_fill => {
+                        current_gs_pos = None;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"pos" {
+                                if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                    // OOXML pos is in 1/1000 percent (0-100000)
+                                    let raw: f32 = v.parse().unwrap_or(0.0);
+                                    current_gs_pos = Some(raw / 100_000.0);
+                                }
+                            }
+                        }
+                    }
                     _ => {
+                        if in_outer_shdw && local == b"srgbClr" {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"val" {
+                                    if let Ok(hex) = std::str::from_utf8(&attr.value) {
+                                        shdw_color = parse_ooxml_color(hex);
+                                    }
+                                }
+                            }
+                        } else if in_grad_fill {
+                            parse_gradient_color(local, e, &mut grad_stops, &mut current_gs_pos);
+                        }
                         parse_geometry_and_fill(
                             local,
                             e,
@@ -131,7 +205,27 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
                             }
                         }
                     }
+                    b"lin" if in_grad_fill => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"ang" {
+                                if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                    grad_angle = v.parse::<f32>().unwrap_or(0.0);
+                                }
+                            }
+                        }
+                    }
                     _ => {
+                        if in_outer_shdw && local == b"srgbClr" {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"val" {
+                                    if let Ok(hex) = std::str::from_utf8(&attr.value) {
+                                        shdw_color = parse_ooxml_color(hex);
+                                    }
+                                }
+                            }
+                        } else if in_grad_fill {
+                            parse_gradient_color(local, e, &mut grad_stops, &mut current_gs_pos);
+                        }
                         parse_geometry_and_fill(
                             local,
                             e,
@@ -152,6 +246,31 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
                 match local {
                     b"spPr" => in_sppr = false,
                     b"txBody" => in_txbody = false,
+                    b"outerShdw" if in_outer_shdw => {
+                        in_outer_shdw = false;
+                        let angle_rad = (shdw_dir / 60_000.0_f32).to_radians();
+                        let offset_x = shdw_dist * angle_rad.cos();
+                        let offset_y = shdw_dist * angle_rad.sin();
+                        let color = shdw_color.unwrap_or(Color::new(0.0, 0.0, 0.0, 0.5));
+                        effects.push(Effect::DropShadow {
+                            color,
+                            offset_x,
+                            offset_y,
+                            blur_radius: shdw_blur_rad,
+                        });
+                    }
+                    b"effectLst" if in_effect_lst => {
+                        in_effect_lst = false;
+                    }
+                    b"gradFill" if in_grad_fill => {
+                        in_grad_fill = false;
+                        if !grad_stops.is_empty() {
+                            let stops: Vec<GradientStop> =
+                                grad_stops.iter().take(4).copied().collect();
+                            let (start, end) = ooxml_angle_to_gradient_points(grad_angle);
+                            fill_gradient = Some(Gradient::Linear { start, end, stops });
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -181,6 +300,8 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
         };
         let mut node = SceneNode::new(NodeId::new(), name, kind, bounds);
         node.fill = fill_color;
+        node.fill_gradient = fill_gradient;
+        node.effects = effects;
         node
     } else {
         let kind = SceneNodeKind::Frame {
@@ -188,6 +309,8 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
         };
         let mut node = SceneNode::new(NodeId::new(), name, kind, bounds);
         node.fill = fill_color;
+        node.fill_gradient = fill_gradient;
+        node.effects = effects;
         node
     }
 }
@@ -251,6 +374,44 @@ fn parse_geometry_and_fill(
         }
         _ => {}
     }
+}
+
+/// Parses an `srgbClr` element inside a gradient stop and pushes a `GradientStop`.
+fn parse_gradient_color(
+    local: &[u8],
+    e: &quick_xml::events::BytesStart<'_>,
+    stops: &mut Vec<GradientStop>,
+    current_pos: &mut Option<f32>,
+) {
+    if local == b"srgbClr" {
+        if let Some(pos) = current_pos.take() {
+            for attr in e.attributes().flatten() {
+                if attr.key.as_ref() == b"val" {
+                    if let Ok(hex) = std::str::from_utf8(&attr.value) {
+                        if let Some(color) = parse_ooxml_color(hex) {
+                            stops.push(GradientStop {
+                                position: pos,
+                                color,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Converts an OOXML gradient angle to start/end points in [0..1] space.
+///
+/// OOXML angle is in 60,000ths of a degree. 0 = left-to-right, 5400000 = top-to-bottom.
+fn ooxml_angle_to_gradient_points(angle_60k: f32) -> ([f32; 2], [f32; 2]) {
+    let degrees = angle_60k / 60_000.0;
+    let radians = degrees.to_radians();
+    let dx = radians.cos();
+    let dy = radians.sin();
+    let start = [0.5 - dx * 0.5, 0.5 - dy * 0.5];
+    let end = [0.5 + dx * 0.5, 0.5 + dy * 0.5];
+    (start, end)
 }
 
 fn append_start_tag(s: &mut String, e: &quick_xml::events::BytesStart<'_>) {
@@ -412,6 +573,171 @@ mod tests {
         </p:spTree>"#;
         let nodes = parse_shapes(xml);
         assert_eq!(nodes[0].name, "My Custom Shape");
+    }
+
+    #[test]
+    fn parse_shape_with_gradient_fill() {
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="GradBox"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="914400" cy="914400"/>
+                    </a:xfrm>
+                    <a:gradFill>
+                        <a:gsLst>
+                            <a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs>
+                            <a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs>
+                        </a:gsLst>
+                        <a:lin ang="5400000" scaled="1"/>
+                    </a:gradFill>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        let node = &nodes[0];
+        assert!(node.fill_gradient.is_some());
+        match node.fill_gradient.as_ref().unwrap() {
+            Gradient::Linear { stops, .. } => {
+                assert_eq!(stops.len(), 2);
+                assert!((stops[0].position - 0.0).abs() < 1e-6);
+                assert!((stops[0].color.r - 1.0).abs() < 0.01);
+                assert!((stops[1].position - 1.0).abs() < 1e-6);
+                assert!((stops[1].color.b - 1.0).abs() < 0.01);
+            }
+            Gradient::Radial { .. } => panic!("expected Linear gradient"),
+        }
+    }
+
+    #[test]
+    fn parse_shape_gradient_angle_top_to_bottom() {
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="TopBot"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="100" cy="100"/>
+                    </a:xfrm>
+                    <a:gradFill>
+                        <a:gsLst>
+                            <a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs>
+                            <a:gs pos="100000"><a:srgbClr val="000000"/></a:gs>
+                        </a:gsLst>
+                        <a:lin ang="5400000"/>
+                    </a:gradFill>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        let grad = nodes[0].fill_gradient.as_ref().unwrap();
+        match grad {
+            Gradient::Linear { start, end, .. } => {
+                // 5400000 = 90 degrees = top-to-bottom
+                assert!((start[1] - 0.0).abs() < 0.01);
+                assert!((end[1] - 1.0).abs() < 0.01);
+            }
+            Gradient::Radial { .. } => panic!("expected Linear"),
+        }
+    }
+
+    #[test]
+    fn parse_shape_with_drop_shadow() {
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="ShadowBox"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="914400" cy="914400"/>
+                    </a:xfrm>
+                    <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+                    <a:effectLst>
+                        <a:outerShdw blurRad="50800" dist="38100" dir="5400000">
+                            <a:srgbClr val="000000"/>
+                        </a:outerShdw>
+                    </a:effectLst>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].effects.len(), 1);
+        match &nodes[0].effects[0] {
+            Effect::DropShadow {
+                color,
+                offset_x,
+                offset_y,
+                blur_radius,
+            } => {
+                // blurRad 50800 / 12700 = 4.0
+                assert!((*blur_radius - 4.0).abs() < 0.01);
+                // dist 38100 / 12700 = 3.0, dir 5400000 = 90 degrees
+                // offset_x = 3.0 * cos(90) ~= 0.0
+                // offset_y = 3.0 * sin(90) ~= 3.0
+                assert!(offset_x.abs() < 0.01);
+                assert!((*offset_y - 3.0).abs() < 0.01);
+                // color is black
+                assert!(color.r.abs() < 0.01);
+                assert!(color.g.abs() < 0.01);
+                assert!(color.b.abs() < 0.01);
+            }
+            Effect::Blur { .. } => panic!("expected DropShadow"),
+        }
+    }
+
+    #[test]
+    fn parse_shape_shadow_with_empty_srgb_clr() {
+        // srgbClr as self-closing tag (Empty event)
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="ShadowEmpty"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="100" cy="100"/>
+                    </a:xfrm>
+                    <a:effectLst>
+                        <a:outerShdw blurRad="25400" dist="0" dir="0">
+                            <a:srgbClr val="FF0000"/>
+                        </a:outerShdw>
+                    </a:effectLst>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes[0].effects.len(), 1);
+        match &nodes[0].effects[0] {
+            Effect::DropShadow {
+                color, blur_radius, ..
+            } => {
+                assert!((*blur_radius - 2.0).abs() < 0.01);
+                assert!((color.r - 1.0).abs() < 0.01);
+                assert!(color.g.abs() < 0.01);
+            }
+            Effect::Blur { .. } => panic!("expected DropShadow"),
+        }
+    }
+
+    #[test]
+    fn parse_shape_no_effects_defaults_empty() {
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="NoFx"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert!(nodes[0].effects.is_empty());
     }
 
     #[test]

@@ -8,18 +8,19 @@ use selean_common::types::NodeId;
 use serde::{Deserialize, Serialize};
 
 use crate::scene::{
-    BlendMode, BoundingBox, ClipMode, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign,
-    Transform2D,
+    BlendMode, BoundingBox, ClipMode, Color, Effect, FontStyle, Gradient, SceneNode, SceneNodeKind,
+    TextAlign, Transform2D,
 };
 
 use super::{
     AddChildCommand, AddRootCommand, Command, RemoveNodeCommand, ReorderChildrenCommand,
     ReorderRootsCommand, ReparentCommand, SetAssetRefCommand, SetBlendModeCommand,
-    SetBoundsCommand, SetClipModeCommand, SetCornerRadiusCommand, SetFillCommand,
-    SetFontFamilyCommand, SetFontSizeCommand, SetFontStyleCommand, SetFontWeightCommand,
-    SetLineHeightCommand, SetNameCommand, SetOpacityCommand, SetPathDataCommand,
-    SetScrollOffsetCommand, SetStrokeCommand, SetStrokeWidthCommand, SetTextAlignCommand,
-    SetTextColorCommand, SetTextContentCommand, SetTransformCommand, SetVisibleCommand,
+    SetBoundsCommand, SetClipModeCommand, SetCornerRadiusCommand, SetEffectsCommand,
+    SetFillCommand, SetFillGradientCommand, SetFontFamilyCommand, SetFontSizeCommand,
+    SetFontStyleCommand, SetFontWeightCommand, SetLineHeightCommand, SetNameCommand,
+    SetOpacityCommand, SetPathDataCommand, SetScrollOffsetCommand, SetStrokeCommand,
+    SetStrokeWidthCommand, SetTextAlignCommand, SetTextColorCommand, SetTextContentCommand,
+    SetTransformCommand, SetVisibleCommand,
 };
 
 /// A serializable description of a scene graph mutation.
@@ -43,6 +44,13 @@ pub enum CommandDescriptor {
         node_id: NodeId,
         /// New fill color, or null to clear.
         fill: Option<Color>,
+    },
+    /// Set or clear the gradient fill of a node.
+    SetFillGradient {
+        /// Target node.
+        node_id: NodeId,
+        /// New gradient fill, or null to clear.
+        fill_gradient: Option<Gradient>,
     },
     /// Set or clear the stroke color of a node.
     SetStroke {
@@ -215,6 +223,13 @@ pub enum CommandDescriptor {
         /// New order of child IDs.
         new_order: Vec<NodeId>,
     },
+    /// Set the effects list of a node.
+    SetEffects {
+        /// Target node.
+        node_id: NodeId,
+        /// New effects list.
+        effects: Vec<Effect>,
+    },
     /// Reorder root nodes.
     ReorderRoots {
         /// New order of root node IDs.
@@ -229,6 +244,10 @@ impl CommandDescriptor {
         match self {
             Self::SetBounds { node_id, bounds } => Box::new(SetBoundsCommand::new(node_id, bounds)),
             Self::SetFill { node_id, fill } => Box::new(SetFillCommand::new(node_id, fill)),
+            Self::SetFillGradient {
+                node_id,
+                fill_gradient,
+            } => Box::new(SetFillGradientCommand::new(node_id, fill_gradient)),
             Self::SetStroke { node_id, stroke } => Box::new(SetStrokeCommand::new(node_id, stroke)),
             Self::SetStrokeWidth { node_id, width } => {
                 Box::new(SetStrokeWidthCommand::new(node_id, width))
@@ -305,6 +324,9 @@ impl CommandDescriptor {
                 parent_id,
                 new_order,
             } => Box::new(ReorderChildrenCommand::new(parent_id, new_order)),
+            Self::SetEffects { node_id, effects } => {
+                Box::new(SetEffectsCommand::new(node_id, effects))
+            }
             Self::ReorderRoots { new_order } => Box::new(ReorderRootsCommand::new(new_order)),
         }
     }
@@ -338,6 +360,7 @@ pub fn create_frame_node(
 #[allow(clippy::expect_used, clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::scene::GradientStop;
 
     fn sample_node_id() -> NodeId {
         NodeId::new()
@@ -373,6 +396,43 @@ mod tests {
         let desc = CommandDescriptor::SetFill {
             node_id: id,
             fill: None,
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_fill_gradient_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetFillGradient {
+            node_id: id,
+            fill_gradient: Some(Gradient::Linear {
+                start: [0.0, 0.0],
+                end: [1.0, 1.0],
+                stops: vec![
+                    GradientStop {
+                        position: 0.0,
+                        color: Color::new(1.0, 0.0, 0.0, 1.0),
+                    },
+                    GradientStop {
+                        position: 1.0,
+                        color: Color::new(0.0, 0.0, 1.0, 1.0),
+                    },
+                ],
+            }),
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_fill_gradient_null_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetFillGradient {
+            node_id: id,
+            fill_gradient: None,
         };
         let json = serde_json::to_string(&desc).expect("serialize");
         let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
@@ -859,5 +919,73 @@ mod tests {
         let json = serde_json::to_string(&desc).expect("serialize");
         let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_effects_roundtrip() {
+        use crate::scene::Effect;
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetEffects {
+            node_id: id,
+            effects: vec![Effect::DropShadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.5),
+                offset_x: 4.0,
+                offset_y: 4.0,
+                blur_radius: 8.0,
+            }],
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn set_effects_empty_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::SetEffects {
+            node_id: id,
+            effects: vec![],
+        };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn into_command_set_effects_executes() {
+        use crate::scene::Effect;
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let effects = vec![Effect::Blur { radius: 10.0 }];
+        let desc = CommandDescriptor::SetEffects {
+            node_id: id,
+            effects: effects.clone(),
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert_eq!(scene.get(id).expect("exists").effects, effects);
+    }
+
+    #[test]
+    fn into_command_set_effects_undo_restores() {
+        use crate::scene::Effect;
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetEffects {
+            node_id: id,
+            effects: vec![Effect::Blur { radius: 10.0 }],
+        };
+        let mut cmd = desc.into_command();
+        cmd.execute(&mut scene);
+        assert!(!scene.get(id).expect("exists").effects.is_empty());
+
+        cmd.undo(&mut scene);
+        assert!(scene.get(id).expect("exists").effects.is_empty());
     }
 }

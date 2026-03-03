@@ -25,10 +25,10 @@ pub use hierarchy::{
 pub use history::CommandHistory;
 pub use property::{
     SetAssetRefCommand, SetBlendModeCommand, SetBoundsCommand, SetClipModeCommand,
-    SetCornerRadiusCommand, SetFillCommand, SetFontFamilyCommand, SetFontSizeCommand,
-    SetFontStyleCommand, SetFontWeightCommand, SetLineHeightCommand, SetNameCommand,
-    SetOpacityCommand, SetPathDataCommand, SetScrollOffsetCommand, SetStrokeCommand,
-    SetStrokeWidthCommand, SetTextAlignCommand, SetTextColorCommand, SetTextContentCommand,
-    SetTransformCommand, SetVisibleCommand,
+    SetCornerRadiusCommand, SetEffectsCommand, SetFillCommand, SetFillGradientCommand,
+    SetFontFamilyCommand, SetFontSizeCommand, SetFontStyleCommand, SetFontWeightCommand,
+    SetLineHeightCommand, SetNameCommand, SetOpacityCommand, SetPathDataCommand,
+    SetScrollOffsetCommand, SetStrokeCommand, SetStrokeWidthCommand, SetTextAlignCommand,
+    SetTextColorCommand, SetTextContentCommand, SetTransformCommand, SetVisibleCommand,
 };
 pub use traits::Command;

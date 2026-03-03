@@ -1,7 +1,8 @@
-// Rectangle shader with SDF-based rounded corners, fill, stroke, and opacity.
+// Rectangle shader with SDF-based rounded corners, fill, stroke, opacity, and gradients.
 //
 // Uses instanced rendering: one shared unit quad is drawn once per rectangle instance.
-// Each instance provides its own position, size, colors, corner radius, stroke, and opacity.
+// Each instance provides its own position, size, colors, corner radius, stroke, opacity,
+// and optional gradient fill (linear or radial, up to 4 color stops).
 //
 // Coordinate system:
 // - World space: y-axis points down (screen convention).
@@ -38,6 +39,19 @@ struct RectInstance {
     @location(10) transform_c2: vec2<f32>,
     // Clip rectangle: [min_x, min_y, max_x, max_y]. Fragments outside are discarded.
     @location(11) clip_rect: vec4<f32>,
+    // Gradient metadata: [type, stop_count, 0, 0]. type: 0=none, 1=linear, 2=radial.
+    @location(12) gradient_meta: vec4<f32>,
+    // Gradient points: [start_x/center_x, start_y/center_y, end_x/radius, end_y/0].
+    @location(13) gradient_points: vec4<f32>,
+    // Gradient stops: 4 stops * 5 floats = 20 floats packed as 5 vec4s.
+    // Each stop: [position, r, g, b] then [a, next_position, next_r, next_g] interleaved.
+    // Actually packed as: stop0=[pos,r,g,b], stop0_a+stop1=[a,pos,r,g], etc.
+    // Layout per stop (5 floats): position, r, g, b, a spread across vec4s.
+    @location(14) gradient_stops_0: vec4<f32>,
+    @location(15) gradient_stops_1: vec4<f32>,
+    @location(16) gradient_stops_2: vec4<f32>,
+    @location(17) gradient_stops_3: vec4<f32>,
+    @location(18) gradient_stops_4: vec4<f32>,
 };
 
 // --- Vertex input/output ---
@@ -67,6 +81,16 @@ struct VertexOutput {
     @location(6) world_pos: vec2<f32>,
     // Clip rectangle passthrough.
     @location(7) clip_rect: vec4<f32>,
+    // Gradient metadata passthrough.
+    @location(8) gradient_meta: vec4<f32>,
+    // Gradient points passthrough.
+    @location(9) gradient_points: vec4<f32>,
+    // Gradient stops passthrough (5 vec4s).
+    @location(10) gradient_stops_0: vec4<f32>,
+    @location(11) gradient_stops_1: vec4<f32>,
+    @location(12) gradient_stops_2: vec4<f32>,
+    @location(13) gradient_stops_3: vec4<f32>,
+    @location(14) gradient_stops_4: vec4<f32>,
 };
 
 // --- Vertex shader ---
@@ -95,6 +119,13 @@ fn vs_main(vert: VertexInput, inst: RectInstance) -> VertexOutput {
     out.corner_radii = inst.corner_radii;
     out.world_pos = world_pos;
     out.clip_rect = inst.clip_rect;
+    out.gradient_meta = inst.gradient_meta;
+    out.gradient_points = inst.gradient_points;
+    out.gradient_stops_0 = inst.gradient_stops_0;
+    out.gradient_stops_1 = inst.gradient_stops_1;
+    out.gradient_stops_2 = inst.gradient_stops_2;
+    out.gradient_stops_3 = inst.gradient_stops_3;
+    out.gradient_stops_4 = inst.gradient_stops_4;
 
     return out;
 }
@@ -132,6 +163,84 @@ fn select_corner_radius(local_pos: vec2<f32>, rect_size: vec2<f32>, radii: vec4<
     }
 }
 
+// Read a gradient stop from the packed 20-float array (5 vec4s).
+// Each stop is 5 consecutive floats: [position, r, g, b, a].
+// stop_index: 0..3
+fn read_gradient_stop_pos(
+    s0: vec4<f32>, s1: vec4<f32>, s2: vec4<f32>, s3: vec4<f32>, s4: vec4<f32>,
+    stop_index: i32
+) -> f32 {
+    // Stop 0: s0.x
+    // Stop 1: s1.x (offset 5 -> vec4 index 1, component 0... actually floats 5,6,7,8,9)
+    // Layout: [p0 r0 g0 b0 | a0 p1 r1 g1 | b1 a1 p2 r2 | g2 b2 a2 p3 | r3 g3 b3 a3]
+    switch stop_index {
+        case 0: { return s0.x; }
+        case 1: { return s1.y; }
+        case 2: { return s2.z; }
+        case 3: { return s3.w; }
+        default: { return 0.0; }
+    }
+}
+
+fn read_gradient_stop_color(
+    s0: vec4<f32>, s1: vec4<f32>, s2: vec4<f32>, s3: vec4<f32>, s4: vec4<f32>,
+    stop_index: i32
+) -> vec4<f32> {
+    // Stop 0 color: r=s0.y, g=s0.z, b=s0.w, a=s1.x
+    // Stop 1 color: r=s1.z, g=s1.w, b=s2.x, a=s2.y
+    // Stop 2 color: r=s2.w, g=s3.x, b=s3.y, a=s3.z
+    // Stop 3 color: r=s4.x, g=s4.y, b=s4.z, a=s4.w
+    switch stop_index {
+        case 0: { return vec4<f32>(s0.y, s0.z, s0.w, s1.x); }
+        case 1: { return vec4<f32>(s1.z, s1.w, s2.x, s2.y); }
+        case 2: { return vec4<f32>(s2.w, s3.x, s3.y, s3.z); }
+        case 3: { return vec4<f32>(s4.x, s4.y, s4.z, s4.w); }
+        default: { return vec4<f32>(0.0); }
+    }
+}
+
+// Evaluate a gradient at parameter t [0..1] given packed stop data.
+fn evaluate_gradient(
+    t_raw: f32, stop_count: i32,
+    s0: vec4<f32>, s1: vec4<f32>, s2: vec4<f32>, s3: vec4<f32>, s4: vec4<f32>,
+) -> vec4<f32> {
+    let t = clamp(t_raw, 0.0, 1.0);
+
+    if stop_count <= 0 {
+        return vec4<f32>(0.0);
+    }
+    if stop_count == 1 {
+        return read_gradient_stop_color(s0, s1, s2, s3, s4, 0);
+    }
+
+    // Find the two stops surrounding t and interpolate.
+    var color = read_gradient_stop_color(s0, s1, s2, s3, s4, 0);
+
+    for (var i = 1; i < 4; i++) {
+        if i >= stop_count {
+            break;
+        }
+        let prev_pos = read_gradient_stop_pos(s0, s1, s2, s3, s4, i - 1);
+        let curr_pos = read_gradient_stop_pos(s0, s1, s2, s3, s4, i);
+        let prev_color = read_gradient_stop_color(s0, s1, s2, s3, s4, i - 1);
+        let curr_color = read_gradient_stop_color(s0, s1, s2, s3, s4, i);
+
+        if t <= curr_pos {
+            let range = curr_pos - prev_pos;
+            if range > 0.0 {
+                let local_t = (t - prev_pos) / range;
+                color = mix(prev_color, curr_color, local_t);
+            } else {
+                color = curr_color;
+            }
+            return color;
+        }
+    }
+
+    // t is past all stops; return last stop color.
+    return read_gradient_stop_color(s0, s1, s2, s3, s4, stop_count - 1);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // ShaderRect clip: discard fragments outside the clip rectangle.
@@ -165,9 +274,47 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
+    // Determine fill color: gradient takes priority over solid.
+    let grad_type = i32(in.gradient_meta.x);
+    let grad_stop_count = i32(in.gradient_meta.y);
+    var fill = in.fill_color;
+
+    if grad_type == 1 {
+        // Linear gradient: project local_pos onto gradient axis.
+        let uv = in.local_pos / in.rect_size;
+        let grad_start = vec2<f32>(in.gradient_points.x, in.gradient_points.y);
+        let grad_end = vec2<f32>(in.gradient_points.z, in.gradient_points.w);
+        let axis = grad_end - grad_start;
+        let axis_len_sq = dot(axis, axis);
+        var t = 0.0;
+        if axis_len_sq > 0.0 {
+            t = dot(uv - grad_start, axis) / axis_len_sq;
+        }
+        fill = evaluate_gradient(
+            t, grad_stop_count,
+            in.gradient_stops_0, in.gradient_stops_1, in.gradient_stops_2,
+            in.gradient_stops_3, in.gradient_stops_4,
+        );
+    } else if grad_type == 2 {
+        // Radial gradient: distance from center.
+        let uv = in.local_pos / in.rect_size;
+        let grad_center = vec2<f32>(in.gradient_points.x, in.gradient_points.y);
+        let grad_radius = in.gradient_points.z;
+        let dist = length(uv - grad_center);
+        var t = 0.0;
+        if grad_radius > 0.0 {
+            t = dist / grad_radius;
+        }
+        fill = evaluate_gradient(
+            t, grad_stop_count,
+            in.gradient_stops_0, in.gradient_stops_1, in.gradient_stops_2,
+            in.gradient_stops_3, in.gradient_stops_4,
+        );
+    }
+
     // If no stroke, just render fill.
     if stroke_w <= 0.0 {
-        var color = in.fill_color;
+        var color = fill;
         color.a *= outer_alpha * opacity;
         return color;
     }
@@ -189,7 +336,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Blend: stroke in the border region, fill in the interior.
     let stroke_alpha = outer_alpha - inner_alpha;
     let stroke_contrib = in.stroke_color * stroke_alpha;
-    let fill_contrib = in.fill_color * inner_alpha;
+    let fill_contrib = fill * inner_alpha;
 
     var color = stroke_contrib + fill_contrib;
     color.a *= opacity;

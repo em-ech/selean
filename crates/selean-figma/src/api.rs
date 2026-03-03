@@ -127,6 +127,9 @@ pub struct FigmaNode {
     /// Image reference hash (nodes with IMAGE fill type).
     #[serde(default)]
     pub image_ref: Option<String>,
+    /// Visual effects (drop shadow, blur, etc.).
+    #[serde(default)]
+    pub effects: Vec<FigmaEffect>,
 }
 
 impl Default for FigmaNode {
@@ -148,6 +151,7 @@ impl Default for FigmaNode {
             style: None,
             fill_geometry: Vec::new(),
             image_ref: None,
+            effects: Vec::new(),
         }
     }
 }
@@ -188,6 +192,34 @@ pub struct FigmaPaint {
     /// Image reference hash (IMAGE paints).
     #[serde(default)]
     pub image_ref: Option<String>,
+    /// Gradient handle positions (gradient paints). Typically 3 points for linear.
+    #[serde(default, rename = "gradientHandlePositions")]
+    pub gradient_handle_positions: Vec<FigmaVector>,
+    /// Gradient color stops (gradient paints).
+    #[serde(default, rename = "gradientStops")]
+    pub gradient_stops: Vec<FigmaGradientStop>,
+}
+
+/// A 2D vector position from the Figma API.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct FigmaVector {
+    /// X coordinate (fraction of node bounds for gradients).
+    #[serde(default)]
+    pub x: f32,
+    /// Y coordinate (fraction of node bounds for gradients).
+    #[serde(default)]
+    pub y: f32,
+}
+
+/// A color stop in a Figma gradient.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct FigmaGradientStop {
+    /// Position along the gradient axis [0.0, 1.0].
+    #[serde(default)]
+    pub position: f32,
+    /// Color at this stop.
+    #[serde(default)]
+    pub color: FigmaColor,
 }
 
 impl Default for FigmaPaint {
@@ -198,6 +230,8 @@ impl Default for FigmaPaint {
             opacity: 1.0,
             visible: true,
             image_ref: None,
+            gradient_handle_positions: Vec::new(),
+            gradient_stops: Vec::new(),
         }
     }
 }
@@ -252,6 +286,39 @@ pub struct FigmaTextStyle {
     /// Line height in pixels (absolute value).
     #[serde(default)]
     pub line_height_px: Option<f32>,
+}
+
+/// A visual effect applied to a Figma node.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FigmaEffect {
+    /// Effect type: `DROP_SHADOW`, `INNER_SHADOW`, `LAYER_BLUR`, `BACKGROUND_BLUR`.
+    #[serde(rename = "type", default)]
+    pub effect_type: String,
+    /// Whether this effect is visible. Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    /// Blur radius in pixels.
+    #[serde(default)]
+    pub radius: f32,
+    /// Shadow color (`DROP_SHADOW` / `INNER_SHADOW` only).
+    #[serde(default)]
+    pub color: Option<FigmaColor>,
+    /// Shadow offset (`DROP_SHADOW` / `INNER_SHADOW` only).
+    #[serde(default)]
+    pub offset: Option<FigmaVector>,
+}
+
+impl Default for FigmaEffect {
+    fn default() -> Self {
+        Self {
+            effect_type: String::new(),
+            visible: true,
+            radius: 0.0,
+            color: None,
+            offset: None,
+        }
+    }
 }
 
 /// A geometry path from `fillGeometry`.
@@ -488,6 +555,66 @@ mod tests {
         let color = FigmaColor::default();
         assert_eq!(color.a, 1.0);
         assert_eq!(color.r, 0.0);
+    }
+
+    #[test]
+    fn deserialize_drop_shadow_effect() {
+        let json = r#"{
+            "type": "DROP_SHADOW",
+            "visible": true,
+            "radius": 4.0,
+            "color": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 0.5},
+            "offset": {"x": 2.0, "y": 3.0}
+        }"#;
+        let effect: FigmaEffect = serde_json::from_str(json).unwrap();
+        assert_eq!(effect.effect_type, "DROP_SHADOW");
+        assert!(effect.visible);
+        assert_eq!(effect.radius, 4.0);
+        let color = effect.color.unwrap();
+        assert_eq!(color.a, 0.5);
+        let offset = effect.offset.unwrap();
+        assert_eq!(offset.x, 2.0);
+        assert_eq!(offset.y, 3.0);
+    }
+
+    #[test]
+    fn deserialize_layer_blur_effect() {
+        let json = r#"{
+            "type": "LAYER_BLUR",
+            "visible": true,
+            "radius": 10.0
+        }"#;
+        let effect: FigmaEffect = serde_json::from_str(json).unwrap();
+        assert_eq!(effect.effect_type, "LAYER_BLUR");
+        assert_eq!(effect.radius, 10.0);
+        assert!(effect.color.is_none());
+        assert!(effect.offset.is_none());
+    }
+
+    #[test]
+    fn deserialize_node_with_effects() {
+        let json = r#"{
+            "type": "FRAME",
+            "effects": [
+                {
+                    "type": "DROP_SHADOW",
+                    "visible": true,
+                    "radius": 8.0,
+                    "color": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 0.25},
+                    "offset": {"x": 0.0, "y": 4.0}
+                }
+            ]
+        }"#;
+        let node: FigmaNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.effects.len(), 1);
+        assert_eq!(node.effects[0].effect_type, "DROP_SHADOW");
+    }
+
+    #[test]
+    fn deserialize_node_without_effects_defaults_empty() {
+        let json = r#"{"type": "FRAME"}"#;
+        let node: FigmaNode = serde_json::from_str(json).unwrap();
+        assert!(node.effects.is_empty());
     }
 
     #[test]

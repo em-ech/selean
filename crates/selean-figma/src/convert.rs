@@ -8,12 +8,12 @@
 use selean_common::types::{NodeId, PageId};
 use selean_engine::persistence::{Document, Page};
 use selean_engine::scene::{
-    BoundingBox, Color, FontStyle, SceneGraph, SceneNode, SceneNodeKind, TextAlign,
+    BoundingBox, Color, Effect, FontStyle, SceneGraph, SceneNode, SceneNodeKind, TextAlign,
 };
 
 use crate::FigmaError;
-use crate::api::{FigmaFileResponse, FigmaNode, FigmaNodeType, FigmaTextStyle};
-use crate::color::{figma_text_align, first_image_ref, first_solid_color};
+use crate::api::{FigmaEffect, FigmaFileResponse, FigmaNode, FigmaNodeType, FigmaTextStyle};
+use crate::color::{figma_text_align, first_gradient, first_image_ref, first_solid_color};
 
 /// Extracted text properties from a Figma node's style.
 struct TextProps {
@@ -178,10 +178,12 @@ fn figma_node_to_scene_node(node: &FigmaNode, parent_abs_pos: (f32, f32)) -> Opt
     let mut scene_node = SceneNode::new(NodeId::new(), node.name.clone(), kind, bounds);
 
     scene_node.fill = first_solid_color(&node.fills);
+    scene_node.fill_gradient = first_gradient(&node.fills);
     scene_node.stroke = first_solid_color(&node.strokes);
     scene_node.stroke_width = node.stroke_weight;
     scene_node.opacity = node.opacity;
     scene_node.visible = node.visible;
+    scene_node.effects = convert_effects(&node.effects);
 
     Some(scene_node)
 }
@@ -310,6 +312,32 @@ pub fn detect_italic(style: &FigmaTextStyle) -> FontStyle {
         }
     }
     FontStyle::Normal
+}
+
+/// Converts Figma effects to engine `Effect` values.
+///
+/// Only visible effects of supported types (`DROP_SHADOW`, `LAYER_BLUR`) are included.
+fn convert_effects(figma_effects: &[FigmaEffect]) -> Vec<Effect> {
+    figma_effects
+        .iter()
+        .filter(|e| e.visible)
+        .filter_map(|e| match e.effect_type.as_str() {
+            "DROP_SHADOW" => {
+                let color = e.color.map_or(Color::new(0.0, 0.0, 0.0, 0.25), |c| {
+                    Color::new(c.r, c.g, c.b, c.a)
+                });
+                let (offset_x, offset_y) = e.offset.map_or((0.0, 0.0), |o| (o.x, o.y));
+                Some(Effect::DropShadow {
+                    color,
+                    offset_x,
+                    offset_y,
+                    blur_radius: e.radius,
+                })
+            }
+            "LAYER_BLUR" => Some(Effect::Blur { radius: e.radius }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Checks both the node's `imageRef` field and IMAGE-type fills for an image reference.
@@ -879,6 +907,204 @@ mod tests {
                 assert_eq!(tc.b, 1.0);
             }
             _ => panic!("expected Text kind"),
+        }
+    }
+
+    #[test]
+    fn gradient_fill_imported() {
+        let node = FigmaNode {
+            fills: vec![FigmaPaint {
+                paint_type: "GRADIENT_LINEAR".to_string(),
+                gradient_handle_positions: vec![
+                    FigmaVector { x: 0.0, y: 0.0 },
+                    FigmaVector { x: 1.0, y: 1.0 },
+                    FigmaVector { x: 0.0, y: 1.0 },
+                ],
+                gradient_stops: vec![
+                    FigmaGradientStop {
+                        position: 0.0,
+                        color: FigmaColor {
+                            r: 1.0,
+                            ..Default::default()
+                        },
+                    },
+                    FigmaGradientStop {
+                        position: 1.0,
+                        color: FigmaColor {
+                            b: 1.0,
+                            ..Default::default()
+                        },
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..make_node(FigmaNodeType::Frame)
+        };
+
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert!(sn.fill_gradient.is_some());
+        match sn.fill_gradient.unwrap() {
+            selean_engine::scene::Gradient::Linear { stops, .. } => {
+                assert_eq!(stops.len(), 2);
+                assert_eq!(stops[0].color.r, 1.0);
+                assert_eq!(stops[1].color.b, 1.0);
+            }
+            selean_engine::scene::Gradient::Radial { .. } => panic!("expected Linear gradient"),
+        }
+    }
+
+    #[test]
+    fn solid_fill_no_gradient() {
+        let node = FigmaNode {
+            fills: vec![FigmaPaint {
+                paint_type: "SOLID".to_string(),
+                color: Some(FigmaColor {
+                    r: 1.0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..make_node(FigmaNodeType::Frame)
+        };
+
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert!(sn.fill.is_some());
+        assert!(sn.fill_gradient.is_none());
+    }
+
+    #[test]
+    fn shadow_effect_imported() {
+        let node = FigmaNode {
+            effects: vec![FigmaEffect {
+                effect_type: "DROP_SHADOW".to_string(),
+                visible: true,
+                radius: 8.0,
+                color: Some(FigmaColor {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.5,
+                }),
+                offset: Some(FigmaVector { x: 4.0, y: 6.0 }),
+            }],
+            ..make_node(FigmaNodeType::Frame)
+        };
+
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert_eq!(sn.effects.len(), 1);
+        match &sn.effects[0] {
+            Effect::DropShadow {
+                color,
+                offset_x,
+                offset_y,
+                blur_radius,
+            } => {
+                assert_eq!(color.a, 0.5);
+                assert_eq!(*offset_x, 4.0);
+                assert_eq!(*offset_y, 6.0);
+                assert_eq!(*blur_radius, 8.0);
+            }
+            Effect::Blur { .. } => panic!("expected DropShadow"),
+        }
+    }
+
+    #[test]
+    fn blur_effect_imported() {
+        let node = FigmaNode {
+            effects: vec![FigmaEffect {
+                effect_type: "LAYER_BLUR".to_string(),
+                visible: true,
+                radius: 12.0,
+                color: None,
+                offset: None,
+            }],
+            ..make_node(FigmaNodeType::Frame)
+        };
+
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert_eq!(sn.effects.len(), 1);
+        match &sn.effects[0] {
+            Effect::Blur { radius } => {
+                assert_eq!(*radius, 12.0);
+            }
+            Effect::DropShadow { .. } => panic!("expected Blur"),
+        }
+    }
+
+    #[test]
+    fn invisible_effects_skipped() {
+        let node = FigmaNode {
+            effects: vec![
+                FigmaEffect {
+                    effect_type: "DROP_SHADOW".to_string(),
+                    visible: false,
+                    radius: 8.0,
+                    color: Some(FigmaColor::default()),
+                    offset: Some(FigmaVector { x: 2.0, y: 2.0 }),
+                },
+                FigmaEffect {
+                    effect_type: "LAYER_BLUR".to_string(),
+                    visible: true,
+                    radius: 5.0,
+                    color: None,
+                    offset: None,
+                },
+            ],
+            ..make_node(FigmaNodeType::Frame)
+        };
+
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert_eq!(sn.effects.len(), 1);
+        assert!(matches!(sn.effects[0], Effect::Blur { radius } if radius == 5.0));
+    }
+
+    #[test]
+    fn unsupported_effect_type_skipped() {
+        let node = FigmaNode {
+            effects: vec![FigmaEffect {
+                effect_type: "BACKGROUND_BLUR".to_string(),
+                visible: true,
+                radius: 10.0,
+                color: None,
+                offset: None,
+            }],
+            ..make_node(FigmaNodeType::Frame)
+        };
+
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert!(sn.effects.is_empty());
+    }
+
+    #[test]
+    fn shadow_without_color_uses_default() {
+        let node = FigmaNode {
+            effects: vec![FigmaEffect {
+                effect_type: "DROP_SHADOW".to_string(),
+                visible: true,
+                radius: 4.0,
+                color: None,
+                offset: None,
+            }],
+            ..make_node(FigmaNodeType::Frame)
+        };
+
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert_eq!(sn.effects.len(), 1);
+        match &sn.effects[0] {
+            Effect::DropShadow {
+                color,
+                offset_x,
+                offset_y,
+                ..
+            } => {
+                assert_eq!(color.r, 0.0);
+                assert_eq!(color.g, 0.0);
+                assert_eq!(color.b, 0.0);
+                assert_eq!(color.a, 0.25);
+                assert_eq!(*offset_x, 0.0);
+                assert_eq!(*offset_y, 0.0);
+            }
+            Effect::Blur { .. } => panic!("expected DropShadow"),
         }
     }
 

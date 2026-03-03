@@ -9,6 +9,7 @@ use selean_common::types::NodeId;
 use tracing::{debug, info, warn};
 
 use super::blend_pipeline::BlendResources;
+use super::blur_pipeline::BlurResources;
 use super::camera::Camera;
 use super::clip_stack::ClipStack;
 use super::draw_list::{DrawCommand, DrawList};
@@ -152,6 +153,8 @@ pub struct Renderer {
     stencil_view: wgpu::TextureView,
     /// GPU resources for shader-based blend mode compositing.
     blend_resources: BlendResources,
+    /// GPU resources for dual Kawase blur effects.
+    blur_resources: BlurResources,
     /// Background clear color.
     clear_color: wgpu::Color,
     /// The texture format used for the render target.
@@ -228,6 +231,15 @@ impl Renderer {
             descriptor.viewport_height as u32,
         );
 
+        // Create blur resources for drop shadow and layer blur effects.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let blur_resources = BlurResources::new(
+            &gpu.device,
+            target_format,
+            descriptor.viewport_width as u32,
+            descriptor.viewport_height as u32,
+        );
+
         info!(
             viewport_w = descriptor.viewport_width,
             viewport_h = descriptor.viewport_height,
@@ -267,6 +279,7 @@ impl Renderer {
             stencil_texture,
             stencil_view,
             blend_resources,
+            blur_resources,
             clear_color: descriptor.clear_color,
             target_format,
             draw_list: DrawList::new(),
@@ -319,6 +332,10 @@ impl Renderer {
         self.blend_resources
             .resize(&self.gpu.device, width as u32, height as u32);
 
+        // Resize blur resources (half-res textures).
+        self.blur_resources
+            .resize(&self.gpu.device, width as u32, height as u32);
+
         debug!(width, height, "Viewport resized");
     }
 
@@ -336,6 +353,19 @@ impl Renderer {
         bytes: &[u8],
     ) -> Result<(), EngineError> {
         self.image_system.register_asset(asset_ref, bytes)
+    }
+
+    /// Registers a new font family for text rendering.
+    ///
+    /// Returns the assigned `FontId`. If the family is already registered,
+    /// returns the existing ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EngineError::Font` if the font bytes cannot be parsed.
+    pub fn register_font(&mut self, family: &str, data: Vec<u8>) -> Result<(), EngineError> {
+        self.text_system.register_font(family, data)?;
+        Ok(())
     }
 
     /// Renders a complete frame using hierarchical DFS traversal.
@@ -1263,6 +1293,9 @@ fn create_stencil_rect_instance(
         corner_radii,
         transform: node.world_transform.to_gpu_columns(),
         clip_rect: shader_clip_rect.to_array(),
+        gradient_meta: [0.0; 4],
+        gradient_points: [0.0; 4],
+        gradient_stops: [0.0; 20],
     })
 }
 

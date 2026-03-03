@@ -12,13 +12,72 @@ use super::shared::{
     BLEND_STATE_ADD, BLEND_STATE_REPLACE, PersistentInstanceBuffer, STENCIL_DECREMENT,
     STENCIL_NOOP, STENCIL_TEST, STENCIL_WRITE, SharedPipelineResources, create_pipeline_with_blend,
 };
-use crate::scene::{BlendMode, ClipRect, Color, SceneNode, SceneNodeKind, TransformColumns};
+use crate::scene::{
+    BlendMode, ClipRect, Color, Gradient, SceneNode, SceneNodeKind, TransformColumns,
+};
 
 /// Maximum number of rectangle instances per draw call.
 ///
-/// 16,384 instances * 112 bytes = ~1.75 MB, well within GPU buffer limits.
+/// 16,384 instances * 224 bytes = ~3.5 MB, well within GPU buffer limits.
 /// If more instances are needed, they're split into multiple draw calls.
 const MAX_INSTANCES_PER_BATCH: usize = 16_384;
+
+/// Maximum number of gradient color stops packed into the GPU instance.
+const MAX_GRADIENT_STOPS: usize = 4;
+
+/// Packs a `Gradient` into GPU-ready arrays.
+///
+/// Returns `(meta, points, stops)` where:
+/// - meta: `[type, stop_count, 0, 0]` (0=none, 1=linear, 2=radial)
+/// - points: `[start_x/center_x, start_y/center_y, end_x/radius, end_y/0]`
+/// - stops: 20 floats (4 stops x 5: position, r, g, b, a)
+#[allow(clippy::cast_precision_loss)] // count is always 0..4
+fn pack_gradient(gradient: Option<&Gradient>) -> ([f32; 4], [f32; 4], [f32; 20]) {
+    let Some(grad) = gradient else {
+        return ([0.0; 4], [0.0; 4], [0.0; 20]);
+    };
+
+    match grad {
+        Gradient::Linear { start, end, stops } => {
+            let count = stops.len().min(MAX_GRADIENT_STOPS);
+            let mut packed_stops = [0.0f32; 20];
+            for (i, stop) in stops.iter().take(count).enumerate() {
+                let base = i * 5;
+                packed_stops[base] = stop.position;
+                packed_stops[base + 1] = stop.color.r;
+                packed_stops[base + 2] = stop.color.g;
+                packed_stops[base + 3] = stop.color.b;
+                packed_stops[base + 4] = stop.color.a;
+            }
+            (
+                [1.0, count as f32, 0.0, 0.0],
+                [start[0], start[1], end[0], end[1]],
+                packed_stops,
+            )
+        }
+        Gradient::Radial {
+            center,
+            radius,
+            stops,
+        } => {
+            let count = stops.len().min(MAX_GRADIENT_STOPS);
+            let mut packed_stops = [0.0f32; 20];
+            for (i, stop) in stops.iter().take(count).enumerate() {
+                let base = i * 5;
+                packed_stops[base] = stop.position;
+                packed_stops[base + 1] = stop.color.r;
+                packed_stops[base + 2] = stop.color.g;
+                packed_stops[base + 3] = stop.color.b;
+                packed_stops[base + 4] = stop.color.a;
+            }
+            (
+                [2.0, count as f32, 0.0, 0.0],
+                [center[0], center[1], *radius, 0.0],
+                packed_stops,
+            )
+        }
+    }
+}
 
 // --- Per-instance data ---
 
@@ -46,6 +105,13 @@ pub struct RectInstance {
     /// Clip rectangle for `ShaderRect` clipping: `[min_x, min_y, max_x, max_y]`.
     /// Fragments outside this rect are discarded. `ClipRect::INFINITE` disables clipping.
     pub clip_rect: [f32; 4],
+    /// Gradient metadata: `[type, stop_count, 0, 0]`.
+    /// type: 0=none, 1=linear, 2=radial.
+    pub gradient_meta: [f32; 4],
+    /// Gradient start/center point: `[x, y]` and end/radius: `[x, y]`.
+    pub gradient_points: [f32; 4],
+    /// Gradient stops: 4 stops * 5 floats = 20 floats (position, r, g, b, a).
+    pub gradient_stops: [f32; 20],
 }
 
 impl RectInstance {
@@ -56,6 +122,8 @@ impl RectInstance {
         const TRANSFORM_ATTRS: [wgpu::VertexAttribute; 3] =
             TransformColumns::vertex_attributes(8, 72);
 
+        // Gradient stops at locations 14..18 (5 attrs of float32x4).
+        // 20 floats = 5 x vec4, starting at offset 128.
         const ATTRS: &[wgpu::VertexAttribute] = &[
             // location(2): pos
             wgpu::VertexAttribute {
@@ -105,6 +173,44 @@ impl RectInstance {
                 offset: 96,
                 shader_location: 11,
             },
+            // location(12): gradient_meta [type, stop_count, 0, 0]
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 112,
+                shader_location: 12,
+            },
+            // location(13): gradient_points [start_x, start_y, end_x, end_y]
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 128,
+                shader_location: 13,
+            },
+            // location(14..18): gradient_stops (5 x vec4 = 20 floats)
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 144,
+                shader_location: 14,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 160,
+                shader_location: 15,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 176,
+                shader_location: 16,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 192,
+                shader_location: 17,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 208,
+                shader_location: 18,
+            },
         ];
 
         wgpu::VertexBufferLayout {
@@ -132,6 +238,9 @@ impl RectInstance {
         let fill = node.fill.unwrap_or(Color::TRANSPARENT);
         let stroke = node.stroke.unwrap_or(Color::TRANSPARENT);
 
+        let (gradient_meta, gradient_points, gradient_stops) =
+            pack_gradient(node.fill_gradient.as_ref());
+
         Some(Self {
             pos: [node.bounds.x, node.bounds.y],
             size: [node.bounds.width, node.bounds.height],
@@ -141,6 +250,9 @@ impl RectInstance {
             corner_radii,
             transform: node.world_transform.to_gpu_columns(),
             clip_rect: ClipRect::INFINITE.to_array(),
+            gradient_meta,
+            gradient_points,
+            gradient_stops,
         })
     }
 }
@@ -558,9 +670,11 @@ mod tests {
     use selean_common::types::NodeId;
 
     #[test]
-    fn rect_instance_size_is_112_bytes() {
-        // 2 + 2 + 4 + 4 + 2 + 4 + 6 + 4 = 28 floats * 4 bytes = 112 bytes.
-        assert_eq!(std::mem::size_of::<RectInstance>(), 112);
+    fn rect_instance_size() {
+        // Original: 28 floats = 112 bytes.
+        // Gradient: 4 (meta) + 4 (points) + 20 (stops) = 28 additional floats = 112 bytes.
+        // Total: 56 floats * 4 bytes = 224 bytes.
+        assert_eq!(std::mem::size_of::<RectInstance>(), 224);
     }
 
     #[test]

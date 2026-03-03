@@ -80,6 +80,61 @@ impl std::str::FromStr for TextAlign {
     }
 }
 
+/// A single color stop in a gradient.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    /// Position along the gradient axis in [0.0, 1.0].
+    pub position: f32,
+    /// Color at this stop.
+    pub color: Color,
+}
+
+/// A gradient fill for a scene node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Gradient {
+    /// A linear gradient between two points.
+    Linear {
+        /// Start point as a fraction of node bounds [0..1].
+        start: [f32; 2],
+        /// End point as a fraction of node bounds [0..1].
+        end: [f32; 2],
+        /// Color stops along the gradient axis.
+        stops: Vec<GradientStop>,
+    },
+    /// A radial gradient from a center point.
+    Radial {
+        /// Center point as a fraction of node bounds [0..1].
+        center: [f32; 2],
+        /// Radius where 1.0 = half the smaller dimension.
+        radius: f32,
+        /// Color stops from center to edge.
+        stops: Vec<GradientStop>,
+    },
+}
+
+/// A visual effect applied to a scene node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Effect {
+    /// A drop shadow cast behind the node.
+    DropShadow {
+        /// Shadow color.
+        color: Color,
+        /// Horizontal offset in logical pixels.
+        offset_x: f32,
+        /// Vertical offset in logical pixels.
+        offset_y: f32,
+        /// Blur radius in logical pixels.
+        blur_radius: f32,
+    },
+    /// A Gaussian blur applied to the node's content.
+    Blur {
+        /// Blur radius in logical pixels.
+        radius: f32,
+    },
+}
+
 /// The visual type of a scene node, determining how it is rendered.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SceneNodeKind {
@@ -426,6 +481,9 @@ pub struct SceneNode {
     pub bounds: BoundingBox,
     /// Fill color. `None` means no fill.
     pub fill: Option<Color>,
+    /// Gradient fill. When set, takes priority over solid fill during rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_gradient: Option<Gradient>,
     /// Stroke color. `None` means no stroke.
     pub stroke: Option<Color>,
     /// Stroke width in logical pixels.
@@ -448,6 +506,9 @@ pub struct SceneNode {
     /// `(-scroll_offset[0], -scroll_offset[1])` in the node's coordinate space.
     /// The node itself renders at its normal position.
     pub scroll_offset: [f32; 2],
+    /// Visual effects (drop shadow, blur) applied to this node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<Effect>,
     /// IDs of child nodes, in render order (back to front).
     pub children: Vec<NodeId>,
     /// ID of the parent node, if any. Root nodes have `None`.
@@ -470,6 +531,7 @@ impl SceneNode {
             kind,
             bounds,
             fill: None,
+            fill_gradient: None,
             stroke: None,
             stroke_width: 0.0,
             opacity: 1.0,
@@ -479,6 +541,7 @@ impl SceneNode {
             blend_mode: BlendMode::Normal,
             clip_mode: ClipMode::None,
             scroll_offset: [0.0, 0.0],
+            effects: Vec::new(),
             children: Vec::new(),
             parent: None,
             dirty: DirtyFlags::ALL,
@@ -825,6 +888,147 @@ mod tests {
         assert_eq!(TextAlign::default(), TextAlign::Left);
     }
 
+    // --- Gradient tests ---
+
+    #[test]
+    fn gradient_stop_serde_roundtrip() {
+        let stop = GradientStop {
+            position: 0.5,
+            color: Color::new(1.0, 0.0, 0.0, 1.0),
+        };
+        let json = serde_json::to_string(&stop).unwrap();
+        let back: GradientStop = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, stop);
+    }
+
+    #[test]
+    fn gradient_linear_serde_roundtrip() {
+        let grad = Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 1.0],
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::new(1.0, 0.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&grad).unwrap();
+        let back: Gradient = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, grad);
+        assert!(json.contains("\"type\":\"Linear\""));
+    }
+
+    #[test]
+    fn gradient_radial_serde_roundtrip() {
+        let grad = Gradient::Radial {
+            center: [0.5, 0.5],
+            radius: 1.0,
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::WHITE,
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::BLACK,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&grad).unwrap();
+        let back: Gradient = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, grad);
+        assert!(json.contains("\"type\":\"Radial\""));
+    }
+
+    #[test]
+    fn scene_node_with_gradient_serde_roundtrip() {
+        let mut node = test_node();
+        node.fill_gradient = Some(Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::new(1.0, 0.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ],
+        });
+        let json = serde_json::to_string(&node).unwrap();
+        let back: SceneNode = serde_json::from_str(&json).unwrap();
+        assert!(back.fill_gradient.is_some());
+        assert_eq!(back.fill_gradient, node.fill_gradient);
+    }
+
+    #[test]
+    fn scene_node_fill_gradient_default_is_none() {
+        let node = test_node();
+        assert!(node.fill_gradient.is_none());
+    }
+
+    #[test]
+    fn scene_node_without_gradient_deserializes_as_none() {
+        let node = test_node();
+        let json = serde_json::to_string(&node).unwrap();
+        assert!(!json.contains("fill_gradient"));
+        let back: SceneNode = serde_json::from_str(&json).unwrap();
+        assert!(back.fill_gradient.is_none());
+    }
+
+    #[test]
+    fn gradient_empty_stops() {
+        let grad = Gradient::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 1.0],
+            stops: vec![],
+        };
+        let json = serde_json::to_string(&grad).unwrap();
+        let back: Gradient = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, grad);
+    }
+
+    #[test]
+    fn gradient_four_stops() {
+        let grad = Gradient::Linear {
+            start: [0.0, 0.5],
+            end: [1.0, 0.5],
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Color::new(1.0, 0.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 0.33,
+                    color: Color::new(0.0, 1.0, 0.0, 1.0),
+                },
+                GradientStop {
+                    position: 0.66,
+                    color: Color::new(0.0, 0.0, 1.0, 1.0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Color::WHITE,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&grad).unwrap();
+        let back: Gradient = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, grad);
+        if let Gradient::Linear { stops, .. } = &back {
+            assert_eq!(stops.len(), 4);
+        } else {
+            panic!("Expected Linear gradient");
+        }
+    }
+
     #[test]
     fn kind_tag_image() {
         let kind = SceneNodeKind::Image {
@@ -885,5 +1089,93 @@ mod tests {
         let s = mode.to_string();
         let back: BlendMode = s.parse().unwrap();
         assert_eq!(back, mode);
+    }
+
+    // --- Effect tests ---
+
+    #[test]
+    fn effect_drop_shadow_serde_roundtrip() {
+        let effect = Effect::DropShadow {
+            color: Color::new(0.0, 0.0, 0.0, 0.5),
+            offset_x: 4.0,
+            offset_y: 4.0,
+            blur_radius: 8.0,
+        };
+        let json = serde_json::to_string(&effect).unwrap();
+        let back: Effect = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, effect);
+    }
+
+    #[test]
+    fn effect_blur_serde_roundtrip() {
+        let effect = Effect::Blur { radius: 10.0 };
+        let json = serde_json::to_string(&effect).unwrap();
+        let back: Effect = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, effect);
+    }
+
+    #[test]
+    fn scene_node_default_effects_is_empty() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "Test".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        assert!(node.effects.is_empty());
+    }
+
+    #[test]
+    fn scene_node_with_effects_serde_roundtrip() {
+        let mut node = SceneNode::new(
+            NodeId::new(),
+            "Shadow".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        node.effects = vec![
+            Effect::DropShadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.3),
+                offset_x: 2.0,
+                offset_y: 2.0,
+                blur_radius: 6.0,
+            },
+            Effect::Blur { radius: 5.0 },
+        ];
+
+        let json = serde_json::to_string(&node).unwrap();
+        let back: SceneNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.effects.len(), 2);
+        assert_eq!(back.effects[0], node.effects[0]);
+        assert_eq!(back.effects[1], node.effects[1]);
+    }
+
+    #[test]
+    fn scene_node_empty_effects_not_serialized() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "NoFx".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        let json = serde_json::to_string(&node).unwrap();
+        assert!(
+            !json.contains("effects"),
+            "empty effects should be skipped in serialization"
+        );
+    }
+
+    #[test]
+    fn scene_node_without_effects_field_deserializes() {
+        // Simulate old JSON without effects field.
+        let json = r#"{"id":"00000000-0000-0000-0000-000000000001","name":"Old","kind":{"Frame":{"corner_radius":[0,0,0,0]}},"bounds":{"x":0,"y":0,"width":100,"height":100},"fill":null,"stroke":null,"stroke_width":0,"opacity":1,"visible":true,"local_transform":[1,0,0,1,0,0],"blend_mode":"Normal","clip_mode":"None","scroll_offset":[0,0],"children":[],"parent":null}"#;
+        let node: SceneNode = serde_json::from_str(json).unwrap();
+        assert!(node.effects.is_empty());
     }
 }

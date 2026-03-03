@@ -1351,6 +1351,11 @@ mod wasm {
             self.renderer.register_image_asset(asset_ref, data).is_ok()
         }
 
+        /// Registers a font family for text rendering. Returns `true` on success.
+        pub fn register_font(&mut self, family: &str, data: &[u8]) -> bool {
+            self.renderer.register_font(family, data.to_vec()).is_ok()
+        }
+
         /// Sets the camera zoom to an absolute level (clamped to [0.1, 100]).
         pub fn zoom_to(&mut self, level: f32) {
             self.renderer.camera_mut().set_zoom(level);

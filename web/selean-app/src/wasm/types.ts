@@ -66,6 +66,7 @@ export interface SeleanEditor {
   clear_selection(): void;
   select_node_by_id(node_id: string): boolean;
   register_image_asset(asset_ref: string, data: Uint8Array): boolean;
+  register_font(family: string, data: Uint8Array): boolean;
   align_nodes(node_ids_json: string, alignment: string): boolean;
   zoom_to(level: number): void;
   zoom_by(factor: number): void;
@@ -137,7 +138,21 @@ export interface NodeInfo {
   text_color: [number, number, number, number] | null;
   children: string[];
   parent: string | null;
+  effects: Effect[];
 }
+
+export type Effect =
+  | {
+      type: "DropShadow";
+      color: { r: number; g: number; b: number; a: number };
+      offset_x: number;
+      offset_y: number;
+      blur_radius: number;
+    }
+  | {
+      type: "Blur";
+      radius: number;
+    };
 
 /** Mirrors PageInfo from crates/selean-wasm/src/queries.rs */
 export interface PageInfo {
