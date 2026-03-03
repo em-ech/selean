@@ -113,6 +113,103 @@ impl EditorState {
         self.histories[idx].cancel_group(&mut self.document.active_page_mut().scene);
     }
 
+    /// Applies a remote operation to a specific page, bypassing the local
+    /// `CommandHistory`. Used for operations from other collaborative editing
+    /// participants that should not appear in this user's undo stack.
+    ///
+    /// Returns `true` if the command was applied successfully.
+    pub fn apply_remote_op(&mut self, page_id: &str, descriptor_json: &str) -> bool {
+        let Ok(pid) = page_id.parse::<uuid::Uuid>() else {
+            return false;
+        };
+        let target = selean_common::types::PageId::from_uuid(pid);
+        let Some(page) = self.document.page_mut(target) else {
+            return false;
+        };
+        let Ok(desc) = serde_json::from_str::<CommandDescriptor>(descriptor_json) else {
+            return false;
+        };
+        let mut cmd = desc.into_command();
+        cmd.execute(&mut page.scene)
+    }
+
+    /// Applies a group of remote operations to a specific page, bypassing
+    /// the local `CommandHistory`.
+    ///
+    /// Returns `true` if all commands were applied successfully.
+    pub fn apply_remote_op_group(&mut self, page_id: &str, descriptors_json: &str) -> bool {
+        let Ok(pid) = page_id.parse::<uuid::Uuid>() else {
+            return false;
+        };
+        let target = selean_common::types::PageId::from_uuid(pid);
+        let Some(page) = self.document.page_mut(target) else {
+            return false;
+        };
+        let Ok(descs) = serde_json::from_str::<Vec<CommandDescriptor>>(descriptors_json) else {
+            return false;
+        };
+        let mut all_ok = true;
+        for desc in descs {
+            let mut cmd = desc.into_command();
+            if !cmd.execute(&mut page.scene) {
+                all_ok = false;
+            }
+        }
+        all_ok
+    }
+
+    /// Applies a remote page-level operation (add, remove, rename).
+    ///
+    /// For collaborative editing: page ops are broadcast by the server
+    /// and applied on all clients via this method.
+    ///
+    /// `op_type` is `"add"`, `"remove"`, or `"rename"`.
+    pub fn apply_remote_page_op(
+        &mut self,
+        op_type: &str,
+        page_id: &str,
+        name: Option<&str>,
+        width: Option<f32>,
+        height: Option<f32>,
+    ) -> bool {
+        let Ok(pid) = page_id.parse::<uuid::Uuid>() else {
+            return false;
+        };
+        let target = selean_common::types::PageId::from_uuid(pid);
+
+        match op_type {
+            "add" => {
+                let page_name = name.unwrap_or("New Page");
+                let w = width.unwrap_or(1920.0);
+                let h = height.unwrap_or(1080.0);
+                if self.document.add_page_with_id(target, page_name, w, h) {
+                    self.histories
+                        .push(selean_engine::command::CommandHistory::new());
+                    true
+                } else {
+                    false
+                }
+            }
+            "remove" => self.remove_page(page_id),
+            "rename" => {
+                if let Some(new_name) = name {
+                    if let Some(page) = self.document.page_mut(target) {
+                        page.name = new_name.to_string();
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns the active page's ID as a string.
+    #[must_use]
+    pub fn active_page_id(&self) -> String {
+        self.document.active_page().id.to_string()
+    }
+
     /// Returns whether undo is available on the active page.
     #[must_use]
     pub fn can_undo(&self) -> bool {
@@ -1158,6 +1255,11 @@ mod wasm {
             self.state.execute_tool_call(tool_name, args_json)
         }
 
+        /// Returns the active page's ID as a string.
+        pub fn active_page_id(&self) -> String {
+            self.state.active_page_id()
+        }
+
         /// Returns whether undo is available.
         pub fn can_undo(&self) -> bool {
             self.state.can_undo()
@@ -1269,6 +1371,32 @@ mod wasm {
             self.renderer.camera().zoom()
         }
 
+        /// Applies a remote operation to a specific page, bypassing local
+        /// `CommandHistory`. Used for collaborative editing to apply ops from
+        /// other participants.
+        pub fn apply_remote_op(&mut self, page_id: &str, descriptor_json: &str) -> bool {
+            self.state.apply_remote_op(page_id, descriptor_json)
+        }
+
+        /// Applies a group of remote operations to a specific page, bypassing
+        /// local `CommandHistory`.
+        pub fn apply_remote_op_group(&mut self, page_id: &str, descriptors_json: &str) -> bool {
+            self.state.apply_remote_op_group(page_id, descriptors_json)
+        }
+
+        /// Applies a remote page-level operation (add, remove, rename).
+        pub fn apply_remote_page_op(
+            &mut self,
+            op_type: &str,
+            page_id: &str,
+            name: Option<String>,
+            width: Option<f32>,
+            height: Option<f32>,
+        ) -> bool {
+            self.state
+                .apply_remote_page_op(op_type, page_id, name.as_deref(), width, height)
+        }
+
         /// Computes the bounding box of all root nodes and sets camera to fit them.
         pub fn fit_to_all(&mut self) {
             let scene = &self.state.document.active_page().scene;
@@ -1318,7 +1446,7 @@ mod wasm {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
     use super::*;
     use selean_engine::scene::BoundingBox;
@@ -2210,5 +2338,176 @@ mod tests {
         let a = NodeId::new();
         let siblings = vec![a];
         assert_eq!(compute_z_reorder(&siblings, a, "unknown"), None);
+    }
+
+    // --- Remote op application tests (collab) ---
+
+    #[test]
+    fn apply_remote_op_sets_fill_without_undo_entry() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let page_id = state.document.active_page().id.to_string();
+
+        let desc_json = format!(
+            r#"{{"type":"SetFill","node_id":"{id}","fill":{{"r":0.0,"g":1.0,"b":0.0,"a":1.0}}}}"#,
+        );
+        assert!(state.apply_remote_op(&page_id, &desc_json));
+
+        // Fill should be changed.
+        let fill = state.scene().get(id).unwrap().fill.unwrap();
+        assert!((fill.g - 1.0).abs() < f32::EPSILON);
+
+        // No undo entry since remote ops bypass CommandHistory.
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn apply_remote_op_invalid_page_id() {
+        let mut state = EditorState::new();
+        assert!(!state.apply_remote_op("not-a-uuid", "{}"));
+    }
+
+    #[test]
+    fn apply_remote_op_nonexistent_page() {
+        let mut state = EditorState::new();
+        assert!(!state.apply_remote_op(
+            "00000000-0000-0000-0000-000000000000",
+            r#"{"type":"SetFill","node_id":"00000000-0000-0000-0000-000000000001","fill":null}"#,
+        ));
+    }
+
+    #[test]
+    fn apply_remote_op_invalid_descriptor_json() {
+        let mut state = EditorState::new();
+        let page_id = state.document.active_page().id.to_string();
+        assert!(!state.apply_remote_op(&page_id, "not json"));
+    }
+
+    #[test]
+    fn apply_remote_op_group_applies_all() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let id = state.scene().roots()[0];
+        let page_id = state.document.active_page().id.to_string();
+
+        let descs = format!(
+            r#"[{{"type":"SetFill","node_id":"{id}","fill":{{"r":1.0,"g":0.0,"b":0.0,"a":1.0}}}},{{"type":"SetOpacity","node_id":"{id}","opacity":0.5}}]"#,
+        );
+        assert!(state.apply_remote_op_group(&page_id, &descs));
+
+        let node = state.scene().get(id).unwrap();
+        let fill = node.fill.unwrap();
+        assert!((fill.r - 1.0).abs() < f32::EPSILON);
+        assert!((node.opacity - 0.5).abs() < f32::EPSILON);
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn apply_remote_op_group_invalid_json() {
+        let mut state = EditorState::new();
+        let page_id = state.document.active_page().id.to_string();
+        assert!(!state.apply_remote_op_group(&page_id, "not json"));
+    }
+
+    #[test]
+    fn apply_remote_op_on_different_page() {
+        let mut state = EditorState::new();
+        state.setup_demo_scene();
+        let page2_id = state.add_page("Page 2", 800.0, 600.0);
+
+        // Create a node on page 2.
+        state.set_active_page(&page2_id);
+        let create_args =
+            r#"{"name":"Remote","kind":"Frame","x":0,"y":0,"width":100,"height":100}"#;
+        state.execute_tool_call("create_node", create_args);
+        let id = state.scene().roots()[0];
+
+        // Switch back to page 1.
+        let pages: Vec<serde_json::Value> = serde_json::from_str(&state.get_pages_json()).unwrap();
+        let page1_id = pages[0]["id"].as_str().unwrap().to_string();
+        state.set_active_page(&page1_id);
+
+        // Apply remote op to page 2 while page 1 is active.
+        let desc_json = format!(r#"{{"type":"SetOpacity","node_id":"{id}","opacity":0.3}}"#,);
+        assert!(state.apply_remote_op(&page2_id, &desc_json));
+
+        // Verify the change on page 2.
+        state.set_active_page(&page2_id);
+        let node = state.scene().get(id).unwrap();
+        assert!((node.opacity - 0.3).abs() < f32::EPSILON);
+    }
+
+    // -- apply_remote_page_op tests --
+
+    #[test]
+    fn remote_page_op_add() {
+        let mut state = EditorState::new();
+        assert_eq!(state.document.page_count(), 1);
+
+        let page_id = selean_common::types::PageId::new().to_string();
+        assert!(state.apply_remote_page_op(
+            "add",
+            &page_id,
+            Some("Remote Page"),
+            Some(800.0),
+            Some(600.0)
+        ));
+        assert_eq!(state.document.page_count(), 2);
+
+        // Verify the page has the right properties.
+        let pid = uuid::Uuid::parse_str(&page_id).unwrap();
+        let target = selean_common::types::PageId::from_uuid(pid);
+        let page = state.document.page(target).unwrap();
+        assert_eq!(page.name, "Remote Page");
+        assert_eq!(page.width, 800.0);
+        assert_eq!(page.height, 600.0);
+    }
+
+    #[test]
+    fn remote_page_op_add_duplicate_returns_false() {
+        let mut state = EditorState::new();
+        let existing_id = state.document.active_page().id.to_string();
+        assert!(!state.apply_remote_page_op("add", &existing_id, Some("Dup"), None, None));
+        assert_eq!(state.document.page_count(), 1);
+    }
+
+    #[test]
+    fn remote_page_op_remove() {
+        let mut state = EditorState::new();
+        let page2_id = state.add_page("Page 2", 800.0, 600.0);
+        assert_eq!(state.document.page_count(), 2);
+
+        assert!(state.apply_remote_page_op("remove", &page2_id, None, None, None));
+        assert_eq!(state.document.page_count(), 1);
+    }
+
+    #[test]
+    fn remote_page_op_rename() {
+        let mut state = EditorState::new();
+        let page_id = state.document.active_page().id.to_string();
+
+        assert!(state.apply_remote_page_op("rename", &page_id, Some("Renamed"), None, None));
+        assert_eq!(state.document.active_page().name, "Renamed");
+    }
+
+    #[test]
+    fn remote_page_op_invalid_type() {
+        let mut state = EditorState::new();
+        assert!(!state.apply_remote_page_op("invalid", "some-id", None, None, None));
+    }
+
+    #[test]
+    fn remote_page_op_add_default_dimensions() {
+        let mut state = EditorState::new();
+        let page_id = selean_common::types::PageId::new().to_string();
+        assert!(state.apply_remote_page_op("add", &page_id, None, None, None));
+
+        let pid = uuid::Uuid::parse_str(&page_id).unwrap();
+        let target = selean_common::types::PageId::from_uuid(pid);
+        let page = state.document.page(target).unwrap();
+        assert_eq!(page.name, "New Page");
+        assert_eq!(page.width, 1920.0);
+        assert_eq!(page.height, 1080.0);
     }
 }

@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react";
+import { useCollab } from "../collab/CollabContext";
 import { colors, fontSizes } from "../theme";
 import type { NodeInfo, SeleanEditor } from "../wasm/types";
 
@@ -6,6 +7,7 @@ interface PropertyInspectorProps {
   node: NodeInfo | null;
   editorRef: React.RefObject<SeleanEditor | null>;
   onSceneChanged: () => void;
+  activePageId?: string;
 }
 
 const BLEND_MODES = [
@@ -38,15 +40,21 @@ export function PropertyInspector({
   node,
   editorRef,
   onSceneChanged,
+  activePageId,
 }: PropertyInspectorProps) {
+  const collab = useCollab();
+
   const executeCommand = useCallback(
     (command: Record<string, unknown>) => {
       const editor = editorRef.current;
       if (!editor) return;
       editor.execute_command(JSON.stringify(command));
       onSceneChanged();
+      if (collab?.status === "connected" && activePageId) {
+        collab.submitOp(command, activePageId);
+      }
     },
-    [editorRef, onSceneChanged],
+    [editorRef, onSceneChanged, collab, activePageId],
   );
 
   if (!node) {

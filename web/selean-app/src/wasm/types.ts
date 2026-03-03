@@ -51,6 +51,7 @@ export interface SeleanEditor {
   get_selected_ids(): string;
   get_scene_json(): string;
   execute_tool_call(tool_name: string, args_json: string): string;
+  active_page_id(): string;
   can_undo(): boolean;
   can_redo(): boolean;
   get_pages_json(): string;
@@ -74,6 +75,15 @@ export interface SeleanEditor {
   begin_group(label: string): void;
   end_group(): void;
   cancel_group(): void;
+  apply_remote_op(page_id: string, descriptor_json: string): boolean;
+  apply_remote_op_group(page_id: string, descriptors_json: string): boolean;
+  apply_remote_page_op(
+    op_type: string,
+    page_id: string,
+    name: string | null,
+    width: number | null,
+    height: number | null,
+  ): boolean;
 }
 
 /** Bounding box of a selected node in world space */

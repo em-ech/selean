@@ -6,6 +6,7 @@
 use selean_common::types::PageId;
 
 use super::page::Page;
+use crate::scene::SceneGraph;
 
 /// A multi-page document containing one or more pages.
 ///
@@ -50,6 +51,24 @@ impl Document {
         let id = page.id;
         self.pages.push(page);
         id
+    }
+
+    /// Adds a new empty page with a specific ID and returns `true` if inserted.
+    ///
+    /// Returns `false` if a page with the given ID already exists.
+    pub fn add_page_with_id(
+        &mut self,
+        id: PageId,
+        name: impl Into<String>,
+        width: f32,
+        height: f32,
+    ) -> bool {
+        if self.pages.iter().any(|p| p.id == id) {
+            return false;
+        }
+        let page = Page::with_scene(id, name, width, height, SceneGraph::new());
+        self.pages.push(page);
+        true
     }
 
     /// Removes a page by ID.
@@ -249,5 +268,24 @@ mod tests {
         let mut doc = Document::new();
         doc.add_page("P2", 100.0, 100.0);
         assert_eq!(doc.pages().len(), 2);
+    }
+
+    #[test]
+    fn add_page_with_id_inserts() {
+        let mut doc = Document::new();
+        let id = PageId::new();
+        assert!(doc.add_page_with_id(id, "Custom", 800.0, 600.0));
+        assert_eq!(doc.page_count(), 2);
+        let page = doc.page(id).unwrap();
+        assert_eq!(page.name, "Custom");
+        assert_eq!(page.width, 800.0);
+    }
+
+    #[test]
+    fn add_page_with_id_rejects_duplicate() {
+        let mut doc = Document::new();
+        let id = doc.active_page().id;
+        assert!(!doc.add_page_with_id(id, "Dup", 100.0, 100.0));
+        assert_eq!(doc.page_count(), 1);
     }
 }

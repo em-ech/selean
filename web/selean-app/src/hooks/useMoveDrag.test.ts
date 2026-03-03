@@ -95,8 +95,7 @@ describe("useMoveDrag", () => {
       });
     });
 
-    expect(editor.execute_tool_call).toHaveBeenCalledWith(
-      "set_bounds",
+    expect(editor.execute_command).toHaveBeenCalledWith(
       expect.stringContaining('"x":110'),
     );
     expect(onSceneChanged).toHaveBeenCalled();
@@ -126,7 +125,7 @@ describe("useMoveDrag", () => {
       });
     });
 
-    expect(editor.execute_tool_call).toHaveBeenCalledTimes(2);
+    expect(editor.execute_command).toHaveBeenCalledTimes(2);
   });
 
   it("skips zero-delta DragMoved", () => {
@@ -147,7 +146,7 @@ describe("useMoveDrag", () => {
       });
     });
 
-    expect(editor.execute_tool_call).not.toHaveBeenCalled();
+    expect(editor.execute_command).not.toHaveBeenCalled();
     expect(onSceneChanged).not.toHaveBeenCalled();
   });
 
@@ -192,7 +191,7 @@ describe("useMoveDrag", () => {
       });
     });
 
-    expect(editor.execute_tool_call).not.toHaveBeenCalled();
+    expect(editor.execute_command).not.toHaveBeenCalled();
   });
 
   it("handles missing node gracefully during DragMoved", () => {
@@ -214,7 +213,7 @@ describe("useMoveDrag", () => {
     });
 
     // Should not crash; no tool call for missing node
-    expect(editor.execute_tool_call).not.toHaveBeenCalled();
+    expect(editor.execute_command).not.toHaveBeenCalled();
   });
 
   it("handles no editor ref gracefully", () => {

@@ -8,9 +8,11 @@
 //! Static file serving for the React frontend is handled by tower-http.
 
 pub mod chat;
+pub mod collab;
 pub mod routes;
 pub mod state;
 pub mod stream;
 
+pub use collab::ws_handler::CollabState;
 pub use routes::create_router;
 pub use state::AppState;

@@ -1,0 +1,22 @@
+[package]
+name = "selean-collab"
+version = "0.1.0"
+description = "Real-time collaborative editing protocol and operation handling for Selean"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+selean-common = { path = "../selean-common" }
+selean-engine = { path = "../selean-engine" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

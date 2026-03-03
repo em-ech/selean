@@ -17,10 +17,20 @@ use std::convert::Infallible;
 use tokio_stream::StreamExt;
 
 use crate::chat::{ChatRequest, send_chat_request_streaming};
+use crate::collab::ws_handler::{CollabState, ws_handler};
 use crate::state::AppState;
 
 /// Creates the Axum router with all API routes.
 pub fn create_router(state: AppState) -> Router {
+    create_router_with_collab(state, CollabState::new())
+}
+
+/// Creates the Axum router with explicit collab state (for testing).
+pub fn create_router_with_collab(state: AppState, collab_state: CollabState) -> Router {
+    let collab_routes = Router::new()
+        .route("/api/ws", get(ws_handler))
+        .with_state(collab_state);
+
     Router::new()
         .route("/api/health", get(health))
         .route("/api/tools", get(list_tools))
@@ -31,6 +41,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/export/idml", post(export_idml_handler))
         .route("/api/import/figma", post(import_figma_handler))
         .with_state(state)
+        .merge(collab_routes)
 }
 
 /// Health check endpoint.

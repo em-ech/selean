@@ -1,17 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, type InteractionEvent } from "./components/Canvas";
 import { ChatSidebar } from "./components/ChatSidebar";
+import { CollabBar } from "./components/CollabBar";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FileMenu } from "./components/FileMenu";
 import { LayerPanel } from "./components/LayerPanel";
 import { PageBar } from "./components/PageBar";
+import { PresenceOverlay } from "./components/PresenceOverlay";
 import { PropertyInspector } from "./components/PropertyInspector";
 import { SelectionOverlay } from "./components/SelectionOverlay";
 import { Toolbar, type ToolType } from "./components/Toolbar";
 import { AlignmentBar } from "./components/AlignmentBar";
 import { ContextMenu } from "./components/ContextMenu";
 import { InlineTextEditor } from "./components/InlineTextEditor";
+import { CollabContext } from "./collab/CollabContext";
 import { useAutoSave } from "./hooks/useAutoSave";
+import { useCollabSession } from "./hooks/useCollabSession";
 import { useCreationTool } from "./hooks/useCreationTool";
 import { useMoveDrag } from "./hooks/useMoveDrag";
 import { useSeleanEditor } from "./hooks/useSeleanEditor";
@@ -48,6 +52,23 @@ export function App() {
     editorRef,
     status === "ready",
   );
+
+  const collabOnRemoteChange = useCallback(() => {
+    refresh();
+    setRefreshTick((t) => t + 1);
+  }, [refresh]);
+
+  const collab = useCollabSession({
+    editorRef,
+    onRemoteChange: collabOnRemoteChange,
+  });
+
+  const activePageId = useMemo(() => {
+    if (status !== "ready" || !editorRef.current) return "";
+    return editorRef.current.active_page_id();
+    // Re-derive when refreshTick changes (page switches).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, editorRef, refreshTick]);
 
   const { markDirty, loadSavedDocument, clearSavedDocument } = useAutoSave({
     editorRef,
@@ -117,8 +138,29 @@ export function App() {
     [editorRef, onSceneChanged],
   );
 
+  // Convert collab remote presences to PresenceOverlay format.
+  const presenceOverlayData = useMemo(
+    () =>
+      collab.remotePresences.map((p) => ({
+        participant: {
+          session_id: p.sessionId,
+          user_id: p.userId,
+          display_name: p.displayName,
+        },
+        pageId: p.pageId,
+        cursor: p.cursor,
+        selectedNodeIds: p.selectedNodeIds,
+      })),
+    [collab.remotePresences],
+  );
+
   // Move drag hook
-  const { handleDragEvent } = useMoveDrag({ editorRef, onSceneChanged });
+  const { handleDragEvent } = useMoveDrag({
+    editorRef,
+    onSceneChanged,
+    collab,
+    activePageId,
+  });
 
   // Creation tool hook
   const { creationHandlers } = useCreationTool({
@@ -531,172 +573,201 @@ export function App() {
   // Force re-evaluation when undo/redo tick changes.
   void undoRedoTick;
 
+  const handleCollabConnect = useCallback(() => {
+    const userId = crypto.randomUUID();
+    const roomId = "default-room";
+    collab.connect(roomId, userId, `User ${userId.slice(0, 4)}`);
+  }, [collab]);
+
+  const handleCollabDisconnect = useCallback(() => {
+    collab.disconnect();
+  }, [collab]);
+
   return (
-    <div style={rootStyle}>
-      <header style={headerStyle}>
-        <span style={{ fontWeight: 600 }}>Selean</span>
+    <CollabContext.Provider value={collab}>
+      <div style={rootStyle}>
+        <header style={headerStyle}>
+          <span style={{ fontWeight: 600 }}>Selean</span>
+          {status === "ready" && (
+            <FileMenu
+              editorRef={editorRef}
+              onSceneChanged={onSceneChanged}
+              onClearAutoSave={clearSavedDocument}
+            />
+          )}
+          <span style={statusStyle}>
+            {status === "loading" && "Initializing..."}
+            {status === "ready" && "Ready"}
+            {status === "error" && `Error: ${error}`}
+            {status === "unsupported" && "WebGPU not supported"}
+          </span>
+          {status === "ready" && (
+            <CollabBar
+              status={collab.status}
+              participants={collab.participants}
+              hasPendingOps={collab.hasPendingOps}
+              onConnect={handleCollabConnect}
+              onDisconnect={handleCollabDisconnect}
+            />
+          )}
+          {status === "ready" && (
+            <div style={headerToolbarStyle}>
+              <button
+                style={{
+                  ...buttonStyle,
+                  opacity: canUndo ? 1 : 0.4,
+                  cursor: canUndo ? "pointer" : "default",
+                }}
+                onClick={handleUndo}
+                disabled={!canUndo}
+              >
+                Undo
+              </button>
+              <button
+                style={{
+                  ...buttonStyle,
+                  opacity: canRedo ? 1 : 0.4,
+                  cursor: canRedo ? "pointer" : "default",
+                }}
+                onClick={handleRedo}
+                disabled={!canRedo}
+              >
+                Redo
+              </button>
+            </div>
+          )}
+        </header>
         {status === "ready" && (
-          <FileMenu
+          <PageBar
             editorRef={editorRef}
             onSceneChanged={onSceneChanged}
-            onClearAutoSave={clearSavedDocument}
+            refreshTick={refreshTick}
           />
         )}
-        <span style={statusStyle}>
-          {status === "loading" && "Initializing..."}
-          {status === "ready" && "Ready"}
-          {status === "error" && `Error: ${error}`}
-          {status === "unsupported" && "WebGPU not supported"}
-        </span>
-        {status === "ready" && (
-          <div style={headerToolbarStyle}>
-            <button
-              style={{
-                ...buttonStyle,
-                opacity: canUndo ? 1 : 0.4,
-                cursor: canUndo ? "pointer" : "default",
-              }}
-              onClick={handleUndo}
-              disabled={!canUndo}
-            >
-              Undo
-            </button>
-            <button
-              style={{
-                ...buttonStyle,
-                opacity: canRedo ? 1 : 0.4,
-                cursor: canRedo ? "pointer" : "default",
-              }}
-              onClick={handleRedo}
-              disabled={!canRedo}
-            >
-              Redo
-            </button>
+        <div style={bodyStyle}>
+          {status === "ready" && (
+            <ErrorBoundary name="Chat">
+              <ChatSidebar
+                editorRef={editorRef}
+                onSceneChanged={onSceneChanged}
+              />
+            </ErrorBoundary>
+          )}
+          {status === "ready" && (
+            <Toolbar activeTool={activeTool} onToolChange={handleToolChange} />
+          )}
+          <div style={canvasAreaStyle}>
+            <ErrorBoundary name="Canvas">
+              <Canvas
+                canvasId="selean-canvas"
+                editorRef={editorRef}
+                status={status}
+                onInteractionEvents={handleInteractionEvents}
+                onContextMenu={handleContextMenu}
+              />
+            </ErrorBoundary>
+            {status === "ready" && (
+              <SelectionOverlay
+                editorRef={editorRef}
+                onSceneChanged={onSceneChanged}
+              />
+            )}
+            {status === "ready" && collab.status === "connected" && (
+              <PresenceOverlay
+                editorRef={editorRef}
+                presences={presenceOverlayData}
+                activePageId={activePageId}
+              />
+            )}
+            {editingNodeId &&
+              status === "ready" &&
+              (() => {
+                const editor = editorRef.current;
+                if (!editor) return null;
+                try {
+                  const json = editor.get_node_json(editingNodeId);
+                  if (json === "null") return null;
+                  const node: NodeInfo = JSON.parse(json);
+                  if (node.kind !== "Text") return null;
+                  return (
+                    <InlineTextEditor
+                      nodeId={editingNodeId}
+                      initialContent={node.text_content ?? ""}
+                      bounds={{
+                        x: node.x,
+                        y: node.y,
+                        width: node.width,
+                        height: node.height,
+                      }}
+                      fontSize={node.font_size ?? 16}
+                      editorRef={editorRef}
+                      onCommit={(content) => {
+                        editor.execute_tool_call(
+                          "set_text",
+                          JSON.stringify({
+                            node_id: editingNodeId,
+                            content,
+                          }),
+                        );
+                        setEditingNodeId(null);
+                        onSceneChanged();
+                      }}
+                      onCancel={() => setEditingNodeId(null)}
+                    />
+                  );
+                } catch {
+                  return null;
+                }
+              })()}
+            {status === "ready" && (
+              <AlignmentBar
+                selectedIds={selectedIds}
+                editorRef={editorRef}
+                onSceneChanged={onSceneChanged}
+              />
+            )}
+            {contextMenuPos && (
+              <ContextMenu
+                x={contextMenuPos.x}
+                y={contextMenuPos.y}
+                editorRef={editorRef}
+                onSceneChanged={onSceneChanged}
+                onClose={handleCloseContextMenu}
+              />
+            )}
+            {creationHandlers && (
+              <div style={creationOverlayStyle} {...creationHandlers} />
+            )}
           </div>
-        )}
-      </header>
-      {status === "ready" && (
-        <PageBar
-          editorRef={editorRef}
-          onSceneChanged={onSceneChanged}
-          refreshTick={refreshTick}
-        />
-      )}
-      <div style={bodyStyle}>
-        {status === "ready" && (
-          <ErrorBoundary name="Chat">
-            <ChatSidebar
-              editorRef={editorRef}
-              onSceneChanged={onSceneChanged}
-            />
-          </ErrorBoundary>
-        )}
-        {status === "ready" && (
-          <Toolbar activeTool={activeTool} onToolChange={handleToolChange} />
-        )}
-        <div style={canvasAreaStyle}>
-          <ErrorBoundary name="Canvas">
-            <Canvas
-              canvasId="selean-canvas"
-              editorRef={editorRef}
-              status={status}
-              onInteractionEvents={handleInteractionEvents}
-              onContextMenu={handleContextMenu}
-            />
-          </ErrorBoundary>
           {status === "ready" && (
-            <SelectionOverlay
-              editorRef={editorRef}
-              onSceneChanged={onSceneChanged}
-            />
-          )}
-          {editingNodeId &&
-            status === "ready" &&
-            (() => {
-              const editor = editorRef.current;
-              if (!editor) return null;
-              try {
-                const json = editor.get_node_json(editingNodeId);
-                if (json === "null") return null;
-                const node: NodeInfo = JSON.parse(json);
-                if (node.kind !== "Text") return null;
-                return (
-                  <InlineTextEditor
-                    nodeId={editingNodeId}
-                    initialContent={node.text_content ?? ""}
-                    bounds={{
-                      x: node.x,
-                      y: node.y,
-                      width: node.width,
-                      height: node.height,
-                    }}
-                    fontSize={node.font_size ?? 16}
-                    editorRef={editorRef}
-                    onCommit={(content) => {
-                      editor.execute_tool_call(
-                        "set_text",
-                        JSON.stringify({
-                          node_id: editingNodeId,
-                          content,
-                        }),
-                      );
-                      setEditingNodeId(null);
-                      onSceneChanged();
-                    }}
-                    onCancel={() => setEditingNodeId(null)}
-                  />
-                );
-              } catch {
-                return null;
-              }
-            })()}
-          {status === "ready" && (
-            <AlignmentBar
-              selectedIds={selectedIds}
-              editorRef={editorRef}
-              onSceneChanged={onSceneChanged}
-            />
-          )}
-          {contextMenuPos && (
-            <ContextMenu
-              x={contextMenuPos.x}
-              y={contextMenuPos.y}
-              editorRef={editorRef}
-              onSceneChanged={onSceneChanged}
-              onClose={handleCloseContextMenu}
-            />
-          )}
-          {creationHandlers && (
-            <div style={creationOverlayStyle} {...creationHandlers} />
+            <div style={rightPanelStyle}>
+              <ErrorBoundary name="Layers">
+                <LayerPanel
+                  editorRef={editorRef}
+                  onSceneChanged={onSceneChanged}
+                  refreshTick={refreshTick}
+                />
+              </ErrorBoundary>
+              <ErrorBoundary name="Properties">
+                <PropertyInspector
+                  node={selectedNode}
+                  editorRef={editorRef}
+                  onSceneChanged={onSceneChanged}
+                  activePageId={activePageId}
+                />
+              </ErrorBoundary>
+            </div>
           )}
         </div>
-        {status === "ready" && (
-          <div style={rightPanelStyle}>
-            <ErrorBoundary name="Layers">
-              <LayerPanel
-                editorRef={editorRef}
-                onSceneChanged={onSceneChanged}
-                refreshTick={refreshTick}
-              />
-            </ErrorBoundary>
-            <ErrorBoundary name="Properties">
-              <PropertyInspector
-                node={selectedNode}
-                editorRef={editorRef}
-                onSceneChanged={onSceneChanged}
-              />
-            </ErrorBoundary>
-          </div>
-        )}
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          style={{ display: "none" }}
+          onChange={handleImageSelected}
+        />
       </div>
-      <input
-        ref={imageInputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        style={{ display: "none" }}
-        onChange={handleImageSelected}
-      />
-    </div>
+    </CollabContext.Provider>
   );
 }
 

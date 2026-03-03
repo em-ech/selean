@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import type { CollabSession } from "./useCollabSession";
 import type { CameraInfo, SelectionBounds, SeleanEditor } from "../wasm/types";
 
 /** Minimum node size in world units. */
@@ -10,6 +11,8 @@ interface DragState {
   originalBounds: { x: number; y: number; width: number; height: number };
   startClientX: number;
   startClientY: number;
+  /** Descriptors applied during this resize, for collab group submission. */
+  descriptors: Record<string, unknown>[];
 }
 
 interface UseResizeDragOptions {
@@ -17,6 +20,8 @@ interface UseResizeDragOptions {
   bounds: SelectionBounds[];
   camera: CameraInfo | null;
   onSceneChanged?: () => void;
+  collab?: CollabSession | null;
+  activePageId?: string;
 }
 
 /**
@@ -32,6 +37,8 @@ export function useResizeDrag({
   bounds,
   camera,
   onSceneChanged,
+  collab,
+  activePageId,
 }: UseResizeDragOptions) {
   const dragRef = useRef<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -55,6 +62,7 @@ export function useResizeDrag({
         originalBounds: { x: b.x, y: b.y, width: b.width, height: b.height },
         startClientX: e.clientX,
         startClientY: e.clientY,
+        descriptors: [],
       };
       setIsDragging(true);
 
@@ -97,18 +105,18 @@ export function useResizeDrag({
         worldDy,
       );
 
-      editor.execute_command(
-        JSON.stringify({
-          type: "SetBounds",
-          node_id: drag.nodeId,
-          bounds: {
-            x: newBounds.x,
-            y: newBounds.y,
-            width: newBounds.width,
-            height: newBounds.height,
-          },
-        }),
-      );
+      const descriptor = {
+        type: "SetBounds",
+        node_id: drag.nodeId,
+        bounds: {
+          x: newBounds.x,
+          y: newBounds.y,
+          width: newBounds.width,
+          height: newBounds.height,
+        },
+      };
+      editor.execute_command(JSON.stringify(descriptor));
+      drag.descriptors.push(descriptor);
 
       onSceneChanged?.();
     },
@@ -117,15 +125,23 @@ export function useResizeDrag({
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
-      if (!dragRef.current) return;
+      const drag = dragRef.current;
+      if (!drag) return;
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       dragRef.current = null;
       setIsDragging(false);
 
       editorRef.current?.end_group();
+      if (
+        collab?.status === "connected" &&
+        activePageId &&
+        drag.descriptors.length > 0
+      ) {
+        collab.submitOpGroup(drag.descriptors, activePageId, "Resize");
+      }
       onSceneChanged?.();
     },
-    [editorRef, onSceneChanged],
+    [editorRef, onSceneChanged, collab, activePageId],
   );
 
   const getHandleProps = useCallback(

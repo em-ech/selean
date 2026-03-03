@@ -101,6 +101,10 @@ export function createMockEditor(
     begin_group: vi.fn(),
     end_group: vi.fn(),
     cancel_group: vi.fn(),
+    apply_remote_op: vi.fn().mockReturnValue(true),
+    apply_remote_op_group: vi.fn().mockReturnValue(true),
+    apply_remote_page_op: vi.fn().mockReturnValue(true),
+    active_page_id: vi.fn().mockReturnValue("page-1"),
   };
 
   return { ...defaults, ...overrides } as SeleanEditor;
