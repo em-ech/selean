@@ -197,7 +197,8 @@ function getSelectedIds(editor: SeleanEditor | null): string[] {
   if (!editor) return [];
   try {
     return JSON.parse(editor.get_selected_ids());
-  } catch {
+  } catch (e) {
+    console.warn("context-menu:get-selected-ids failed", e);
     return [];
   }
 }
@@ -211,7 +212,8 @@ function getFirstSelectedNode(
     const json = editor.get_node_json(ids[0]);
     if (json === "null") return null;
     return JSON.parse(json);
-  } catch {
+  } catch (e) {
+    console.warn("context-menu:get-node failed", e);
     return null;
   }
 }

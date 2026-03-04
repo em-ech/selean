@@ -150,8 +150,8 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
             } else if (event.type === "done") {
               stopReason = event.stop_reason;
             }
-          } catch {
-            // Skip malformed SSE events.
+          } catch (e) {
+            console.warn("chat:sse-parse failed", e);
           }
         }
       }
@@ -230,7 +230,8 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
           try {
             const parsed = JSON.parse(resultJson);
             resultContent = JSON.stringify(parsed.result ?? parsed);
-          } catch {
+          } catch (e) {
+            console.warn("chat:tool-result-parse failed", e);
             resultContent = resultJson;
           }
 

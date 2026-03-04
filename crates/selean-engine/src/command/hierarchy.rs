@@ -4,6 +4,7 @@
 //! reparenting, and reordering nodes.
 
 use selean_common::types::NodeId;
+use smallvec::SmallVec;
 
 use super::traits::Command;
 use crate::scene::{SceneGraph, SceneNode};
@@ -151,7 +152,7 @@ impl RemoveNodeCommand {
             scene.roots().iter().position(|&r| r == id).unwrap_or(0)
         };
 
-        let children: Vec<NodeId> = node.children.clone();
+        let children = node.children.clone();
 
         snapshots.push(NodeSnapshot {
             node: node.clone(),
@@ -268,7 +269,7 @@ impl Command for ReparentCommand {
             }
             // Restore original index within parent's children.
             if let Some(parent) = scene.get(old_pid) {
-                let current_children: Vec<NodeId> = parent.children.clone();
+                let current_children = parent.children.clone();
                 let current_pos = current_children
                     .iter()
                     .position(|&c| c == self.node_id)
@@ -343,7 +344,7 @@ impl Command for ReorderRootsCommand {
 pub struct ReorderChildrenCommand {
     parent_id: NodeId,
     new_order: Vec<NodeId>,
-    old_order: Option<Vec<NodeId>>,
+    old_order: Option<SmallVec<[NodeId; 8]>>,
 }
 
 impl ReorderChildrenCommand {

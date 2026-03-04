@@ -224,482 +224,167 @@ define_property_command!(
 // Scroll offset has a different setter signature.
 define_scroll_offset_command!(SetScrollOffsetCommand, "Set Scroll Offset");
 
-// --- Manual kind-specific commands ---
-// These require pattern matching on SceneNodeKind.
+// --- Kind-specific property commands (macro-generated) ---
 
-/// Command to set the text content of a Text node.
-#[derive(Debug)]
-pub struct SetTextContentCommand {
-    node_id: NodeId,
-    new_value: String,
-    old_value: Option<String>,
-}
-
-impl SetTextContentCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: String) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
+/// Generates a kind-specific property command that pattern-matches on a
+/// [`SceneNodeKind`] variant to read the old value before applying a mutation.
+///
+/// Unlike [`define_property_command!`], which accesses top-level `SceneNode`
+/// fields, this macro reaches into the `kind` enum.
+macro_rules! define_kind_property_command {
+    (
+        $name:ident,
+        $value_ty:ty,
+        $desc:expr,
+        $kind_pat:pat,
+        $getter:expr,
+        $setter:ident
+    ) => {
+        #[doc = concat!("Command to ", $desc, " on a scene node.")]
+        #[derive(Debug)]
+        #[allow(clippy::option_option)]
+        pub struct $name {
+            node_id: NodeId,
+            new_value: $value_ty,
+            old_value: Option<$value_ty>,
         }
-    }
-}
 
-impl Command for SetTextContentCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text { ref content, .. } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(content.clone());
-        scene.set_text_content(self.node_id, self.new_value.clone())
-    }
-
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_text_content(self.node_id, old)
-    }
-
-    fn description(&self) -> &str {
-        "Set Text Content"
-    }
-}
-
-/// Command to set the font size of a Text node.
-#[derive(Debug)]
-pub struct SetFontSizeCommand {
-    node_id: NodeId,
-    new_value: f32,
-    old_value: Option<f32>,
-}
-
-impl SetFontSizeCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: f32) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
+        impl $name {
+            /// Creates a new command targeting the given node.
+            #[must_use]
+            pub fn new(node_id: NodeId, new_value: $value_ty) -> Self {
+                Self {
+                    node_id,
+                    new_value,
+                    old_value: None,
+                }
+            }
         }
-    }
-}
 
-impl Command for SetFontSizeCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text { font_size, .. } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(font_size);
-        scene.set_font_size(self.node_id, self.new_value)
-    }
+        impl Command for $name {
+            fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+                let Some(node) = scene.get(self.node_id) else {
+                    return false;
+                };
+                let $kind_pat = node.kind else {
+                    return false;
+                };
+                self.old_value = Some($getter);
+                scene.$setter(self.node_id, self.new_value.clone())
+            }
 
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_font_size(self.node_id, old)
-    }
+            fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+                let Some(old) = self.old_value.take() else {
+                    return false;
+                };
+                scene.$setter(self.node_id, old)
+            }
 
-    fn description(&self) -> &str {
-        "Set Font Size"
-    }
-}
-
-/// Command to set the path data of a Vector node.
-#[derive(Debug)]
-pub struct SetPathDataCommand {
-    node_id: NodeId,
-    new_value: String,
-    old_value: Option<String>,
-}
-
-impl SetPathDataCommand {
-    /// Creates a new command targeting the given Vector node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: String) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
+            fn description(&self) -> &str {
+                $desc
+            }
         }
-    }
+    };
 }
 
-impl Command for SetPathDataCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Vector { ref path_data } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(path_data.clone());
-        scene.set_path_data(self.node_id, self.new_value.clone())
-    }
+define_kind_property_command!(
+    SetTextContentCommand,
+    String,
+    "Set Text Content",
+    SceneNodeKind::Text { ref content, .. },
+    content.clone(),
+    set_text_content
+);
 
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_path_data(self.node_id, old)
-    }
+define_kind_property_command!(
+    SetFontSizeCommand,
+    f32,
+    "Set Font Size",
+    SceneNodeKind::Text { font_size, .. },
+    font_size,
+    set_font_size
+);
 
-    fn description(&self) -> &str {
-        "Set Path Data"
-    }
-}
+define_kind_property_command!(
+    SetPathDataCommand,
+    String,
+    "Set Path Data",
+    SceneNodeKind::Vector { ref path_data },
+    path_data.clone(),
+    set_path_data
+);
 
-/// Command to set the asset reference of an Image node.
-#[derive(Debug)]
-pub struct SetAssetRefCommand {
-    node_id: NodeId,
-    new_value: String,
-    old_value: Option<String>,
-}
+define_kind_property_command!(
+    SetAssetRefCommand,
+    String,
+    "Set Asset Ref",
+    SceneNodeKind::Image { ref asset_ref },
+    asset_ref.clone(),
+    set_asset_ref
+);
 
-impl SetAssetRefCommand {
-    /// Creates a new command targeting the given Image node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: String) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
+define_kind_property_command!(
+    SetCornerRadiusCommand,
+    [f32; 4],
+    "Set Corner Radius",
+    SceneNodeKind::Frame { corner_radius },
+    corner_radius,
+    set_corner_radius
+);
 
-impl Command for SetAssetRefCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Image { ref asset_ref } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(asset_ref.clone());
-        scene.set_asset_ref(self.node_id, self.new_value.clone())
-    }
+define_kind_property_command!(
+    SetFontFamilyCommand,
+    String,
+    "Set Font Family",
+    SceneNodeKind::Text { ref font_family, .. },
+    font_family.clone(),
+    set_font_family
+);
 
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_asset_ref(self.node_id, old)
-    }
+define_kind_property_command!(
+    SetFontWeightCommand,
+    u16,
+    "Set Font Weight",
+    SceneNodeKind::Text { font_weight, .. },
+    font_weight,
+    set_font_weight
+);
 
-    fn description(&self) -> &str {
-        "Set Asset Ref"
-    }
-}
+define_kind_property_command!(
+    SetFontStyleCommand,
+    FontStyle,
+    "Set Font Style",
+    SceneNodeKind::Text { font_style, .. },
+    font_style,
+    set_font_style
+);
 
-/// Command to set the corner radius of a Frame node.
-#[derive(Debug)]
-pub struct SetCornerRadiusCommand {
-    node_id: NodeId,
-    new_value: [f32; 4],
-    old_value: Option<[f32; 4]>,
-}
+define_kind_property_command!(
+    SetTextAlignCommand,
+    TextAlign,
+    "Set Text Align",
+    SceneNodeKind::Text { text_align, .. },
+    text_align,
+    set_text_align
+);
 
-impl SetCornerRadiusCommand {
-    /// Creates a new command targeting the given Frame node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: [f32; 4]) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
+define_kind_property_command!(
+    SetLineHeightCommand,
+    f32,
+    "Set Line Height",
+    SceneNodeKind::Text { line_height, .. },
+    line_height,
+    set_line_height
+);
 
-impl Command for SetCornerRadiusCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Frame { corner_radius } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(corner_radius);
-        scene.set_corner_radius(self.node_id, self.new_value)
-    }
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_corner_radius(self.node_id, old)
-    }
-    fn description(&self) -> &str {
-        "Set Corner Radius"
-    }
-}
-
-/// Command to set the font family of a Text node.
-#[derive(Debug)]
-pub struct SetFontFamilyCommand {
-    node_id: NodeId,
-    new_value: String,
-    old_value: Option<String>,
-}
-
-impl SetFontFamilyCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: String) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
-
-impl Command for SetFontFamilyCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text {
-            ref font_family, ..
-        } = node.kind
-        else {
-            return false;
-        };
-        self.old_value = Some(font_family.clone());
-        scene.set_font_family(self.node_id, self.new_value.clone())
-    }
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_font_family(self.node_id, old)
-    }
-    fn description(&self) -> &str {
-        "Set Font Family"
-    }
-}
-
-/// Command to set the font weight of a Text node.
-#[derive(Debug)]
-pub struct SetFontWeightCommand {
-    node_id: NodeId,
-    new_value: u16,
-    old_value: Option<u16>,
-}
-
-impl SetFontWeightCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: u16) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
-
-impl Command for SetFontWeightCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text { font_weight, .. } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(font_weight);
-        scene.set_font_weight(self.node_id, self.new_value)
-    }
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_font_weight(self.node_id, old)
-    }
-    fn description(&self) -> &str {
-        "Set Font Weight"
-    }
-}
-
-/// Command to set the font style of a Text node.
-#[derive(Debug)]
-pub struct SetFontStyleCommand {
-    node_id: NodeId,
-    new_value: FontStyle,
-    old_value: Option<FontStyle>,
-}
-
-impl SetFontStyleCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: FontStyle) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
-
-impl Command for SetFontStyleCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text { font_style, .. } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(font_style);
-        scene.set_font_style(self.node_id, self.new_value)
-    }
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_font_style(self.node_id, old)
-    }
-    fn description(&self) -> &str {
-        "Set Font Style"
-    }
-}
-
-/// Command to set the text alignment of a Text node.
-#[derive(Debug)]
-pub struct SetTextAlignCommand {
-    node_id: NodeId,
-    new_value: TextAlign,
-    old_value: Option<TextAlign>,
-}
-
-impl SetTextAlignCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: TextAlign) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
-
-impl Command for SetTextAlignCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text { text_align, .. } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(text_align);
-        scene.set_text_align(self.node_id, self.new_value)
-    }
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_text_align(self.node_id, old)
-    }
-    fn description(&self) -> &str {
-        "Set Text Align"
-    }
-}
-
-/// Command to set the line height of a Text node.
-#[derive(Debug)]
-pub struct SetLineHeightCommand {
-    node_id: NodeId,
-    new_value: f32,
-    old_value: Option<f32>,
-}
-
-impl SetLineHeightCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: f32) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
-
-impl Command for SetLineHeightCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text { line_height, .. } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(line_height);
-        scene.set_line_height(self.node_id, self.new_value)
-    }
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_line_height(self.node_id, old)
-    }
-    fn description(&self) -> &str {
-        "Set Line Height"
-    }
-}
-
-/// Command to set the text color of a Text node.
-#[derive(Debug)]
-pub struct SetTextColorCommand {
-    node_id: NodeId,
-    new_value: Option<Color>,
-    #[allow(clippy::option_option)]
-    old_value: Option<Option<Color>>,
-}
-
-impl SetTextColorCommand {
-    /// Creates a new command targeting the given Text node.
-    #[must_use]
-    pub fn new(node_id: NodeId, new_value: Option<Color>) -> Self {
-        Self {
-            node_id,
-            new_value,
-            old_value: None,
-        }
-    }
-}
-
-impl Command for SetTextColorCommand {
-    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(node) = scene.get(self.node_id) else {
-            return false;
-        };
-        let SceneNodeKind::Text { text_color, .. } = node.kind else {
-            return false;
-        };
-        self.old_value = Some(text_color);
-        scene.set_text_color(self.node_id, self.new_value)
-    }
-    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
-        let Some(old) = self.old_value.take() else {
-            return false;
-        };
-        scene.set_text_color(self.node_id, old)
-    }
-    fn description(&self) -> &str {
-        "Set Text Color"
-    }
-}
+define_kind_property_command!(
+    SetTextColorCommand,
+    Option<Color>,
+    "Set Text Color",
+    SceneNodeKind::Text { text_color, .. },
+    text_color,
+    set_text_color
+);
 
 #[cfg(test)]
 mod tests {

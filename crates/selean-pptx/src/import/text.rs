@@ -3,6 +3,7 @@
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
+use selean_common::xml::local_name;
 use selean_engine::scene::{Color, FontStyle, TextAlign};
 
 use crate::coord::{ooxml_font_size_to_px, parse_ooxml_color};
@@ -160,14 +161,6 @@ fn parse_paragraph_properties(e: &quick_xml::events::BytesStart<'_>, result: &mu
                 };
             }
         }
-    }
-}
-
-/// Extracts the local name from a potentially namespaced XML tag.
-fn local_name(name: &[u8]) -> &[u8] {
-    match name.iter().rposition(|&b| b == b':') {
-        Some(pos) => &name[pos + 1..],
-        None => name,
     }
 }
 

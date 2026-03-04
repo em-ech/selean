@@ -11,6 +11,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use selean_common::types::NodeId;
+use selean_common::xml::{append_empty_tag, append_end_tag, append_start_tag, local_name};
 use selean_engine::scene::{BoundingBox, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign};
 
 use super::text::ParsedStory;
@@ -432,45 +433,6 @@ fn try_parse_color_value_list(text: &str) -> Option<Color> {
         parse_idml_color(parts[0], parts[1], parts[2])
     } else {
         None
-    }
-}
-
-fn append_start_tag(s: &mut String, e: &quick_xml::events::BytesStart<'_>) {
-    s.push('<');
-    s.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-    for attr in e.attributes().flatten() {
-        s.push(' ');
-        s.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
-        s.push_str("=\"");
-        s.push_str(&String::from_utf8_lossy(&attr.value));
-        s.push('"');
-    }
-    s.push('>');
-}
-
-fn append_empty_tag(s: &mut String, e: &quick_xml::events::BytesStart<'_>) {
-    s.push('<');
-    s.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-    for attr in e.attributes().flatten() {
-        s.push(' ');
-        s.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
-        s.push_str("=\"");
-        s.push_str(&String::from_utf8_lossy(&attr.value));
-        s.push('"');
-    }
-    s.push_str("/>");
-}
-
-fn append_end_tag(s: &mut String, e: &quick_xml::events::BytesEnd<'_>) {
-    s.push_str("</");
-    s.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-    s.push('>');
-}
-
-fn local_name(name: &[u8]) -> &[u8] {
-    match name.iter().rposition(|&b| b == b':') {
-        Some(pos) => &name[pos + 1..],
-        None => name,
     }
 }
 

@@ -649,8 +649,8 @@ function ImageSection({
           );
           onSceneChanged();
         }
-      } catch {
-        // Replace failed
+      } catch (e) {
+        console.warn("property-inspector:image-replace failed", e);
       }
       e.target.value = "";
     },

@@ -50,8 +50,8 @@ export function InlineTextEditor({
 
       setScreenRect({ x: sx, y: sy, w: sw, h: sh });
       setScaledFontSize((fontSize * zoom) / dpr);
-    } catch {
-      // camera read failed
+    } catch (e) {
+      console.warn("inline-text:get-camera failed", e);
     }
   }, [editorRef, bounds, fontSize]);
 

@@ -75,8 +75,8 @@ export function FileMenu({
         const text = await file.text();
         editor.import_document(text);
         onSceneChanged();
-      } catch {
-        // File read failed
+      } catch (e) {
+        console.warn("file-menu:open failed", e);
       }
       // Reset the input so re-selecting the same file works
       e.target.value = "";
@@ -108,8 +108,8 @@ export function FileMenu({
         const json = await response.text();
         editor.import_document(json);
         onSceneChanged();
-      } catch {
-        // Import failed
+      } catch (e) {
+        console.warn("file-menu:import-pptx failed", e);
       }
       e.target.value = "";
     },
@@ -136,8 +136,8 @@ export function FileMenu({
       a.download = "document.pptx";
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      // Export failed
+    } catch (e) {
+      console.warn("file-menu:export-pptx failed", e);
     }
     close();
   }, [editorRef, close]);
@@ -166,8 +166,8 @@ export function FileMenu({
         const json = await response.text();
         editor.import_document(json);
         onSceneChanged();
-      } catch {
-        // Import failed
+      } catch (e) {
+        console.warn("file-menu:import-idml failed", e);
       }
       e.target.value = "";
     },
@@ -194,8 +194,8 @@ export function FileMenu({
       a.download = "document.idml";
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      // Export failed
+    } catch (e) {
+      console.warn("file-menu:export-idml failed", e);
     }
     close();
   }, [editorRef, close]);
@@ -244,8 +244,8 @@ export function FileMenu({
       const json = await response.text();
       editor.import_document(json);
       onSceneChanged();
-    } catch {
-      // Import failed
+    } catch (e) {
+      console.warn("file-menu:import-figma failed", e);
     }
     close();
   }, [editorRef, onSceneChanged, close]);

@@ -25,8 +25,8 @@ export function LayerPanel({
     try {
       const json = editor.get_scene_tree_json();
       setTree(JSON.parse(json));
-    } catch {
-      // WASM not ready
+    } catch (e) {
+      console.warn("layer-panel:get-scene-tree failed", e);
     }
   }, [editorRef, refreshTick]);
 

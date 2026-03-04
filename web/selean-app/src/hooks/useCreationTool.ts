@@ -71,7 +71,8 @@ export function useCreationTool({
       let camera;
       try {
         camera = JSON.parse(editor.get_camera_json());
-      } catch {
+      } catch (e) {
+        console.warn("creation-tool:get-camera failed", e);
         return;
       }
 

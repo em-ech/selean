@@ -13,8 +13,10 @@ use crate::types::{Operation, SeqNum};
 /// Append-only log of all operations in a room, ordered by server sequence number.
 #[derive(Debug, Default)]
 pub struct OpLog {
-    /// Operations indexed by position (`SeqNum` - 1 for 1-based sequences).
+    /// All operations in append order.
     ops: Vec<Operation>,
+    /// Seq-to-index lookup for O(1) retrieval by sequence number.
+    seq_index: HashMap<SeqNum, usize>,
     /// Per-user, per-page index of sequence numbers for undo traversal.
     user_ops: HashMap<(UserId, PageId), Vec<SeqNum>>,
 }
@@ -39,13 +41,15 @@ impl OpLog {
             .unwrap_or_else(|| panic!("operation must have a seq when appending to OpLog"));
         let key = (op.user_id, op.page_id);
         self.user_ops.entry(key).or_default().push(seq);
+        let idx = self.ops.len();
         self.ops.push(op);
+        self.seq_index.insert(seq, idx);
     }
 
-    /// Returns the operation with the given sequence number.
+    /// Returns the operation with the given sequence number in O(1).
     #[must_use]
     pub fn get_by_seq(&self, seq: SeqNum) -> Option<&Operation> {
-        self.ops.iter().find(|op| op.seq == Some(seq))
+        self.seq_index.get(&seq).map(|&idx| &self.ops[idx])
     }
 
     /// Returns the sequence number of the most recent operation by this user

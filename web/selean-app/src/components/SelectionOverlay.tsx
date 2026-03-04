@@ -52,8 +52,8 @@ export function SelectionOverlay({
           const cameraJson = editor.get_camera_json();
           setBounds(JSON.parse(boundsJson));
           setCamera(JSON.parse(cameraJson));
-        } catch {
-          // WASM call failed
+        } catch (e) {
+          console.warn("selection-overlay:get-bounds failed", e);
         }
       }
       rafRef.current = requestAnimationFrame(poll);

@@ -7,12 +7,15 @@
 //!
 //! Static file serving for the React frontend is handled by tower-http.
 
+pub mod auth;
 pub mod chat;
 pub mod collab;
 pub mod routes;
 pub mod state;
 pub mod stream;
 
+pub use auth::AuthConfig;
+pub use collab::snapshot::{load_snapshots_into, start_snapshot_task};
 pub use collab::ws_handler::CollabState;
-pub use routes::create_router;
+pub use routes::{create_router, create_router_with_options};
 pub use state::AppState;

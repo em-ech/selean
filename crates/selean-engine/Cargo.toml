@@ -23,6 +23,7 @@ ab_glyph_rasterizer.workspace = true
 image.workspace = true
 tiny-skia.workspace = true
 svgtypes.workspace = true
+smallvec = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 proptest.workspace = true

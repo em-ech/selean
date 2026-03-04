@@ -71,7 +71,8 @@ export class WsClient {
     this.setStatus("connecting");
     try {
       this.ws = new WebSocket(this.url);
-    } catch {
+    } catch (e) {
+      console.warn("ws-client:open-socket failed", e);
       this.scheduleReconnect();
       return;
     }
@@ -90,8 +91,8 @@ export class WsClient {
       try {
         const msg = JSON.parse(event.data as string) as ServerMessage;
         this.options.onMessage?.(msg);
-      } catch {
-        // Ignore malformed messages.
+      } catch (e) {
+        console.warn("ws-client:message-parse failed", e);
       }
     };
 

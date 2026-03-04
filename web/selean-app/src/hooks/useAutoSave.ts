@@ -32,7 +32,8 @@ export function useAutoSave({
   const loadSavedDocument = useCallback((): string | null => {
     try {
       return localStorage.getItem(STORAGE_KEY);
-    } catch {
+    } catch (e) {
+      console.warn("auto-save:load failed", e);
       return null;
     }
   }, []);
@@ -40,8 +41,8 @@ export function useAutoSave({
   const clearSavedDocument = useCallback(() => {
     try {
       localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // storage access failed
+    } catch (e) {
+      console.warn("auto-save:clear failed", e);
     }
   }, []);
 
@@ -57,8 +58,8 @@ export function useAutoSave({
         const json = editor.export_document_json();
         localStorage.setItem(STORAGE_KEY, json);
         dirtyRef.current = false;
-      } catch {
-        // Quota exceeded or storage unavailable. Skip this save.
+      } catch (e) {
+        console.warn("auto-save:save failed", e);
       }
     }, SAVE_INTERVAL_MS);
 

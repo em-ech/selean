@@ -17,20 +17,37 @@ pub struct CachedImage {
     pub source_height: u32,
 }
 
+/// Default maximum number of entries in an `ImageCache`.
+const DEFAULT_MAX_IMAGE_ENTRIES: usize = 256;
+
 /// Maps asset references to atlas locations.
 ///
 /// Entries persist across frames. An image is cached once when first placed
-/// in the atlas and reused on subsequent frames.
+/// in the atlas and reused on subsequent frames. When the cache reaches its
+/// maximum capacity, all entries are cleared before inserting the new entry.
+/// This simple eviction strategy works well with atlas textures (the atlas
+/// is rebuilt from scratch after a clear).
 pub struct ImageCache {
     entries: HashMap<String, CachedImage>,
+    max_entries: usize,
 }
 
 impl ImageCache {
-    /// Creates a new empty image cache.
+    /// Creates a new empty image cache with the default maximum capacity (256).
     #[must_use]
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            max_entries: DEFAULT_MAX_IMAGE_ENTRIES,
+        }
+    }
+
+    /// Creates a new empty image cache with the given maximum capacity.
+    #[must_use]
+    pub fn with_max_entries(max: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries: max,
         }
     }
 
@@ -41,7 +58,13 @@ impl ImageCache {
     }
 
     /// Inserts an image into the cache.
+    ///
+    /// If the cache is at capacity, all existing entries are cleared before
+    /// inserting. This ensures the cache never exceeds its maximum size.
     pub fn insert(&mut self, asset_ref: String, image: CachedImage) {
+        if self.entries.len() >= self.max_entries {
+            self.entries.clear();
+        }
         self.entries.insert(asset_ref, image);
     }
 
@@ -61,6 +84,12 @@ impl ImageCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Returns the maximum number of entries the cache will hold before evicting.
+    #[must_use]
+    pub fn max_entries(&self) -> usize {
+        self.max_entries
     }
 
     /// Removes a specific cached image by asset reference.
@@ -129,5 +158,52 @@ mod tests {
 
         cache.clear();
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn eviction_clears_when_full() {
+        let mut cache = ImageCache::with_max_entries(3);
+
+        cache.insert("a.png".to_string(), test_cached_image());
+        cache.insert("b.png".to_string(), test_cached_image());
+        cache.insert("c.png".to_string(), test_cached_image());
+        assert_eq!(cache.len(), 3);
+
+        // Inserting a 4th entry should clear the cache first, then insert.
+        cache.insert("d.png".to_string(), test_cached_image());
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains("d.png"));
+        assert!(!cache.contains("a.png"));
+        assert!(!cache.contains("b.png"));
+        assert!(!cache.contains("c.png"));
+    }
+
+    #[test]
+    fn with_max_entries_constructor() {
+        let cache = ImageCache::with_max_entries(50);
+        assert_eq!(cache.max_entries(), 50);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn insert_at_capacity_minus_one_does_not_evict() {
+        let mut cache = ImageCache::with_max_entries(3);
+
+        cache.insert("a.png".to_string(), test_cached_image());
+        cache.insert("b.png".to_string(), test_cached_image());
+        assert_eq!(cache.len(), 2);
+
+        // Inserting a 3rd entry (capacity minus one -> capacity) should NOT evict.
+        cache.insert("c.png".to_string(), test_cached_image());
+        assert_eq!(cache.len(), 3);
+        assert!(cache.contains("a.png"));
+        assert!(cache.contains("b.png"));
+        assert!(cache.contains("c.png"));
+    }
+
+    #[test]
+    fn default_max_entries() {
+        let cache = ImageCache::new();
+        assert_eq!(cache.max_entries(), 256);
     }
 }

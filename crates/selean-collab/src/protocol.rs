@@ -220,7 +220,7 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"JoinRoom\""));
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::JoinRoom { .. });
+        assert!(matches!(back, ClientMessage::JoinRoom { .. }));
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
         let msg = ClientMessage::LeaveRoom;
         let json = serde_json::to_string(&msg).unwrap();
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::LeaveRoom);
+        assert!(matches!(back, ClientMessage::LeaveRoom));
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"SubmitOp\""));
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::SubmitOp { .. });
+        assert!(matches!(back, ClientMessage::SubmitOp { .. }));
     }
 
     #[test]
@@ -251,7 +251,7 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"SubmitOpGroup\""));
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::SubmitOpGroup { .. });
+        assert!(matches!(back, ClientMessage::SubmitOpGroup { .. }));
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::Undo { .. });
+        assert!(matches!(back, ClientMessage::Undo { .. }));
     }
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::Redo { .. });
+        assert!(matches!(back, ClientMessage::Redo { .. }));
     }
 
     #[test]
@@ -283,7 +283,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::PresenceUpdate { .. });
+        assert!(matches!(back, ClientMessage::PresenceUpdate { .. }));
     }
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"RoomJoined\""));
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::RoomJoined { .. });
+        assert!(matches!(back, ServerMessage::RoomJoined { .. }));
     }
 
     #[test]
@@ -309,7 +309,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::OpAck { .. });
+        assert!(matches!(back, ServerMessage::OpAck { .. }));
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::OpGroupAck { .. });
+        assert!(matches!(back, ServerMessage::OpGroupAck { .. }));
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::RemoteOp { .. });
+        assert!(matches!(back, ServerMessage::RemoteOp { .. }));
     }
 
     #[test]
@@ -341,7 +341,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::RemoteOpGroup { .. });
+        assert!(matches!(back, ServerMessage::RemoteOpGroup { .. }));
     }
 
     #[test]
@@ -352,7 +352,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::UndoResult { .. });
+        assert!(matches!(back, ServerMessage::UndoResult { .. }));
     }
 
     #[test]
@@ -363,7 +363,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::RedoResult { .. });
+        assert!(matches!(back, ServerMessage::RedoResult { .. }));
     }
 
     #[test]
@@ -378,7 +378,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::PresenceBroadcast { .. });
+        assert!(matches!(back, ServerMessage::PresenceBroadcast { .. }));
     }
 
     #[test]
@@ -392,7 +392,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::ParticipantJoined { .. });
+        assert!(matches!(back, ServerMessage::ParticipantJoined { .. }));
     }
 
     #[test]
@@ -402,7 +402,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::ParticipantLeft { .. });
+        assert!(matches!(back, ServerMessage::ParticipantLeft { .. }));
     }
 
     #[test]
@@ -412,7 +412,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::Error { .. });
+        assert!(matches!(back, ServerMessage::Error { .. }));
     }
 
     #[test]
@@ -427,7 +427,7 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"SubmitPageOp\""));
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::SubmitPageOp { .. });
+        assert!(matches!(back, ClientMessage::SubmitPageOp { .. }));
     }
 
     #[test]
@@ -441,7 +441,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::SubmitPageOp { .. });
+        assert!(matches!(back, ClientMessage::SubmitPageOp { .. }));
     }
 
     #[test]
@@ -455,7 +455,7 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: ClientMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ClientMessage::SubmitPageOp { .. });
+        assert!(matches!(back, ClientMessage::SubmitPageOp { .. }));
     }
 
     #[test]
@@ -471,7 +471,7 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"RemotePageOp\""));
         let back: ServerMessage = serde_json::from_str(&json).unwrap();
-        matches!(back, ServerMessage::RemotePageOp { .. });
+        assert!(matches!(back, ServerMessage::RemotePageOp { .. }));
     }
 
     #[test]

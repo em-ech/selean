@@ -4,7 +4,8 @@
 //! stacks, and active WebSocket sessions. All mutations are sequenced through
 //! the room to establish a global total order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use selean_collab::inverse::compute_inverse;
 use selean_collab::op_log::OpLog;
@@ -15,9 +16,15 @@ use selean_engine::command::CommandDescriptor;
 use selean_engine::persistence::{Document, save_document};
 use tokio::sync::mpsc;
 
+/// Maximum number of undo entries per user per page.
+const MAX_UNDO_SIZE: usize = 200;
+
 /// Manages all active collaborative editing rooms.
+///
+/// Each room is independently locked via `Arc<Mutex<Room>>` so operations
+/// on different rooms never contend.
 pub struct RoomManager {
-    rooms: HashMap<RoomId, Room>,
+    rooms: HashMap<RoomId, Arc<Mutex<Room>>>,
 }
 
 /// State for a single active session (one WebSocket connection).
@@ -44,9 +51,11 @@ pub struct Room {
     sessions: HashMap<SessionId, SessionState>,
     /// Per-user, per-page undo stacks. Each entry is `(SeqNum, inverse_descriptor)`.
     /// The inverse is captured at submission time (before the op is applied).
-    user_undo_stacks: HashMap<(UserId, PageId), Vec<(SeqNum, CommandDescriptor)>>,
+    /// Capped at [`MAX_UNDO_SIZE`]; oldest entries are evicted when full.
+    user_undo_stacks: HashMap<(UserId, PageId), VecDeque<(SeqNum, CommandDescriptor)>>,
     /// Per-user, per-page redo stacks (descriptors to re-apply).
-    user_redo_stacks: HashMap<(UserId, PageId), Vec<CommandDescriptor>>,
+    /// Capped at [`MAX_UNDO_SIZE`]; oldest entries are evicted when full.
+    user_redo_stacks: HashMap<(UserId, PageId), VecDeque<CommandDescriptor>>,
 }
 
 /// Errors from room operations.
@@ -72,29 +81,33 @@ impl RoomManager {
         }
     }
 
-    /// Creates a new room with the given ID and an empty document.
-    pub fn create_room(&mut self, room_id: RoomId) -> &mut Room {
-        self.rooms
-            .entry(room_id)
-            .or_insert_with(|| Room::new(room_id))
+    /// Returns the per-room lock for the given room, creating it if absent.
+    pub fn get_or_create_room(&mut self, room_id: RoomId) -> Arc<Mutex<Room>> {
+        Arc::clone(
+            self.rooms
+                .entry(room_id)
+                .or_insert_with(|| Arc::new(Mutex::new(Room::new(room_id)))),
+        )
     }
 
-    /// Creates a new room with the given ID and an existing document.
-    pub fn create_room_with_document(&mut self, room_id: RoomId, document: Document) -> &mut Room {
-        self.rooms
-            .entry(room_id)
-            .or_insert_with(|| Room::with_document(room_id, document))
+    /// Returns the per-room lock for the given room, creating it with an
+    /// existing document if absent.
+    pub fn get_or_create_room_with_document(
+        &mut self,
+        room_id: RoomId,
+        document: Document,
+    ) -> Arc<Mutex<Room>> {
+        Arc::clone(
+            self.rooms
+                .entry(room_id)
+                .or_insert_with(|| Arc::new(Mutex::new(Room::with_document(room_id, document)))),
+        )
     }
 
-    /// Returns a mutable reference to a room.
-    pub fn room_mut(&mut self, room_id: &RoomId) -> Option<&mut Room> {
-        self.rooms.get_mut(room_id)
-    }
-
-    /// Returns a reference to a room.
+    /// Returns the per-room lock if the room exists.
     #[must_use]
-    pub fn room(&self, room_id: &RoomId) -> Option<&Room> {
-        self.rooms.get(room_id)
+    pub fn get_room(&self, room_id: &RoomId) -> Option<Arc<Mutex<Room>>> {
+        self.rooms.get(room_id).cloned()
     }
 
     /// Removes a room if it exists.
@@ -106,6 +119,11 @@ impl RoomManager {
     #[must_use]
     pub fn room_count(&self) -> usize {
         self.rooms.len()
+    }
+
+    /// Returns an iterator over `(RoomId, Arc<Mutex<Room>>)` pairs.
+    pub fn rooms(&self) -> impl Iterator<Item = (RoomId, Arc<Mutex<Room>>)> + '_ {
+        self.rooms.iter().map(|(&id, arc)| (id, Arc::clone(arc)))
     }
 }
 
@@ -253,10 +271,7 @@ impl Room {
 
         // Push to user's undo stack (with pre-computed inverse), clear redo.
         if let Some(inv) = inverse {
-            self.user_undo_stacks
-                .entry((user_id, page_id))
-                .or_default()
-                .push((seq, inv));
+            self.push_undo(user_id, page_id, (seq, inv));
         }
         self.user_redo_stacks.remove(&(user_id, page_id));
 
@@ -299,10 +314,7 @@ impl Room {
             self.op_log.append(op.clone());
 
             if let Some(inv) = inverse {
-                self.user_undo_stacks
-                    .entry((user_id, page_id))
-                    .or_default()
-                    .push((seq, inv));
+                self.push_undo(user_id, page_id, (seq, inv));
             }
         }
         self.user_redo_stacks.remove(&(user_id, page_id));
@@ -328,7 +340,7 @@ impl Room {
         page_id: PageId,
     ) -> Option<SeqNum> {
         let stack = self.user_undo_stacks.get_mut(&(user_id, page_id))?;
-        let (undone_seq, inverse) = stack.pop()?;
+        let (undone_seq, inverse) = stack.pop_back()?;
 
         let original_op = self.op_log.get_by_seq(undone_seq)?;
         let original_desc = original_op.descriptor.clone();
@@ -349,10 +361,7 @@ impl Room {
         self.op_log.append(inv_op.clone());
 
         // Push original descriptor to redo stack.
-        self.user_redo_stacks
-            .entry((user_id, page_id))
-            .or_default()
-            .push(original_desc);
+        self.push_redo(user_id, page_id, original_desc);
 
         // Send UndoResult to requester, RemoteOp to others.
         let result = ServerMessage::UndoResult {
@@ -378,7 +387,7 @@ impl Room {
         page_id: PageId,
     ) -> Option<SeqNum> {
         let stack = self.user_redo_stacks.get_mut(&(user_id, page_id))?;
-        let desc = stack.pop()?;
+        let desc = stack.pop_back()?;
 
         let seq = self.assign_seq();
         let op = Operation {
@@ -398,10 +407,7 @@ impl Room {
 
         // Push to undo stack with pre-computed inverse.
         if let Some(inv) = inverse {
-            self.user_undo_stacks
-                .entry((user_id, page_id))
-                .or_default()
-                .push((seq, inv));
+            self.push_undo(user_id, page_id, (seq, inv));
         }
 
         let result = ServerMessage::RedoResult {
@@ -561,6 +567,22 @@ impl Room {
         compute_inverse(descriptor, &page.scene)
     }
 
+    fn push_undo(&mut self, user_id: UserId, page_id: PageId, entry: (SeqNum, CommandDescriptor)) {
+        let stack = self.user_undo_stacks.entry((user_id, page_id)).or_default();
+        if stack.len() >= MAX_UNDO_SIZE {
+            stack.pop_front();
+        }
+        stack.push_back(entry);
+    }
+
+    fn push_redo(&mut self, user_id: UserId, page_id: PageId, desc: CommandDescriptor) {
+        let stack = self.user_redo_stacks.entry((user_id, page_id)).or_default();
+        if stack.len() >= MAX_UNDO_SIZE {
+            stack.pop_front();
+        }
+        stack.push_back(desc);
+    }
+
     fn user_id_for_session(&self, session_id: SessionId) -> Option<UserId> {
         self.sessions.get(&session_id).map(|s| s.user_id)
     }
@@ -647,16 +669,16 @@ mod tests {
     fn create_and_get_room() {
         let mut mgr = RoomManager::new();
         let room_id = RoomId::new();
-        mgr.create_room(room_id);
+        mgr.get_or_create_room(room_id);
         assert_eq!(mgr.room_count(), 1);
-        assert!(mgr.room(&room_id).is_some());
+        assert!(mgr.get_room(&room_id).is_some());
     }
 
     #[test]
     fn remove_room() {
         let mut mgr = RoomManager::new();
         let room_id = RoomId::new();
-        mgr.create_room(room_id);
+        mgr.get_or_create_room(room_id);
         assert!(mgr.remove_room(&room_id));
         assert_eq!(mgr.room_count(), 0);
     }
@@ -779,7 +801,7 @@ mod tests {
         room.submit_op(op);
 
         let msg = rx2.try_recv().unwrap();
-        matches!(msg, ServerMessage::RemoteOp { .. });
+        assert!(matches!(msg, ServerMessage::RemoteOp { .. }));
     }
 
     // -- Op group tests --

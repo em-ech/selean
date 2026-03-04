@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use selean_common::types::NodeId;
+use smallvec::SmallVec;
 
 use super::clip::ClipMode;
 use super::dirty::DirtyFlags;
@@ -274,7 +275,7 @@ impl SceneGraph {
         };
 
         let parent_id = node.parent;
-        let children: Vec<NodeId> = node.children.clone();
+        let children = node.children.clone();
 
         // Recursively remove descendants first.
         for child_id in children {
@@ -402,15 +403,15 @@ impl SceneGraph {
         }
         let mut sorted_current = node.children.clone();
         sorted_current.sort();
-        let mut sorted_new: Vec<NodeId> = new_order.to_vec();
+        let mut sorted_new: SmallVec<[NodeId; 8]> = SmallVec::from_slice(new_order);
         sorted_new.sort();
-        if sorted_current != sorted_new {
+        if sorted_current[..] != sorted_new[..] {
             return false;
         }
 
         // Apply the new order.
         if let Some(node) = self.nodes.get_mut(&parent_id) {
-            node.children = new_order.to_vec();
+            node.children = SmallVec::from_slice(new_order);
         }
 
         self.propagate_dirty_up(parent_id, DirtyFlags::CHILDREN);

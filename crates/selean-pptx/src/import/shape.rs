@@ -4,6 +4,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use selean_common::types::NodeId;
+use selean_common::xml::{append_empty_tag, append_end_tag, append_start_tag, local_name};
 use selean_engine::scene::{
     BoundingBox, Color, Effect, Gradient, GradientStop, SceneNode, SceneNodeKind,
 };
@@ -412,46 +413,6 @@ fn ooxml_angle_to_gradient_points(angle_60k: f32) -> ([f32; 2], [f32; 2]) {
     let start = [0.5 - dx * 0.5, 0.5 - dy * 0.5];
     let end = [0.5 + dx * 0.5, 0.5 + dy * 0.5];
     (start, end)
-}
-
-fn append_start_tag(s: &mut String, e: &quick_xml::events::BytesStart<'_>) {
-    s.push('<');
-    s.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-    for attr in e.attributes().flatten() {
-        s.push(' ');
-        s.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
-        s.push_str("=\"");
-        s.push_str(&String::from_utf8_lossy(&attr.value));
-        s.push('"');
-    }
-    s.push('>');
-}
-
-fn append_empty_tag(s: &mut String, e: &quick_xml::events::BytesStart<'_>) {
-    s.push('<');
-    s.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-    for attr in e.attributes().flatten() {
-        s.push(' ');
-        s.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
-        s.push_str("=\"");
-        s.push_str(&String::from_utf8_lossy(&attr.value));
-        s.push('"');
-    }
-    s.push_str("/>");
-}
-
-fn append_end_tag(s: &mut String, e: &quick_xml::events::BytesEnd<'_>) {
-    s.push_str("</");
-    s.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-    s.push('>');
-}
-
-/// Extracts the local name from a potentially namespaced XML tag.
-fn local_name(name: &[u8]) -> &[u8] {
-    match name.iter().rposition(|&b| b == b':') {
-        Some(pos) => &name[pos + 1..],
-        None => name,
-    }
 }
 
 #[cfg(test)]

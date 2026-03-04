@@ -460,14 +460,7 @@ impl Renderer {
             return;
         }
 
-        let is_scroll = node.scroll_offset != [0.0, 0.0];
-        let effective_clip = if node.clip_mode != ClipMode::None {
-            node.clip_mode
-        } else if is_scroll {
-            ClipMode::Scissor
-        } else {
-            ClipMode::None
-        };
+        let effective_clip = compute_effective_clip_mode(node.clip_mode, node.scroll_offset);
         let blend_mode = node.blend_mode;
         let is_clip = effective_clip != ClipMode::None;
 
@@ -658,7 +651,6 @@ impl Renderer {
 
     /// Phase 2b: Iterate render order entries, patch clip rects on ordered
     /// instances, and emit draw commands to the draw list.
-    #[allow(clippy::too_many_lines)]
     fn build_draw_list(&mut self) {
         let (viewport_w, viewport_h) = self.camera.viewport_size();
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -667,36 +659,15 @@ impl Renderer {
         // Take render_order temporarily to avoid borrow conflict with self.draw_list.
         let render_order = std::mem::take(&mut self.render_order);
 
+        // Patch clip rects on batched instances (requires mutable batch access).
         for entry in &render_order {
             match entry {
-                RenderOrderEntry::Rect {
-                    instance_start,
-                    instance_count,
-                    blend,
-                    stencil_test,
-                } => {
-                    if !blend.is_native() {
-                        self.draw_list.push(DrawCommand::CopyFramebuffer);
-                    }
-                    self.draw_list.push(DrawCommand::DrawRects {
-                        instance_start: *instance_start,
-                        instance_count: *instance_count,
-                        blend: *blend,
-                        stencil_test: *stencil_test,
-                    });
-                    if !blend.is_native() {
-                        self.draw_list
-                            .push(DrawCommand::ApplyBlend { mode: *blend });
-                    }
-                }
                 RenderOrderEntry::Text {
                     pending_start,
                     pending_count,
-                    blend,
-                    stencil_test,
                     shader_clip_rect,
+                    ..
                 } => {
-                    // Patch clip rects on ordered text instances.
                     let start = *pending_start as usize;
                     let count = *pending_count as usize;
                     let clip_arr = shader_clip_rect.to_array();
@@ -704,26 +675,12 @@ impl Renderer {
                     for inst in instances.iter_mut().skip(start).take(count) {
                         inst.clip_rect = clip_arr;
                     }
-                    if !blend.is_native() {
-                        self.draw_list.push(DrawCommand::CopyFramebuffer);
-                    }
-                    self.draw_list.push(DrawCommand::DrawGlyphs {
-                        instance_start: *pending_start,
-                        instance_count: *pending_count,
-                        blend: *blend,
-                        stencil_test: *stencil_test,
-                    });
-                    if !blend.is_native() {
-                        self.draw_list
-                            .push(DrawCommand::ApplyBlend { mode: *blend });
-                    }
                 }
                 RenderOrderEntry::Image {
                     pending_start,
                     pending_count,
-                    blend,
-                    stencil_test,
                     shader_clip_rect,
+                    ..
                 } => {
                     let start = *pending_start as usize;
                     let count = *pending_count as usize;
@@ -732,26 +689,12 @@ impl Renderer {
                     for inst in instances.iter_mut().skip(start).take(count) {
                         inst.clip_rect = clip_arr;
                     }
-                    if !blend.is_native() {
-                        self.draw_list.push(DrawCommand::CopyFramebuffer);
-                    }
-                    self.draw_list.push(DrawCommand::DrawImages {
-                        instance_start: *pending_start,
-                        instance_count: *pending_count,
-                        blend: *blend,
-                        stencil_test: *stencil_test,
-                    });
-                    if !blend.is_native() {
-                        self.draw_list
-                            .push(DrawCommand::ApplyBlend { mode: *blend });
-                    }
                 }
                 RenderOrderEntry::Vector {
                     pending_start,
                     pending_count,
-                    blend,
-                    stencil_test,
                     shader_clip_rect,
+                    ..
                 } => {
                     let start = *pending_start as usize;
                     let count = *pending_count as usize;
@@ -760,71 +703,15 @@ impl Renderer {
                     for inst in instances.iter_mut().skip(start).take(count) {
                         inst.clip_rect = clip_arr;
                     }
-                    if !blend.is_native() {
-                        self.draw_list.push(DrawCommand::CopyFramebuffer);
-                    }
-                    self.draw_list.push(DrawCommand::DrawVectors {
-                        instance_start: *pending_start,
-                        instance_count: *pending_count,
-                        blend: *blend,
-                        stencil_test: *stencil_test,
-                    });
-                    if !blend.is_native() {
-                        self.draw_list
-                            .push(DrawCommand::ApplyBlend { mode: *blend });
-                    }
                 }
-                RenderOrderEntry::PushScissor { clip_rect } => {
-                    if let Some((x, y, w, h)) = clip_rect.to_scissor_rect(vp_size.0, vp_size.1) {
-                        self.draw_list.push(DrawCommand::SetScissor {
-                            x,
-                            y,
-                            width: w,
-                            height: h,
-                        });
-                    }
-                }
-                RenderOrderEntry::PopScissor { parent_scissor } => {
-                    if let Some(parent) = parent_scissor {
-                        if let Some((x, y, w, h)) = parent.to_scissor_rect(vp_size.0, vp_size.1) {
-                            self.draw_list.push(DrawCommand::SetScissor {
-                                x,
-                                y,
-                                width: w,
-                                height: h,
-                            });
-                        } else {
-                            self.draw_list.push(DrawCommand::ResetScissor);
-                        }
-                    } else {
-                        self.draw_list.push(DrawCommand::ResetScissor);
-                    }
-                }
-                RenderOrderEntry::PushStencil {
-                    write_instance_start,
-                    write_instance_count,
-                    new_stencil_ref,
-                } => {
-                    self.draw_list.push(DrawCommand::StencilWrite {
-                        instance_start: *write_instance_start,
-                        instance_count: *write_instance_count,
-                    });
-                    self.draw_list
-                        .push(DrawCommand::SetStencilRef(*new_stencil_ref));
-                }
-                RenderOrderEntry::PopStencil {
-                    decrement_instance_start,
-                    decrement_instance_count,
-                    restored_stencil_ref,
-                } => {
-                    self.draw_list.push(DrawCommand::StencilDecrement {
-                        instance_start: *decrement_instance_start,
-                        instance_count: *decrement_instance_count,
-                    });
-                    self.draw_list
-                        .push(DrawCommand::SetStencilRef(*restored_stencil_ref));
-                }
+                _ => {}
             }
+        }
+
+        // Generate draw commands from render order entries (pure CPU logic).
+        let commands = build_draw_commands_from_render_order(&render_order, vp_size);
+        for cmd in commands {
+            self.draw_list.push(cmd);
         }
 
         // Restore render_order for next frame reuse.
@@ -1269,6 +1156,199 @@ impl Renderer {
     }
 }
 
+/// Computes the effective clip mode for a node.
+///
+/// If the node has an explicit clip mode (not `None`), that mode is used.
+/// Otherwise, if the node has a non-zero scroll offset, an implicit `Scissor`
+/// clip is applied to prevent scroll content from overflowing.
+/// Returns `ClipMode::None` if neither condition applies.
+#[must_use]
+fn compute_effective_clip_mode(clip_mode: ClipMode, scroll_offset: [f32; 2]) -> ClipMode {
+    if clip_mode != ClipMode::None {
+        clip_mode
+    } else if scroll_offset != [0.0, 0.0] {
+        ClipMode::Scissor
+    } else {
+        ClipMode::None
+    }
+}
+
+/// Collects node IDs from a scene graph in DFS (depth-first, pre-order) traversal order.
+///
+/// Walks each root in order, visiting the node before its children. Invisible
+/// nodes and their entire subtrees are skipped. Returns the node IDs in the
+/// order they would be visited during rendering.
+#[cfg(test)]
+#[must_use]
+fn dfs_traversal_order(scene: &SceneGraph) -> Vec<NodeId> {
+    fn collect(scene: &SceneGraph, node_id: NodeId, result: &mut Vec<NodeId>) {
+        let Some(node) = scene.get(node_id) else {
+            return;
+        };
+        if !node.visible {
+            return;
+        }
+        result.push(node_id);
+        for &child_id in &node.children {
+            collect(scene, child_id, result);
+        }
+    }
+
+    let mut result = Vec::new();
+    for &root_id in scene.roots() {
+        collect(scene, root_id, &mut result);
+    }
+    result
+}
+
+/// Converts render order entries into draw commands.
+///
+/// This is the CPU-side draw list construction logic extracted from `build_draw_list`.
+/// It translates `RenderOrderEntry` items into `DrawCommand` items, inserting
+/// `CopyFramebuffer`/`ApplyBlend` around non-native blend mode draws, and
+/// converting scissor/stencil push/pop entries into the corresponding GPU commands.
+///
+/// The `viewport` tuple is `(width_u32, height_u32)` used for scissor rect clamping.
+#[allow(clippy::too_many_lines)]
+fn build_draw_commands_from_render_order(
+    render_order: &[RenderOrderEntry],
+    viewport: (u32, u32),
+) -> Vec<DrawCommand> {
+    let mut commands = Vec::new();
+    for entry in render_order {
+        match entry {
+            RenderOrderEntry::Rect {
+                instance_start,
+                instance_count,
+                blend,
+                stencil_test,
+            } => {
+                if !blend.is_native() {
+                    commands.push(DrawCommand::CopyFramebuffer);
+                }
+                commands.push(DrawCommand::DrawRects {
+                    instance_start: *instance_start,
+                    instance_count: *instance_count,
+                    blend: *blend,
+                    stencil_test: *stencil_test,
+                });
+                if !blend.is_native() {
+                    commands.push(DrawCommand::ApplyBlend { mode: *blend });
+                }
+            }
+            RenderOrderEntry::Text {
+                pending_start,
+                pending_count,
+                blend,
+                stencil_test,
+                ..
+            } => {
+                if !blend.is_native() {
+                    commands.push(DrawCommand::CopyFramebuffer);
+                }
+                commands.push(DrawCommand::DrawGlyphs {
+                    instance_start: *pending_start,
+                    instance_count: *pending_count,
+                    blend: *blend,
+                    stencil_test: *stencil_test,
+                });
+                if !blend.is_native() {
+                    commands.push(DrawCommand::ApplyBlend { mode: *blend });
+                }
+            }
+            RenderOrderEntry::Image {
+                pending_start,
+                pending_count,
+                blend,
+                stencil_test,
+                ..
+            } => {
+                if !blend.is_native() {
+                    commands.push(DrawCommand::CopyFramebuffer);
+                }
+                commands.push(DrawCommand::DrawImages {
+                    instance_start: *pending_start,
+                    instance_count: *pending_count,
+                    blend: *blend,
+                    stencil_test: *stencil_test,
+                });
+                if !blend.is_native() {
+                    commands.push(DrawCommand::ApplyBlend { mode: *blend });
+                }
+            }
+            RenderOrderEntry::Vector {
+                pending_start,
+                pending_count,
+                blend,
+                stencil_test,
+                ..
+            } => {
+                if !blend.is_native() {
+                    commands.push(DrawCommand::CopyFramebuffer);
+                }
+                commands.push(DrawCommand::DrawVectors {
+                    instance_start: *pending_start,
+                    instance_count: *pending_count,
+                    blend: *blend,
+                    stencil_test: *stencil_test,
+                });
+                if !blend.is_native() {
+                    commands.push(DrawCommand::ApplyBlend { mode: *blend });
+                }
+            }
+            RenderOrderEntry::PushScissor { clip_rect } => {
+                if let Some((x, y, w, h)) = clip_rect.to_scissor_rect(viewport.0, viewport.1) {
+                    commands.push(DrawCommand::SetScissor {
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                    });
+                }
+            }
+            RenderOrderEntry::PopScissor { parent_scissor } => {
+                if let Some(parent) = parent_scissor {
+                    if let Some((x, y, w, h)) = parent.to_scissor_rect(viewport.0, viewport.1) {
+                        commands.push(DrawCommand::SetScissor {
+                            x,
+                            y,
+                            width: w,
+                            height: h,
+                        });
+                    } else {
+                        commands.push(DrawCommand::ResetScissor);
+                    }
+                } else {
+                    commands.push(DrawCommand::ResetScissor);
+                }
+            }
+            RenderOrderEntry::PushStencil {
+                write_instance_start,
+                write_instance_count,
+                new_stencil_ref,
+            } => {
+                commands.push(DrawCommand::StencilWrite {
+                    instance_start: *write_instance_start,
+                    instance_count: *write_instance_count,
+                });
+                commands.push(DrawCommand::SetStencilRef(*new_stencil_ref));
+            }
+            RenderOrderEntry::PopStencil {
+                decrement_instance_start,
+                decrement_instance_count,
+                restored_stencil_ref,
+            } => {
+                commands.push(DrawCommand::StencilDecrement {
+                    instance_start: *decrement_instance_start,
+                    instance_count: *decrement_instance_count,
+                });
+                commands.push(DrawCommand::SetStencilRef(*restored_stencil_ref));
+            }
+        }
+    }
+    commands
+}
+
 /// Creates a `RectInstance` suitable for stencil write/decrement operations.
 ///
 /// The instance represents the clip shape: fill area with no stroke, full opacity,
@@ -1301,7 +1381,12 @@ fn create_stencil_rect_instance(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::float_cmp, clippy::unwrap_used)]
+
     use super::*;
+    use crate::scene::{BoundingBox, FontStyle, TextAlign};
+
+    // --- RendererDescriptor / FrameStats ---
 
     #[test]
     fn renderer_descriptor_defaults() {
@@ -1319,5 +1404,656 @@ mod tests {
         assert_eq!(stats.vector_count, 0);
         assert_eq!(stats.draw_calls, 0);
         assert_eq!(stats.total_nodes_processed, 0);
+    }
+
+    // --- compute_effective_clip_mode ---
+
+    #[test]
+    fn effective_clip_mode_explicit_scissor() {
+        assert_eq!(
+            compute_effective_clip_mode(ClipMode::Scissor, [0.0, 0.0]),
+            ClipMode::Scissor
+        );
+    }
+
+    #[test]
+    fn effective_clip_mode_explicit_stencil() {
+        assert_eq!(
+            compute_effective_clip_mode(ClipMode::Stencil, [0.0, 0.0]),
+            ClipMode::Stencil
+        );
+    }
+
+    #[test]
+    fn effective_clip_mode_explicit_shader_rect() {
+        assert_eq!(
+            compute_effective_clip_mode(ClipMode::ShaderRect, [0.0, 0.0]),
+            ClipMode::ShaderRect
+        );
+    }
+
+    #[test]
+    fn effective_clip_mode_explicit_overrides_scroll() {
+        // Explicit clip mode takes precedence over scroll offset.
+        assert_eq!(
+            compute_effective_clip_mode(ClipMode::Stencil, [10.0, 20.0]),
+            ClipMode::Stencil
+        );
+    }
+
+    #[test]
+    fn effective_clip_mode_scroll_implies_scissor() {
+        assert_eq!(
+            compute_effective_clip_mode(ClipMode::None, [0.0, 5.0]),
+            ClipMode::Scissor
+        );
+    }
+
+    #[test]
+    fn effective_clip_mode_scroll_x_only() {
+        assert_eq!(
+            compute_effective_clip_mode(ClipMode::None, [3.0, 0.0]),
+            ClipMode::Scissor
+        );
+    }
+
+    #[test]
+    fn effective_clip_mode_no_clip_no_scroll() {
+        assert_eq!(
+            compute_effective_clip_mode(ClipMode::None, [0.0, 0.0]),
+            ClipMode::None
+        );
+    }
+
+    // --- create_stencil_rect_instance ---
+
+    fn make_frame_node(x: f32, y: f32, w: f32, h: f32, corner_radius: [f32; 4]) -> SceneNode {
+        SceneNode::new(
+            NodeId::new(),
+            "test_frame".to_string(),
+            SceneNodeKind::Frame { corner_radius },
+            BoundingBox::new(x, y, w, h),
+        )
+    }
+
+    #[test]
+    fn stencil_instance_from_frame_node() {
+        let node = make_frame_node(10.0, 20.0, 100.0, 50.0, [4.0, 8.0, 12.0, 16.0]);
+        let clip = ClipRect::new(0.0, 0.0, 200.0, 200.0);
+        let inst = create_stencil_rect_instance(&node, clip);
+        assert!(inst.is_some());
+
+        let inst = inst.unwrap();
+        assert_eq!(inst.pos, [10.0, 20.0]);
+        assert_eq!(inst.size, [100.0, 50.0]);
+        assert_eq!(inst.fill_color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(inst.stroke_color, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(inst.stroke_width_opacity, [0.0, 1.0]);
+        assert_eq!(inst.corner_radii, [4.0, 8.0, 12.0, 16.0]);
+        assert_eq!(inst.clip_rect, clip.to_array());
+    }
+
+    #[test]
+    fn stencil_instance_from_group_node() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "group".to_string(),
+            SceneNodeKind::Group,
+            BoundingBox::new(0.0, 0.0, 200.0, 200.0),
+        );
+        let inst = create_stencil_rect_instance(&node, ClipRect::INFINITE);
+        assert!(inst.is_some());
+        assert_eq!(inst.unwrap().corner_radii, [0.0; 4]);
+    }
+
+    #[test]
+    fn stencil_instance_from_text_node_returns_none() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "text".to_string(),
+            SceneNodeKind::Text {
+                content: "hello".to_string(),
+                font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 20.0),
+        );
+        assert!(create_stencil_rect_instance(&node, ClipRect::INFINITE).is_none());
+    }
+
+    #[test]
+    fn stencil_instance_from_image_node_returns_none() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "img".to_string(),
+            SceneNodeKind::Image {
+                asset_ref: "test.png".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+        assert!(create_stencil_rect_instance(&node, ClipRect::INFINITE).is_none());
+    }
+
+    #[test]
+    fn stencil_instance_from_vector_node_returns_none() {
+        let node = SceneNode::new(
+            NodeId::new(),
+            "vec".to_string(),
+            SceneNodeKind::Vector {
+                path_data: "M0 0 L10 10".to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 24.0, 24.0),
+        );
+        assert!(create_stencil_rect_instance(&node, ClipRect::INFINITE).is_none());
+    }
+
+    #[test]
+    fn stencil_instance_uses_shader_clip_rect() {
+        let node = make_frame_node(0.0, 0.0, 50.0, 50.0, [0.0; 4]);
+        let clip = ClipRect::new(5.0, 10.0, 45.0, 40.0);
+        let inst = create_stencil_rect_instance(&node, clip).unwrap();
+        assert_eq!(inst.clip_rect, [5.0, 10.0, 45.0, 40.0]);
+    }
+
+    #[test]
+    fn stencil_instance_gradient_fields_zeroed() {
+        let node = make_frame_node(0.0, 0.0, 50.0, 50.0, [0.0; 4]);
+        let inst = create_stencil_rect_instance(&node, ClipRect::INFINITE).unwrap();
+        assert_eq!(inst.gradient_meta, [0.0; 4]);
+        assert_eq!(inst.gradient_points, [0.0; 4]);
+        assert_eq!(inst.gradient_stops, [0.0; 20]);
+    }
+
+    // --- dfs_traversal_order ---
+
+    #[test]
+    fn dfs_empty_scene() {
+        let scene = SceneGraph::new();
+        let order = dfs_traversal_order(&scene);
+        assert!(order.is_empty());
+    }
+
+    #[test]
+    fn dfs_single_root() {
+        let mut scene = SceneGraph::new();
+        let node = make_frame_node(0.0, 0.0, 100.0, 100.0, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let order = dfs_traversal_order(&scene);
+        assert_eq!(order, vec![id]);
+    }
+
+    #[test]
+    fn dfs_multiple_roots_in_insertion_order() {
+        let mut scene = SceneGraph::new();
+        let n1 = make_frame_node(0.0, 0.0, 100.0, 100.0, [0.0; 4]);
+        let n2 = make_frame_node(200.0, 0.0, 100.0, 100.0, [0.0; 4]);
+        let n3 = make_frame_node(400.0, 0.0, 100.0, 100.0, [0.0; 4]);
+        let id1 = n1.id;
+        let id2 = n2.id;
+        let id3 = n3.id;
+        scene.add_root(n1);
+        scene.add_root(n2);
+        scene.add_root(n3);
+
+        let order = dfs_traversal_order(&scene);
+        assert_eq!(order, vec![id1, id2, id3]);
+    }
+
+    #[test]
+    fn dfs_parent_before_children() {
+        let mut scene = SceneGraph::new();
+        let parent = make_frame_node(0.0, 0.0, 200.0, 200.0, [0.0; 4]);
+        let child1 = make_frame_node(10.0, 10.0, 50.0, 50.0, [0.0; 4]);
+        let child2 = make_frame_node(70.0, 10.0, 50.0, 50.0, [0.0; 4]);
+        let pid = parent.id;
+        let cid1 = child1.id;
+        let cid2 = child2.id;
+
+        scene.add_root(parent);
+        scene.add_child(pid, child1);
+        scene.add_child(pid, child2);
+
+        let order = dfs_traversal_order(&scene);
+        assert_eq!(order, vec![pid, cid1, cid2]);
+    }
+
+    #[test]
+    fn dfs_deep_hierarchy() {
+        let mut scene = SceneGraph::new();
+        let root = make_frame_node(0.0, 0.0, 500.0, 500.0, [0.0; 4]);
+        let mid = make_frame_node(10.0, 10.0, 200.0, 200.0, [0.0; 4]);
+        let leaf = make_frame_node(20.0, 20.0, 50.0, 50.0, [0.0; 4]);
+        let root_id = root.id;
+        let mid_id = mid.id;
+        let leaf_id = leaf.id;
+
+        scene.add_root(root);
+        scene.add_child(root_id, mid);
+        scene.add_child(mid_id, leaf);
+
+        let order = dfs_traversal_order(&scene);
+        assert_eq!(order, vec![root_id, mid_id, leaf_id]);
+    }
+
+    #[test]
+    fn dfs_skips_invisible_nodes_and_subtrees() {
+        let mut scene = SceneGraph::new();
+        let root = make_frame_node(0.0, 0.0, 500.0, 500.0, [0.0; 4]);
+        let visible_child = make_frame_node(10.0, 10.0, 100.0, 100.0, [0.0; 4]);
+        let mut invisible_child = make_frame_node(120.0, 10.0, 100.0, 100.0, [0.0; 4]);
+        invisible_child.visible = false;
+        let grandchild_of_invisible = make_frame_node(130.0, 20.0, 50.0, 50.0, [0.0; 4]);
+
+        let root_id = root.id;
+        let vis_id = visible_child.id;
+        let invis_id = invisible_child.id;
+        let gc_id = grandchild_of_invisible.id;
+
+        scene.add_root(root);
+        scene.add_child(root_id, visible_child);
+        scene.add_child(root_id, invisible_child);
+        scene.add_child(invis_id, grandchild_of_invisible);
+
+        let order = dfs_traversal_order(&scene);
+        assert_eq!(order, vec![root_id, vis_id]);
+        assert!(!order.contains(&invis_id));
+        assert!(!order.contains(&gc_id));
+    }
+
+    #[test]
+    fn dfs_mixed_roots_and_children() {
+        let mut scene = SceneGraph::new();
+        let r1 = make_frame_node(0.0, 0.0, 100.0, 100.0, [0.0; 4]);
+        let r1c1 = make_frame_node(10.0, 10.0, 30.0, 30.0, [0.0; 4]);
+        let r2 = make_frame_node(200.0, 0.0, 100.0, 100.0, [0.0; 4]);
+        let r2c1 = make_frame_node(210.0, 10.0, 30.0, 30.0, [0.0; 4]);
+        let r2c2 = make_frame_node(250.0, 10.0, 30.0, 30.0, [0.0; 4]);
+
+        let r1_id = r1.id;
+        let r1c1_id = r1c1.id;
+        let r2_id = r2.id;
+        let r2c1_id = r2c1.id;
+        let r2c2_id = r2c2.id;
+
+        scene.add_root(r1);
+        scene.add_child(r1_id, r1c1);
+        scene.add_root(r2);
+        scene.add_child(r2_id, r2c1);
+        scene.add_child(r2_id, r2c2);
+
+        let order = dfs_traversal_order(&scene);
+        assert_eq!(order, vec![r1_id, r1c1_id, r2_id, r2c1_id, r2c2_id]);
+    }
+
+    // --- build_draw_commands_from_render_order ---
+
+    #[test]
+    fn draw_commands_empty_render_order() {
+        let commands = build_draw_commands_from_render_order(&[], (1920, 1080));
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn draw_commands_single_rect_normal_blend() {
+        let entries = vec![RenderOrderEntry::Rect {
+            instance_start: 0,
+            instance_count: 3,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::DrawRects {
+                instance_start: 0,
+                instance_count: 3,
+                blend: BlendMode::Normal,
+                stencil_test: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_rect_non_native_blend_wraps_with_copy_and_apply() {
+        let entries = vec![RenderOrderEntry::Rect {
+            instance_start: 0,
+            instance_count: 1,
+            blend: BlendMode::Multiply,
+            stencil_test: false,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 3);
+        assert!(matches!(&commands[0], DrawCommand::CopyFramebuffer));
+        assert!(matches!(
+            &commands[1],
+            DrawCommand::DrawRects {
+                blend: BlendMode::Multiply,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &commands[2],
+            DrawCommand::ApplyBlend {
+                mode: BlendMode::Multiply
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_text_normal_blend() {
+        let entries = vec![RenderOrderEntry::Text {
+            pending_start: 5,
+            pending_count: 10,
+            blend: BlendMode::Normal,
+            stencil_test: true,
+            shader_clip_rect: ClipRect::INFINITE,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::DrawGlyphs {
+                instance_start: 5,
+                instance_count: 10,
+                blend: BlendMode::Normal,
+                stencil_test: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_image_non_native_blend() {
+        let entries = vec![RenderOrderEntry::Image {
+            pending_start: 0,
+            pending_count: 2,
+            blend: BlendMode::Screen,
+            stencil_test: false,
+            shader_clip_rect: ClipRect::INFINITE,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 3);
+        assert!(matches!(&commands[0], DrawCommand::CopyFramebuffer));
+        assert!(matches!(
+            &commands[1],
+            DrawCommand::DrawImages {
+                blend: BlendMode::Screen,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &commands[2],
+            DrawCommand::ApplyBlend {
+                mode: BlendMode::Screen
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_vector_add_blend_is_native() {
+        let entries = vec![RenderOrderEntry::Vector {
+            pending_start: 0,
+            pending_count: 4,
+            blend: BlendMode::Add,
+            stencil_test: false,
+            shader_clip_rect: ClipRect::INFINITE,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        // Add is native, so no CopyFramebuffer/ApplyBlend.
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::DrawVectors {
+                blend: BlendMode::Add,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_push_scissor() {
+        let entries = vec![RenderOrderEntry::PushScissor {
+            clip_rect: ClipRect::new(10.0, 20.0, 110.0, 120.0),
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::SetScissor {
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 100,
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_push_scissor_outside_viewport_emits_nothing() {
+        let entries = vec![RenderOrderEntry::PushScissor {
+            clip_rect: ClipRect::new(-100.0, -100.0, -10.0, -10.0),
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn draw_commands_pop_scissor_with_parent() {
+        let entries = vec![RenderOrderEntry::PopScissor {
+            parent_scissor: Some(ClipRect::new(0.0, 0.0, 500.0, 500.0)),
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::SetScissor {
+                x: 0,
+                y: 0,
+                width: 500,
+                height: 500,
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_pop_scissor_no_parent_resets() {
+        let entries = vec![RenderOrderEntry::PopScissor {
+            parent_scissor: None,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(&commands[0], DrawCommand::ResetScissor));
+    }
+
+    #[test]
+    fn draw_commands_pop_scissor_invalid_parent_resets() {
+        // Parent scissor rect is outside viewport, so to_scissor_rect returns None.
+        let entries = vec![RenderOrderEntry::PopScissor {
+            parent_scissor: Some(ClipRect::new(-200.0, -200.0, -100.0, -100.0)),
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(&commands[0], DrawCommand::ResetScissor));
+    }
+
+    #[test]
+    fn draw_commands_push_stencil() {
+        let entries = vec![RenderOrderEntry::PushStencil {
+            write_instance_start: 5,
+            write_instance_count: 1,
+            new_stencil_ref: 2,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 2);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::StencilWrite {
+                instance_start: 5,
+                instance_count: 1,
+            }
+        ));
+        assert!(matches!(&commands[1], DrawCommand::SetStencilRef(2)));
+    }
+
+    #[test]
+    fn draw_commands_pop_stencil() {
+        let entries = vec![RenderOrderEntry::PopStencil {
+            decrement_instance_start: 10,
+            decrement_instance_count: 1,
+            restored_stencil_ref: 0,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 2);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::StencilDecrement {
+                instance_start: 10,
+                instance_count: 1,
+            }
+        ));
+        assert!(matches!(&commands[1], DrawCommand::SetStencilRef(0)));
+    }
+
+    #[test]
+    fn draw_commands_complex_sequence() {
+        // Simulates: scissor push, rect, text, scissor pop, stencil push/pop.
+        let entries = vec![
+            RenderOrderEntry::PushScissor {
+                clip_rect: ClipRect::new(0.0, 0.0, 800.0, 600.0),
+            },
+            RenderOrderEntry::Rect {
+                instance_start: 0,
+                instance_count: 1,
+                blend: BlendMode::Normal,
+                stencil_test: false,
+            },
+            RenderOrderEntry::Text {
+                pending_start: 0,
+                pending_count: 5,
+                blend: BlendMode::Normal,
+                stencil_test: false,
+                shader_clip_rect: ClipRect::INFINITE,
+            },
+            RenderOrderEntry::PopScissor {
+                parent_scissor: None,
+            },
+            RenderOrderEntry::PushStencil {
+                write_instance_start: 1,
+                write_instance_count: 1,
+                new_stencil_ref: 1,
+            },
+            RenderOrderEntry::Rect {
+                instance_start: 2,
+                instance_count: 1,
+                blend: BlendMode::Normal,
+                stencil_test: true,
+            },
+            RenderOrderEntry::PopStencil {
+                decrement_instance_start: 3,
+                decrement_instance_count: 1,
+                restored_stencil_ref: 0,
+            },
+        ];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        // SetScissor, DrawRects, DrawGlyphs, ResetScissor,
+        // StencilWrite, SetStencilRef(1), DrawRects, StencilDecrement, SetStencilRef(0)
+        assert_eq!(commands.len(), 9);
+        assert!(matches!(&commands[0], DrawCommand::SetScissor { .. }));
+        assert!(matches!(&commands[1], DrawCommand::DrawRects { .. }));
+        assert!(matches!(&commands[2], DrawCommand::DrawGlyphs { .. }));
+        assert!(matches!(&commands[3], DrawCommand::ResetScissor));
+        assert!(matches!(&commands[4], DrawCommand::StencilWrite { .. }));
+        assert!(matches!(&commands[5], DrawCommand::SetStencilRef(1)));
+        assert!(matches!(
+            &commands[6],
+            DrawCommand::DrawRects {
+                stencil_test: true,
+                ..
+            }
+        ));
+        assert!(matches!(&commands[7], DrawCommand::StencilDecrement { .. }));
+        assert!(matches!(&commands[8], DrawCommand::SetStencilRef(0)));
+    }
+
+    #[test]
+    fn draw_commands_mixed_blend_modes() {
+        // Normal rect, then Multiply rect, then Normal rect.
+        let entries = vec![
+            RenderOrderEntry::Rect {
+                instance_start: 0,
+                instance_count: 1,
+                blend: BlendMode::Normal,
+                stencil_test: false,
+            },
+            RenderOrderEntry::Rect {
+                instance_start: 1,
+                instance_count: 1,
+                blend: BlendMode::Multiply,
+                stencil_test: false,
+            },
+            RenderOrderEntry::Rect {
+                instance_start: 2,
+                instance_count: 1,
+                blend: BlendMode::Normal,
+                stencil_test: false,
+            },
+        ];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        // DrawRects(Normal), CopyFramebuffer, DrawRects(Multiply), ApplyBlend, DrawRects(Normal)
+        assert_eq!(commands.len(), 5);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::DrawRects {
+                blend: BlendMode::Normal,
+                ..
+            }
+        ));
+        assert!(matches!(&commands[1], DrawCommand::CopyFramebuffer));
+        assert!(matches!(
+            &commands[2],
+            DrawCommand::DrawRects {
+                blend: BlendMode::Multiply,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &commands[3],
+            DrawCommand::ApplyBlend {
+                mode: BlendMode::Multiply
+            }
+        ));
+        assert!(matches!(
+            &commands[4],
+            DrawCommand::DrawRects {
+                blend: BlendMode::Normal,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn draw_commands_stencil_test_flag_preserved() {
+        let entries = vec![RenderOrderEntry::Rect {
+            instance_start: 0,
+            instance_count: 1,
+            blend: BlendMode::Normal,
+            stencil_test: true,
+        }];
+        let commands = build_draw_commands_from_render_order(&entries, (1920, 1080));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::DrawRects {
+                stencil_test: true,
+                ..
+            }
+        ));
     }
 }

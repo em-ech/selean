@@ -25,17 +25,35 @@ pub struct CachedVector {
     pub atlas_region: AtlasRegion,
 }
 
+/// Default maximum number of entries in a `VectorCache`.
+const DEFAULT_MAX_VECTOR_ENTRIES: usize = 1024;
+
 /// Maps vector cache keys to atlas locations.
+///
+/// When the cache reaches its maximum capacity, all entries are cleared before
+/// inserting the new entry. This simple eviction strategy works well with
+/// atlas textures (the atlas is rebuilt from scratch after a clear).
 pub struct VectorCache {
     entries: HashMap<VectorCacheKey, CachedVector>,
+    max_entries: usize,
 }
 
 impl VectorCache {
-    /// Creates a new empty vector cache.
+    /// Creates a new empty vector cache with the default maximum capacity (1024).
     #[must_use]
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            max_entries: DEFAULT_MAX_VECTOR_ENTRIES,
+        }
+    }
+
+    /// Creates a new empty vector cache with the given maximum capacity.
+    #[must_use]
+    pub fn with_max_entries(max: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries: max,
         }
     }
 
@@ -46,7 +64,13 @@ impl VectorCache {
     }
 
     /// Inserts a vector into the cache.
+    ///
+    /// If the cache is at capacity, all existing entries are cleared before
+    /// inserting. This ensures the cache never exceeds its maximum size.
     pub fn insert(&mut self, key: VectorCacheKey, vector: CachedVector) {
+        if self.entries.len() >= self.max_entries {
+            self.entries.clear();
+        }
         self.entries.insert(key, vector);
     }
 
@@ -66,6 +90,12 @@ impl VectorCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Returns the maximum number of entries the cache will hold before evicting.
+    #[must_use]
+    pub fn max_entries(&self) -> usize {
+        self.max_entries
     }
 
     /// Removes all cached vectors.
@@ -199,5 +229,71 @@ mod tests {
     fn quantize_clamps_to_512() {
         assert_eq!(quantize_dimension(1000.0), 512);
         assert_eq!(quantize_dimension(513.0), 512);
+    }
+
+    fn make_key(id: u32) -> VectorCacheKey {
+        VectorCacheKey {
+            path_data: format!("M 0 0 L {id} {id}"),
+            width: 64,
+            height: 64,
+        }
+    }
+
+    fn make_cached() -> CachedVector {
+        CachedVector {
+            atlas_region: AtlasRegion {
+                x: 0,
+                y: 0,
+                width: 64,
+                height: 64,
+            },
+        }
+    }
+
+    #[test]
+    fn eviction_clears_when_full() {
+        let mut cache = VectorCache::with_max_entries(3);
+
+        cache.insert(make_key(1), make_cached());
+        cache.insert(make_key(2), make_cached());
+        cache.insert(make_key(3), make_cached());
+        assert_eq!(cache.len(), 3);
+
+        // Inserting a 4th entry should clear the cache first, then insert.
+        cache.insert(make_key(4), make_cached());
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains(&make_key(4)));
+        assert!(!cache.contains(&make_key(1)));
+        assert!(!cache.contains(&make_key(2)));
+        assert!(!cache.contains(&make_key(3)));
+    }
+
+    #[test]
+    fn with_max_entries_constructor() {
+        let cache = VectorCache::with_max_entries(200);
+        assert_eq!(cache.max_entries(), 200);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn insert_at_capacity_minus_one_does_not_evict() {
+        let mut cache = VectorCache::with_max_entries(3);
+
+        cache.insert(make_key(1), make_cached());
+        cache.insert(make_key(2), make_cached());
+        assert_eq!(cache.len(), 2);
+
+        // Inserting a 3rd entry (capacity minus one -> capacity) should NOT evict.
+        cache.insert(make_key(3), make_cached());
+        assert_eq!(cache.len(), 3);
+        assert!(cache.contains(&make_key(1)));
+        assert!(cache.contains(&make_key(2)));
+        assert!(cache.contains(&make_key(3)));
+    }
+
+    #[test]
+    fn default_max_entries() {
+        let cache = VectorCache::new();
+        assert_eq!(cache.max_entries(), 1024);
     }
 }

@@ -604,4 +604,292 @@ mod tests {
         // Should be: DrawRects(Normal), CopyFramebuffer, DrawRects(Screen), ApplyBlend, DrawRects(Normal)
         assert_eq!(list.len(), 5);
     }
+
+    // --- Additional edge case tests ---
+
+    #[test]
+    fn merge_adjacent_vectors_contiguous() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawVectors {
+            instance_start: 0,
+            instance_count: 2,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawVectors {
+            instance_start: 2,
+            instance_count: 3,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 1);
+        match &list.commands()[0] {
+            DrawCommand::DrawVectors {
+                instance_start,
+                instance_count,
+                ..
+            } => {
+                assert_eq!(*instance_start, 0);
+                assert_eq!(*instance_count, 5);
+            }
+            other => panic!("Expected DrawVectors, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_adjacent_images_contiguous() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawImages {
+            instance_start: 10,
+            instance_count: 5,
+            blend: BlendMode::Add,
+            stencil_test: true,
+        });
+        list.push(DrawCommand::DrawImages {
+            instance_start: 15,
+            instance_count: 3,
+            blend: BlendMode::Add,
+            stencil_test: true,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 1);
+        match &list.commands()[0] {
+            DrawCommand::DrawImages {
+                instance_start,
+                instance_count,
+                blend,
+                stencil_test,
+            } => {
+                assert_eq!(*instance_start, 10);
+                assert_eq!(*instance_count, 8);
+                assert_eq!(*blend, BlendMode::Add);
+                assert!(*stencil_test);
+            }
+            other => panic!("Expected DrawImages, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_merge_across_stencil_decrement() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 2,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::StencilDecrement {
+            instance_start: 0,
+            instance_count: 1,
+        });
+        list.push(DrawCommand::DrawRects {
+            instance_start: 2,
+            instance_count: 3,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn no_merge_across_set_stencil_ref() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawGlyphs {
+            instance_start: 0,
+            instance_count: 5,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::SetStencilRef(1));
+        list.push(DrawCommand::DrawGlyphs {
+            instance_start: 5,
+            instance_count: 3,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn no_merge_across_reset_scissor() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 2,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::ResetScissor);
+        list.push(DrawCommand::DrawRects {
+            instance_start: 2,
+            instance_count: 1,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn merge_single_command_is_noop() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 5,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 1);
+        match &list.commands()[0] {
+            DrawCommand::DrawRects {
+                instance_start,
+                instance_count,
+                ..
+            } => {
+                assert_eq!(*instance_start, 0);
+                assert_eq!(*instance_count, 5);
+            }
+            other => panic!("Expected DrawRects, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_four_contiguous_same_type() {
+        let mut list = DrawList::new();
+        for i in 0..4 {
+            list.push(DrawCommand::DrawRects {
+                instance_start: i * 3,
+                instance_count: 3,
+                blend: BlendMode::Normal,
+                stencil_test: false,
+            });
+        }
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 1);
+        match &list.commands()[0] {
+            DrawCommand::DrawRects {
+                instance_start,
+                instance_count,
+                ..
+            } => {
+                assert_eq!(*instance_start, 0);
+                assert_eq!(*instance_count, 12);
+            }
+            other => panic!("Expected DrawRects, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_preserves_non_mergeable_commands_order() {
+        let mut list = DrawList::new();
+        list.push(DrawCommand::SetScissor {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 200,
+        });
+        list.push(DrawCommand::SetStencilRef(1));
+        list.push(DrawCommand::ResetScissor);
+
+        list.merge_adjacent();
+        // No merge happens, all three remain.
+        assert_eq!(list.len(), 3);
+        assert!(matches!(
+            &list.commands()[0],
+            DrawCommand::SetScissor { x: 10, .. }
+        ));
+        assert!(matches!(&list.commands()[1], DrawCommand::SetStencilRef(1)));
+        assert!(matches!(&list.commands()[2], DrawCommand::ResetScissor));
+    }
+
+    #[test]
+    fn merge_alternating_types_no_merge() {
+        let mut list = DrawList::new();
+        // Alternating rect/glyph, even though contiguous within each type.
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 1,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawGlyphs {
+            instance_start: 0,
+            instance_count: 1,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawRects {
+            instance_start: 1,
+            instance_count: 1,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawGlyphs {
+            instance_start: 1,
+            instance_count: 1,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        assert_eq!(list.len(), 4);
+    }
+
+    #[test]
+    fn merge_partial_sequence() {
+        // Two mergeable, one different, two more mergeable.
+        let mut list = DrawList::new();
+        list.push(DrawCommand::DrawRects {
+            instance_start: 0,
+            instance_count: 2,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawRects {
+            instance_start: 2,
+            instance_count: 3,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawGlyphs {
+            instance_start: 0,
+            instance_count: 4,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawImages {
+            instance_start: 0,
+            instance_count: 1,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+        list.push(DrawCommand::DrawImages {
+            instance_start: 1,
+            instance_count: 2,
+            blend: BlendMode::Normal,
+            stencil_test: false,
+        });
+
+        list.merge_adjacent();
+        // DrawRects(0..5), DrawGlyphs(0..4), DrawImages(0..3)
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn default_creates_empty_list() {
+        let list = DrawList::default();
+        assert!(list.is_empty());
+        assert_eq!(list.len(), 0);
+    }
 }

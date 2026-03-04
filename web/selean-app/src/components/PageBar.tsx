@@ -29,8 +29,8 @@ export function PageBar({
       if (parsed.length > 0 && !activePageId) {
         setActivePageId(parsed[0].id);
       }
-    } catch {
-      // WASM not ready
+    } catch (e) {
+      console.warn("page-bar:get-pages failed", e);
     }
   }, [editorRef, refreshTick, activePageId]);
 

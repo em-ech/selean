@@ -150,7 +150,7 @@ impl Default for ClipStack {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp, clippy::unwrap_used)]
+    #![allow(clippy::float_cmp, clippy::unwrap_used, clippy::cast_sign_loss)]
 
     use super::*;
 
@@ -368,5 +368,152 @@ mod tests {
         let base = stack.current_scissor().unwrap();
         assert_eq!(base.min_x, 0.0);
         assert_eq!(base.max_x, 1000.0);
+    }
+
+    // --- Additional edge case tests ---
+
+    #[test]
+    fn disjoint_scissor_produces_empty_intersection() {
+        let mut stack = ClipStack::new();
+        stack.push_scissor(ClipRect::new(0.0, 0.0, 100.0, 100.0));
+        stack.push_scissor(ClipRect::new(200.0, 200.0, 300.0, 300.0));
+
+        let top = stack.current_scissor().unwrap();
+        // Intersection of non-overlapping rects is empty.
+        assert!(top.is_empty());
+    }
+
+    #[test]
+    fn disjoint_shader_rect_produces_empty_intersection() {
+        let mut stack = ClipStack::new();
+        stack.push_shader_rect(ClipRect::new(0.0, 0.0, 50.0, 50.0));
+        stack.push_shader_rect(ClipRect::new(100.0, 100.0, 200.0, 200.0));
+
+        let current = stack.current_shader_rect();
+        assert!(current.is_empty());
+    }
+
+    #[test]
+    fn shader_rect_intersect_with_infinite_parent() {
+        // First push is always stored directly (no prior parent to intersect with).
+        let mut stack = ClipStack::new();
+        let rect = ClipRect::new(50.0, 50.0, 150.0, 150.0);
+        stack.push_shader_rect(rect);
+
+        let current = stack.current_shader_rect();
+        assert_eq!(current.min_x, 50.0);
+        assert_eq!(current.min_y, 50.0);
+        assert_eq!(current.max_x, 150.0);
+        assert_eq!(current.max_y, 150.0);
+    }
+
+    #[test]
+    fn resolve_captures_all_three_modes_independently() {
+        let mut stack = ClipStack::new();
+        let scissor = ClipRect::new(10.0, 10.0, 500.0, 500.0);
+        let shader = ClipRect::new(20.0, 20.0, 400.0, 400.0);
+
+        stack.push_scissor(scissor);
+        stack.push_stencil(NodeId::new());
+        stack.push_stencil(NodeId::new());
+        stack.push_shader_rect(shader);
+
+        let state = stack.resolve();
+        assert_eq!(state.scissor_rect, Some(scissor));
+        assert_eq!(state.stencil_ref, 2);
+        assert_eq!(state.shader_clip_rect, shader);
+    }
+
+    #[test]
+    fn effective_clip_rect_with_disjoint_scissor_and_shader() {
+        let mut stack = ClipStack::new();
+        stack.push_scissor(ClipRect::new(0.0, 0.0, 100.0, 100.0));
+        stack.push_shader_rect(ClipRect::new(200.0, 200.0, 300.0, 300.0));
+
+        let effective = stack.effective_clip_rect();
+        assert!(effective.is_empty());
+    }
+
+    #[test]
+    fn clear_after_deep_nesting_returns_to_defaults() {
+        let mut stack = ClipStack::new();
+        // Push multiple levels of each type.
+        for _ in 0..5 {
+            stack.push_scissor(ClipRect::new(0.0, 0.0, 100.0, 100.0));
+            stack.push_stencil(NodeId::new());
+            stack.push_shader_rect(ClipRect::new(0.0, 0.0, 100.0, 100.0));
+        }
+
+        stack.clear();
+        let state = stack.resolve();
+        assert_eq!(state.scissor_rect, None);
+        assert_eq!(state.stencil_ref, 0);
+        assert_eq!(state.shader_clip_rect, ClipRect::INFINITE);
+    }
+
+    #[test]
+    fn nested_shader_rect_fully_contained() {
+        let mut stack = ClipStack::new();
+        stack.push_shader_rect(ClipRect::new(0.0, 0.0, 400.0, 400.0));
+        stack.push_shader_rect(ClipRect::new(50.0, 50.0, 350.0, 350.0));
+        stack.push_shader_rect(ClipRect::new(100.0, 100.0, 300.0, 300.0));
+
+        let current = stack.current_shader_rect();
+        assert_eq!(current.min_x, 100.0);
+        assert_eq!(current.min_y, 100.0);
+        assert_eq!(current.max_x, 300.0);
+        assert_eq!(current.max_y, 300.0);
+
+        // Pop back to second level.
+        stack.pop_shader_rect();
+        let current = stack.current_shader_rect();
+        assert_eq!(current.min_x, 50.0);
+        assert_eq!(current.max_x, 350.0);
+    }
+
+    #[test]
+    fn stencil_ref_matches_push_count() {
+        let mut stack = ClipStack::new();
+        for i in 0..10 {
+            stack.push_stencil(NodeId::new());
+            assert_eq!(stack.stencil_ref(), (i + 1) as u32);
+        }
+        for i in (0..10).rev() {
+            stack.pop_stencil();
+            assert_eq!(stack.stencil_ref(), i as u32);
+        }
+    }
+
+    #[test]
+    fn default_creates_empty_stack() {
+        let stack = ClipStack::default();
+        assert_eq!(stack.current_scissor(), None);
+        assert_eq!(stack.stencil_ref(), 0);
+        assert_eq!(stack.current_shader_rect(), ClipRect::INFINITE);
+    }
+
+    #[test]
+    fn effective_clip_rect_scissor_only_no_shader() {
+        let mut stack = ClipStack::new();
+        stack.push_scissor(ClipRect::new(10.0, 20.0, 300.0, 400.0));
+
+        let effective = stack.effective_clip_rect();
+        // Without shader rect, effective = scissor intersected with INFINITE = scissor.
+        assert_eq!(effective.min_x, 10.0);
+        assert_eq!(effective.min_y, 20.0);
+        assert_eq!(effective.max_x, 300.0);
+        assert_eq!(effective.max_y, 400.0);
+    }
+
+    #[test]
+    fn multiple_pops_below_zero_do_not_panic() {
+        // Popping an empty stack should be safe (Vec::pop on empty returns None).
+        let mut stack = ClipStack::new();
+        stack.pop_scissor();
+        stack.pop_stencil();
+        stack.pop_shader_rect();
+        assert_eq!(stack.current_scissor(), None);
+        assert_eq!(stack.stencil_ref(), 0);
+        assert_eq!(stack.current_shader_rect(), ClipRect::INFINITE);
     }
 }

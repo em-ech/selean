@@ -17,6 +17,7 @@ import { CollabContext } from "./collab/CollabContext";
 import { useAutoSave } from "./hooks/useAutoSave";
 import { useCollabSession } from "./hooks/useCollabSession";
 import { useCreationTool } from "./hooks/useCreationTool";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMoveDrag } from "./hooks/useMoveDrag";
 import { useSeleanEditor } from "./hooks/useSeleanEditor";
 import { useSelection } from "./hooks/useSelection";
@@ -29,9 +30,6 @@ const REFRESH_EVENT_TYPES = new Set([
   "Clicked",
   "ClickedCanvas",
 ]);
-
-/** Tags that should suppress single-key shortcuts. */
-const INPUT_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 
 export function App() {
   const [undoRedoTick, setUndoRedoTick] = useState(0);
@@ -130,8 +128,8 @@ export function App() {
           );
           onSceneChanged();
         }
-      } catch {
-        // Image read failed
+      } catch (e) {
+        console.warn("image upload failed", e);
       }
       e.target.value = "";
     },
@@ -213,8 +211,8 @@ export function App() {
                     return;
                   }
                 }
-              } catch {
-                // parse failure
+              } catch (e) {
+                console.warn("double-click node parse failed", e);
               }
             }
             lastClickNodeIdRef.current = clickedId;
@@ -246,325 +244,20 @@ export function App() {
     setUndoRedoTick((t) => t + 1);
   }, [editorRef, onSceneChanged]);
 
-  // Consolidated keyboard shortcuts
-  useEffect(() => {
-    if (status !== "ready") return;
+  const handleUndoRedoTick = useCallback(() => {
+    setUndoRedoTick((t) => t + 1);
+  }, []);
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const editor = editorRef.current;
-      if (!editor) return;
-
-      const tag = (e.target as HTMLElement).tagName;
-      const isInputFocused = INPUT_TAGS.has(tag);
-      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
-
-      // Undo: Cmd+Z
-      if (isCtrlOrMeta && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        editor.undo();
-        onSceneChanged();
-        setUndoRedoTick((t) => t + 1);
-        return;
-      }
-
-      // Redo: Cmd+Shift+Z or Cmd+Y
-      if (
-        (isCtrlOrMeta && e.key === "z" && e.shiftKey) ||
-        (isCtrlOrMeta && e.key === "y")
-      ) {
-        e.preventDefault();
-        editor.redo();
-        onSceneChanged();
-        setUndoRedoTick((t) => t + 1);
-        return;
-      }
-
-      // Zoom: Cmd+= (zoom in)
-      if (isCtrlOrMeta && (e.key === "=" || e.key === "+")) {
-        e.preventDefault();
-        editor.zoom_by(1.25);
-        onSceneChanged();
-        return;
-      }
-
-      // Zoom: Cmd+- (zoom out)
-      if (isCtrlOrMeta && e.key === "-") {
-        e.preventDefault();
-        editor.zoom_by(0.8);
-        onSceneChanged();
-        return;
-      }
-
-      // Zoom: Cmd+0 (fit to all)
-      if (isCtrlOrMeta && e.key === "0") {
-        e.preventDefault();
-        editor.fit_to_all();
-        onSceneChanged();
-        return;
-      }
-
-      // Zoom: Cmd+1 (zoom to 100%)
-      if (isCtrlOrMeta && e.key === "1") {
-        e.preventDefault();
-        editor.zoom_to(1.0);
-        onSceneChanged();
-        return;
-      }
-
-      // Skip remaining shortcuts when focused on text input
-      if (isInputFocused) return;
-
-      // Delete / Backspace: delete selected nodes
-      if (e.key === "Delete" || e.key === "Backspace") {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          for (const id of ids) {
-            editor.execute_tool_call(
-              "delete_node",
-              JSON.stringify({ node_id: id }),
-            );
-          }
-          if (ids.length > 0) onSceneChanged();
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+C: Copy
-      if (isCtrlOrMeta && e.key === "c") {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length > 0) {
-            const nodeJson = editor.get_node_json(ids[0]);
-            if (nodeJson !== "null") {
-              clipboardRef.current = JSON.parse(nodeJson);
-            }
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+V: Paste
-      if (isCtrlOrMeta && e.key === "v") {
-        e.preventDefault();
-        const node = clipboardRef.current;
-        if (node) {
-          pasteNode(editor, node);
-          onSceneChanged();
-        }
-        return;
-      }
-
-      // Cmd+G: Group selected nodes
-      if (isCtrlOrMeta && e.key === "g" && !e.shiftKey) {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length >= 2) {
-            editor.execute_tool_call(
-              "group_nodes",
-              JSON.stringify({ node_ids: ids }),
-            );
-            onSceneChanged();
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+Shift+G: Ungroup selected group
-      if (isCtrlOrMeta && e.key === "g" && e.shiftKey) {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            const nodeJson = editor.get_node_json(ids[0]);
-            if (nodeJson !== "null") {
-              const node: NodeInfo = JSON.parse(nodeJson);
-              if (node.kind === "Group") {
-                editor.execute_tool_call(
-                  "ungroup_node",
-                  JSON.stringify({ node_id: ids[0] }),
-                );
-                onSceneChanged();
-              }
-            }
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+]: Bring Forward
-      if (isCtrlOrMeta && e.key === "]" && !e.shiftKey) {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_forward",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+[: Send Backward
-      if (isCtrlOrMeta && e.key === "[" && !e.shiftKey) {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_backward",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+Shift+]: Bring to Front
-      if (isCtrlOrMeta && e.key === "}" && e.shiftKey) {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_to_front",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+Shift+[: Send to Back
-      if (isCtrlOrMeta && e.key === "{" && e.shiftKey) {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_to_back",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Cmd+D: Duplicate
-      if (isCtrlOrMeta && e.key === "d") {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length > 0) {
-            const nodeJson = editor.get_node_json(ids[0]);
-            if (nodeJson !== "null") {
-              const node: NodeInfo = JSON.parse(nodeJson);
-              pasteNode(editor, node);
-              onSceneChanged();
-            }
-          }
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Arrow keys: Nudge selected nodes
-      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
-        e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          const step = e.shiftKey ? 10 : 1;
-          let dx = 0;
-          let dy = 0;
-          if (e.key === "ArrowLeft") dx = -step;
-          if (e.key === "ArrowRight") dx = step;
-          if (e.key === "ArrowUp") dy = -step;
-          if (e.key === "ArrowDown") dy = step;
-
-          for (const id of ids) {
-            const json = editor.get_node_json(id);
-            if (json === "null") continue;
-            const node: NodeInfo = JSON.parse(json);
-            editor.execute_tool_call(
-              "set_bounds",
-              JSON.stringify({
-                node_id: id,
-                x: node.x + dx,
-                y: node.y + dy,
-                width: node.width,
-                height: node.height,
-              }),
-            );
-          }
-          if (ids.length > 0) onSceneChanged();
-        } catch {
-          // parse failure
-        }
-        return;
-      }
-
-      // Escape: Deselect all, or reset tool to select
-      if (e.key === "Escape") {
-        e.preventDefault();
-        if (activeTool !== "select") {
-          setActiveTool("select");
-        } else {
-          editor.clear_selection();
-          onSceneChanged();
-        }
-        return;
-      }
-
-      // Single-key tool shortcuts (no modifiers, not in input)
-      if (!isCtrlOrMeta && !e.altKey) {
-        const lower = e.key.toLowerCase();
-        if (lower === "v") {
-          setActiveTool("select");
-          return;
-        }
-        if (lower === "f") {
-          setActiveTool("frame");
-          return;
-        }
-        if (lower === "t") {
-          setActiveTool("text");
-          return;
-        }
-        if (lower === "i") {
-          handleToolChange("image");
-          return;
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [status, editorRef, onSceneChanged, activeTool, handleToolChange]);
+  useKeyboardShortcuts({
+    editorRef,
+    isReady: status === "ready",
+    onSceneChanged,
+    activeTool,
+    setActiveTool,
+    handleToolChange,
+    clipboardRef,
+    onUndoRedoTick: handleUndoRedoTick,
+  });
 
   const canUndo =
     status === "ready" && (editorRef.current?.can_undo() ?? false);
@@ -715,7 +408,8 @@ export function App() {
                       onCancel={() => setEditingNodeId(null)}
                     />
                   );
-                } catch {
+                } catch (e) {
+                  console.warn("inline text editor setup failed", e);
                   return null;
                 }
               })()}
@@ -769,46 +463,6 @@ export function App() {
       </div>
     </CollabContext.Provider>
   );
-}
-
-/** Creates a copy of a node at an offset position. */
-function pasteNode(
-  editor: { execute_tool_call: (name: string, args: string) => string },
-  node: NodeInfo,
-) {
-  const args: Record<string, unknown> = {
-    name: `${node.name} copy`,
-    kind: node.kind,
-    x: node.x + 10,
-    y: node.y + 10,
-    width: node.width,
-    height: node.height,
-  };
-
-  if (node.fill) {
-    args.fill_r = node.fill[0];
-    args.fill_g = node.fill[1];
-    args.fill_b = node.fill[2];
-    args.fill_a = node.fill[3];
-  }
-
-  if (node.text_content) {
-    args.text_content = node.text_content;
-  }
-
-  if (node.font_size) {
-    args.font_size = node.font_size;
-  }
-
-  if (node.asset_ref) {
-    args.asset_ref = node.asset_ref;
-  }
-
-  if (node.path_data) {
-    args.path_data = node.path_data;
-  }
-
-  editor.execute_tool_call("create_node", JSON.stringify(args));
 }
 
 const rootStyle: React.CSSProperties = {

@@ -38,20 +38,37 @@ pub struct CachedGlyph {
     pub glyph_height_funits: u16,
 }
 
+/// Default maximum number of entries in a `GlyphCache`.
+const DEFAULT_MAX_GLYPH_ENTRIES: usize = 4096;
+
 /// Maps glyph cache keys to atlas locations and metrics.
 ///
 /// Entries persist across frames. A glyph is cached once when first encountered
-/// and looked up on subsequent frames.
+/// and looked up on subsequent frames. When the cache reaches its maximum
+/// capacity, all entries are cleared before inserting the new entry. This
+/// simple eviction strategy works well with atlas textures (the atlas is
+/// rebuilt from scratch after a clear).
 pub struct GlyphCache {
     entries: HashMap<GlyphCacheKey, CachedGlyph>,
+    max_entries: usize,
 }
 
 impl GlyphCache {
-    /// Creates a new empty glyph cache.
+    /// Creates a new empty glyph cache with the default maximum capacity (4096).
     #[must_use]
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            max_entries: DEFAULT_MAX_GLYPH_ENTRIES,
+        }
+    }
+
+    /// Creates a new empty glyph cache with the given maximum capacity.
+    #[must_use]
+    pub fn with_max_entries(max: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries: max,
         }
     }
 
@@ -62,7 +79,13 @@ impl GlyphCache {
     }
 
     /// Inserts a glyph into the cache.
+    ///
+    /// If the cache is at capacity, all existing entries are cleared before
+    /// inserting. This ensures the cache never exceeds its maximum size.
     pub fn insert(&mut self, key: GlyphCacheKey, glyph: CachedGlyph) {
+        if self.entries.len() >= self.max_entries {
+            self.entries.clear();
+        }
         self.entries.insert(key, glyph);
     }
 
@@ -84,6 +107,12 @@ impl GlyphCache {
         self.entries.contains_key(key)
     }
 
+    /// Returns the maximum number of entries the cache will hold before evicting.
+    #[must_use]
+    pub fn max_entries(&self) -> usize {
+        self.max_entries
+    }
+
     /// Removes all cached glyphs.
     ///
     /// Use when switching fonts or documents. The atlas should also be reset
@@ -103,6 +132,7 @@ impl std::fmt::Debug for GlyphCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlyphCache")
             .field("count", &self.entries.len())
+            .field("max_entries", &self.max_entries)
             .finish()
     }
 }
@@ -260,5 +290,52 @@ mod tests {
         assert_eq!(cache.len(), 0);
         assert!(!cache.contains(&test_key(1)));
         assert!(!cache.contains(&test_key(2)));
+    }
+
+    #[test]
+    fn eviction_clears_when_full() {
+        let mut cache = GlyphCache::with_max_entries(3);
+
+        cache.insert(test_key(1), test_cached_glyph());
+        cache.insert(test_key(2), test_cached_glyph());
+        cache.insert(test_key(3), test_cached_glyph());
+        assert_eq!(cache.len(), 3);
+
+        // Inserting a 4th entry should clear the cache first, then insert.
+        cache.insert(test_key(4), test_cached_glyph());
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains(&test_key(4)));
+        assert!(!cache.contains(&test_key(1)));
+        assert!(!cache.contains(&test_key(2)));
+        assert!(!cache.contains(&test_key(3)));
+    }
+
+    #[test]
+    fn with_max_entries_constructor() {
+        let cache = GlyphCache::with_max_entries(100);
+        assert_eq!(cache.max_entries(), 100);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn insert_at_capacity_minus_one_does_not_evict() {
+        let mut cache = GlyphCache::with_max_entries(3);
+
+        cache.insert(test_key(1), test_cached_glyph());
+        cache.insert(test_key(2), test_cached_glyph());
+        assert_eq!(cache.len(), 2);
+
+        // Inserting a 3rd entry (capacity minus one -> capacity) should NOT evict.
+        cache.insert(test_key(3), test_cached_glyph());
+        assert_eq!(cache.len(), 3);
+        assert!(cache.contains(&test_key(1)));
+        assert!(cache.contains(&test_key(2)));
+        assert!(cache.contains(&test_key(3)));
+    }
+
+    #[test]
+    fn default_max_entries() {
+        let cache = GlyphCache::new();
+        assert_eq!(cache.max_entries(), 4096);
     }
 }

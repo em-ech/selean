@@ -68,8 +68,8 @@ export function useSelection(
             }
           }
         }
-      } catch {
-        // WASM call failed (e.g. during teardown). Skip this poll cycle.
+      } catch (e) {
+        console.warn("selection:poll failed", e);
       }
 
       timerId = setTimeout(poll, POLL_INTERVAL_MS);

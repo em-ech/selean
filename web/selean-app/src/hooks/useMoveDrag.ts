@@ -67,8 +67,8 @@ export function useMoveDrag({
             accDy: 0,
             descriptors: [],
           };
-        } catch {
-          // parse failure
+        } catch (e) {
+          console.warn("move-drag:begin failed", e);
         }
         return;
       }
@@ -102,8 +102,8 @@ export function useMoveDrag({
             };
             editor.execute_command(JSON.stringify(descriptor));
             drag.descriptors.push(descriptor);
-          } catch {
-            // node read failed
+          } catch (e) {
+            console.warn("move-drag:update failed", e);
           }
         }
         onSceneChanged();

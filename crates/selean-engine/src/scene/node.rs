@@ -5,6 +5,7 @@
 //! incremental rendering.
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 use selean_common::types::NodeId;
 
@@ -510,7 +511,11 @@ pub struct SceneNode {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<Effect>,
     /// IDs of child nodes, in render order (back to front).
-    pub children: Vec<NodeId>,
+    ///
+    /// Uses `SmallVec<[NodeId; 8]>` to store up to 8 children inline on the
+    /// stack. Most nodes have fewer than 8 children, so clones during DFS
+    /// traversal are stack copies instead of heap allocations.
+    pub children: SmallVec<[NodeId; 8]>,
     /// ID of the parent node, if any. Root nodes have `None`.
     pub parent: Option<NodeId>,
     /// Dirty flags indicating which properties have changed.
@@ -542,7 +547,7 @@ impl SceneNode {
             clip_mode: ClipMode::None,
             scroll_offset: [0.0, 0.0],
             effects: Vec::new(),
-            children: Vec::new(),
+            children: SmallVec::new(),
             parent: None,
             dirty: DirtyFlags::ALL,
         }

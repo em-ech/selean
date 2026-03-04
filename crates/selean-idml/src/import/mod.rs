@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
 use selean_common::types::PageId;
+use selean_common::xml::local_name;
 use selean_engine::persistence::{Document, Page};
 use selean_engine::scene::SceneGraph;
 
@@ -152,14 +153,6 @@ fn read_zip_entry(
     let mut xml = String::new();
     file.read_to_string(&mut xml)?;
     Ok(xml)
-}
-
-/// Extracts the local name from a potentially namespaced XML tag.
-fn local_name(name: &[u8]) -> &[u8] {
-    match name.iter().rposition(|&b| b == b':') {
-        Some(pos) => &name[pos + 1..],
-        None => name,
-    }
 }
 
 #[cfg(test)]

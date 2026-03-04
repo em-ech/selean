@@ -5,7 +5,7 @@
 
 use axum::{
     Json, Router,
-    extract::{Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{StatusCode, header},
     response::{
         IntoResponse,
@@ -16,17 +16,30 @@ use axum::{
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
 
+use crate::auth::{AuthConfig, auth_middleware};
 use crate::chat::{ChatRequest, send_chat_request_streaming};
 use crate::collab::ws_handler::{CollabState, ws_handler};
 use crate::state::AppState;
 
-/// Creates the Axum router with all API routes.
+/// 50 MiB upload limit for file import endpoints.
+const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+
+/// Creates the Axum router with all API routes and auth disabled.
 pub fn create_router(state: AppState) -> Router {
-    create_router_with_collab(state, CollabState::new())
+    create_router_with_options(state, CollabState::new(), AuthConfig::disabled())
 }
 
 /// Creates the Axum router with explicit collab state (for testing).
 pub fn create_router_with_collab(state: AppState, collab_state: CollabState) -> Router {
+    create_router_with_options(state, collab_state, AuthConfig::disabled())
+}
+
+/// Creates the Axum router with all options explicit.
+pub fn create_router_with_options(
+    state: AppState,
+    collab_state: CollabState,
+    auth_config: AuthConfig,
+) -> Router {
     let collab_routes = Router::new()
         .route("/api/ws", get(ws_handler))
         .with_state(collab_state);
@@ -41,6 +54,11 @@ pub fn create_router_with_collab(state: AppState, collab_state: CollabState) -> 
         .route("/api/export/idml", post(export_idml_handler))
         .route("/api/import/figma", post(import_figma_handler))
         .route("/api/fonts/{family}", get(serve_font))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_config,
+            auth_middleware,
+        ))
         .with_state(state)
         .merge(collab_routes)
 }
@@ -71,6 +89,49 @@ async fn chat_handler(
         .into_response()
 }
 
+/// Returns a JSON error response with the given status and message.
+fn error_response(status: StatusCode, message: &str) -> axum::response::Response {
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
+
+/// Reads the "file" field from a multipart upload.
+async fn read_multipart_file(
+    multipart: &mut Multipart,
+) -> Result<axum::body::Bytes, axum::response::Response> {
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("file") {
+            return field.bytes().await.map_err(|e| {
+                error_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("failed to read file: {e}"),
+                )
+            });
+        }
+    }
+    Err(error_response(
+        StatusCode::BAD_REQUEST,
+        "missing 'file' field in multipart form",
+    ))
+}
+
+/// Serializes a persistence save result to a JSON HTTP response.
+fn document_json_response<E: std::fmt::Display>(
+    result: Result<String, E>,
+) -> axum::response::Response {
+    match result {
+        Ok(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json,
+        )
+            .into_response(),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("serialization failed: {e}"),
+        ),
+    }
+}
+
 /// PPTX content type for responses.
 const PPTX_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.presentation";
@@ -80,73 +141,29 @@ const IDML_CONTENT_TYPE: &str = "application/vnd.adobe.indesign-idml-package";
 
 /// Handles PPTX import. Accepts multipart form data with a `file` field
 /// containing the `.pptx` bytes. Returns the parsed `Document` as JSON.
-async fn import_pptx_handler(mut multipart: Multipart) -> impl IntoResponse {
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            let bytes = match field.bytes().await {
-                Ok(b) => b,
-                Err(e) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": format!("failed to read file: {e}") })),
-                    )
-                        .into_response();
-                }
-            };
-
-            return match selean_pptx::import_pptx(&bytes) {
-                Ok(doc) => {
-                    let json = match selean_engine::persistence::save_document(&doc) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({
-                                    "error": format!("serialization failed: {e}")
-                                })),
-                            )
-                                .into_response();
-                        }
-                    };
-
-                    (
-                        StatusCode::OK,
-                        [(header::CONTENT_TYPE, "application/json")],
-                        json,
-                    )
-                        .into_response()
-                }
-                Err(e) => (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": format!("pptx import failed: {e}") })),
-                )
-                    .into_response(),
-            };
-        }
+async fn import_pptx_handler(mut multipart: Multipart) -> axum::response::Response {
+    let bytes = match read_multipart_file(&mut multipart).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    match selean_pptx::import_pptx(&bytes) {
+        Ok(doc) => document_json_response(selean_engine::persistence::save_document(&doc)),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, &format!("pptx import failed: {e}")),
     }
-
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": "missing 'file' field in multipart form" })),
-    )
-        .into_response()
 }
 
 /// Handles PPTX export. Accepts a `Document` as JSON body and returns the
 /// `.pptx` bytes with the appropriate content type.
-async fn export_pptx_handler(body: axum::body::Bytes) -> impl IntoResponse {
+async fn export_pptx_handler(body: axum::body::Bytes) -> axum::response::Response {
     let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(&body)) {
         Ok(d) => d,
         Err(e) => {
-            return (
+            return error_response(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid document JSON: {e}") })),
-            )
-                .into_response();
+                &format!("invalid document JSON: {e}"),
+            );
         }
     };
-
     match selean_pptx::export_pptx(&doc) {
         Ok(bytes) => (
             StatusCode::OK,
@@ -160,83 +177,38 @@ async fn export_pptx_handler(body: axum::body::Bytes) -> impl IntoResponse {
             bytes,
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("pptx export failed: {e}") })),
-        )
-            .into_response(),
+            &format!("pptx export failed: {e}"),
+        ),
     }
 }
 
 /// Handles IDML import. Accepts multipart form data with a `file` field
 /// containing the `.idml` bytes. Returns the parsed `Document` as JSON.
-async fn import_idml_handler(mut multipart: Multipart) -> impl IntoResponse {
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            let bytes = match field.bytes().await {
-                Ok(b) => b,
-                Err(e) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": format!("failed to read file: {e}") })),
-                    )
-                        .into_response();
-                }
-            };
-
-            return match selean_idml::import_idml(&bytes) {
-                Ok(doc) => {
-                    let json = match selean_engine::persistence::save_document(&doc) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({
-                                    "error": format!("serialization failed: {e}")
-                                })),
-                            )
-                                .into_response();
-                        }
-                    };
-
-                    (
-                        StatusCode::OK,
-                        [(header::CONTENT_TYPE, "application/json")],
-                        json,
-                    )
-                        .into_response()
-                }
-                Err(e) => (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": format!("idml import failed: {e}") })),
-                )
-                    .into_response(),
-            };
-        }
+async fn import_idml_handler(mut multipart: Multipart) -> axum::response::Response {
+    let bytes = match read_multipart_file(&mut multipart).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    match selean_idml::import_idml(&bytes) {
+        Ok(doc) => document_json_response(selean_engine::persistence::save_document(&doc)),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, &format!("idml import failed: {e}")),
     }
-
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": "missing 'file' field in multipart form" })),
-    )
-        .into_response()
 }
 
 /// Handles IDML export. Accepts a `Document` as JSON body and returns the
 /// `.idml` bytes with the appropriate content type.
-async fn export_idml_handler(body: axum::body::Bytes) -> impl IntoResponse {
+async fn export_idml_handler(body: axum::body::Bytes) -> axum::response::Response {
     let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(&body)) {
         Ok(d) => d,
         Err(e) => {
-            return (
+            return error_response(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid document JSON: {e}") })),
-            )
-                .into_response();
+                &format!("invalid document JSON: {e}"),
+            );
         }
     };
-
     match selean_idml::export_idml(&doc) {
         Ok(bytes) => (
             StatusCode::OK,
@@ -250,11 +222,10 @@ async fn export_idml_handler(body: axum::body::Bytes) -> impl IntoResponse {
             bytes,
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("idml export failed: {e}") })),
-        )
-            .into_response(),
+            &format!("idml export failed: {e}"),
+        ),
     }
 }
 
@@ -271,56 +242,27 @@ struct FigmaImportRequest {
 async fn import_figma_handler(
     State(state): State<AppState>,
     Json(request): Json<FigmaImportRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     if request.file_key.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "file_key is required" })),
-        )
-            .into_response();
+        return error_response(StatusCode::BAD_REQUEST, "file_key is required");
     }
 
     let Some(ref access_token) = state.figma_access_token else {
-        return (
+        return error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "FIGMA_ACCESS_TOKEN not configured on server" })),
-        )
-            .into_response();
+            "FIGMA_ACCESS_TOKEN not configured on server",
+        );
     };
 
     match selean_figma::import_figma(&state.http_client, access_token, &request.file_key).await {
-        Ok(doc) => {
-            let json = match selean_engine::persistence::save_document(&doc) {
-                Ok(j) => j,
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": format!("serialization failed: {e}")
-                        })),
-                    )
-                        .into_response();
-                }
-            };
-
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "application/json")],
-                json,
-            )
-                .into_response()
-        }
+        Ok(doc) => document_json_response(selean_engine::persistence::save_document(&doc)),
         Err(e) => {
             let status = match &e {
                 selean_figma::FigmaError::Api { status: 403, .. } => StatusCode::FORBIDDEN,
                 selean_figma::FigmaError::Api { status: 404, .. } => StatusCode::NOT_FOUND,
                 _ => StatusCode::BAD_REQUEST,
             };
-            (
-                status,
-                Json(serde_json::json!({ "error": format!("figma import failed: {e}") })),
-            )
-                .into_response()
+            error_response(status, &format!("figma import failed: {e}"))
         }
     }
 }
@@ -330,6 +272,10 @@ async fn import_figma_handler(
 /// Font files are looked up as `fonts/{family}.ttf` or `fonts/{family}.otf`
 /// (case-insensitive). Returns 404 if the font is not found.
 async fn serve_font(Path(family): Path<String>) -> impl IntoResponse {
+    if family.contains('/') || family.contains('\\') || family.contains("..") || family.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "invalid font family name");
+    }
+
     let key = family.to_lowercase();
 
     // Try .ttf first, then .otf.
@@ -349,11 +295,7 @@ async fn serve_font(Path(family): Path<String>) -> impl IntoResponse {
         }
     }
 
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({ "error": format!("font '{family}' not found") })),
-    )
-        .into_response()
+    error_response(StatusCode::NOT_FOUND, &format!("font '{family}' not found"))
 }
 
 #[cfg(test)]
@@ -590,5 +532,24 @@ mod tests {
 
         // Should be 404, but importantly the route itself matches (not 405).
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn font_endpoint_rejects_path_traversal() {
+        // Axum normalizes `..` at the URI level (so `/api/fonts/..` becomes
+        // `/api/` and never reaches the handler). Percent-encoded dots bypass
+        // that normalization and arrive decoded in the path parameter.
+        let app = create_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/fonts/%2e%2e")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

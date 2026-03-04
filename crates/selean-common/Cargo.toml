@@ -11,6 +11,7 @@ repository.workspace = true
 uuid.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+quick-xml.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

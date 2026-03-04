@@ -528,7 +528,7 @@ impl EditorState {
             .to_string();
         }
 
-        let children: Vec<selean_common::types::NodeId> = node.children.clone();
+        let children = node.children.clone();
         let parent_id = node.parent;
 
         if children.is_empty() {

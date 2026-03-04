@@ -38,8 +38,8 @@ export function Canvas({
     function frame() {
       try {
         editorRef.current?.render();
-      } catch {
-        // GPU context lost or WASM error. Skip frame.
+      } catch (e) {
+        console.warn("canvas:render-frame failed", e);
       }
       rafRef.current = requestAnimationFrame(frame);
     }
@@ -84,8 +84,8 @@ export function Canvas({
         if (events.length > 0) {
           onInteractionEvents(events);
         }
-      } catch {
-        // Ignore parse failures.
+      } catch (e) {
+        console.warn("canvas:interaction-event-parse failed", e);
       }
     },
     [onInteractionEvents],
