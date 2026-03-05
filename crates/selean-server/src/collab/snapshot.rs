@@ -42,7 +42,9 @@ pub fn save_room_snapshot(
     std::fs::create_dir_all(dir)?;
     let json = save_document(document).map_err(|e| SnapshotError::Persistence(e.to_string()))?;
     let path = dir.join(format!("{room_id}.json"));
-    std::fs::write(path, json)?;
+    let tmp_path = dir.join(format!("{room_id}.json.tmp"));
+    std::fs::write(&tmp_path, json)?;
+    std::fs::rename(&tmp_path, &path)?;
     Ok(())
 }
 

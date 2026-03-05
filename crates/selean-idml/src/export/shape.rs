@@ -5,6 +5,7 @@
 
 use std::fmt::Write as FmtWrite;
 
+use selean_common::xml::xml_escape;
 use selean_engine::scene::{FontStyle, SceneNode, SceneNodeKind, TextAlign};
 
 use crate::coord::{color_to_idml_rgb, px_to_idml_font_size, px_to_pt};
@@ -174,14 +175,6 @@ fn build_fill_xml(node: &SceneNode) -> String {
         }
         None => String::new(),
     }
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]

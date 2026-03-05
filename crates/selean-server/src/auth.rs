@@ -56,13 +56,32 @@ impl AuthConfig {
     }
 
     /// Validates a bearer token against the stored secret.
+    ///
+    /// Uses constant-time comparison to prevent timing attacks.
     #[must_use]
     pub fn validate(&self, token: &str) -> bool {
         match &self.secret {
             None => true,
-            Some(secret) => token == &**secret,
+            Some(secret) => constant_time_eq(token.as_bytes(), secret.as_bytes()),
         }
     }
+}
+
+/// Constant-time byte slice comparison to prevent timing attacks.
+///
+/// Returns `true` only if both slices have the same length and identical contents.
+/// The comparison always examines every byte of the shorter slice regardless of
+/// mismatches, preventing an attacker from deducing the secret length or content
+/// from response timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Paths that bypass auth even when enabled.

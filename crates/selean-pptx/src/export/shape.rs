@@ -1,5 +1,6 @@
 //! Converts `SceneNode` to OOXML shape XML.
 
+use selean_common::xml::xml_escape;
 use selean_engine::scene::{Effect, FontStyle, Gradient, SceneNode, SceneNodeKind, TextAlign};
 
 use crate::coord::{color_to_ooxml_hex, px_to_emu, px_to_ooxml_font_size};
@@ -79,7 +80,7 @@ fn build_text_shape_xml(
         })
         .unwrap_or_default();
 
-    let font_xml = format!(r#"<a:latin typeface="{font_family}"/>"#);
+    let font_xml = format!(r#"<a:latin typeface="{}"/>"#, xml_escape(font_family));
 
     format!(
         r#"<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{fill_xml}{effects_xml}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="{algn}"/><a:r><a:rPr lang="en-US" sz="{sz}"{bold}{italic}>{text_color_xml}{font_xml}</a:rPr><a:t>{content}</a:t></a:r></a:p></p:txBody></p:sp>"#,
@@ -220,14 +221,6 @@ fn build_fallback_shape_xml(node: &SceneNode, shape_id: u32) -> String {
         r#"<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr></p:sp>"#,
         name = xml_escape(&node.name),
     )
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]

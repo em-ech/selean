@@ -1,10 +1,9 @@
 //! Vector cache mapping `(path_data, width, height)` to atlas locations.
 //!
-//! Full `path_data` String used as key (no hashing) — cache reuse comes
+//! Full `path_data` String used as key (no hashing) -- cache reuse comes
 //! from dimension quantization (power of 2).
 
-use std::collections::HashMap;
-
+use crate::cache::BoundedCache;
 use crate::renderer::texture_atlas::AtlasRegion;
 
 /// Cache key for a rasterized vector.
@@ -34,8 +33,7 @@ const DEFAULT_MAX_VECTOR_ENTRIES: usize = 1024;
 /// inserting the new entry. This simple eviction strategy works well with
 /// atlas textures (the atlas is rebuilt from scratch after a clear).
 pub struct VectorCache {
-    entries: HashMap<VectorCacheKey, CachedVector>,
-    max_entries: usize,
+    inner: BoundedCache<VectorCacheKey, CachedVector>,
 }
 
 impl VectorCache {
@@ -43,8 +41,7 @@ impl VectorCache {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
-            max_entries: DEFAULT_MAX_VECTOR_ENTRIES,
+            inner: BoundedCache::new(DEFAULT_MAX_VECTOR_ENTRIES),
         }
     }
 
@@ -52,15 +49,14 @@ impl VectorCache {
     #[must_use]
     pub fn with_max_entries(max: usize) -> Self {
         Self {
-            entries: HashMap::new(),
-            max_entries: max,
+            inner: BoundedCache::new(max),
         }
     }
 
     /// Looks up a cached vector.
     #[must_use]
     pub fn get(&self, key: &VectorCacheKey) -> Option<&CachedVector> {
-        self.entries.get(key)
+        self.inner.get(key)
     }
 
     /// Inserts a vector into the cache.
@@ -68,39 +64,36 @@ impl VectorCache {
     /// If the cache is at capacity, all existing entries are cleared before
     /// inserting. This ensures the cache never exceeds its maximum size.
     pub fn insert(&mut self, key: VectorCacheKey, vector: CachedVector) {
-        if self.entries.len() >= self.max_entries {
-            self.entries.clear();
-        }
-        self.entries.insert(key, vector);
+        self.inner.insert(key, vector);
     }
 
     /// Returns `true` if the cache contains the given key.
     #[must_use]
     pub fn contains(&self, key: &VectorCacheKey) -> bool {
-        self.entries.contains_key(key)
+        self.inner.contains(key)
     }
 
     /// Returns the number of cached vectors.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.inner.len()
     }
 
     /// Returns `true` if the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.inner.is_empty()
     }
 
     /// Returns the maximum number of entries the cache will hold before evicting.
     #[must_use]
     pub fn max_entries(&self) -> usize {
-        self.max_entries
+        self.inner.max_entries()
     }
 
     /// Removes all cached vectors.
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.inner.clear();
     }
 }
 

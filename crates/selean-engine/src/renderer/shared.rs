@@ -9,8 +9,48 @@
 
 use wgpu::util::DeviceExt;
 
+use crate::scene::BlendMode;
+
 use super::camera::CameraUniform;
 use super::quad::{QUAD_INDICES, QUAD_VERTICES};
+
+/// A set of 6 render pipeline variants (Normal, Add, Replace) x (no stencil, stencil test).
+///
+/// Every instanced rendering pipeline (rect, text, textured quad) stores the
+/// same 6 variants. This struct eliminates the duplicated `select_pipeline`
+/// dispatch logic.
+pub struct PipelineSet {
+    /// Normal (alpha) blending, no stencil test.
+    pub pipeline_normal: wgpu::RenderPipeline,
+    /// Normal blending with stencil Equal test.
+    pub pipeline_normal_stencil_test: wgpu::RenderPipeline,
+    /// Additive blending, no stencil test.
+    pub pipeline_add: wgpu::RenderPipeline,
+    /// Additive blending with stencil Equal test.
+    pub pipeline_add_stencil_test: wgpu::RenderPipeline,
+    /// Replace blending (for non-native blend modes), no stencil test.
+    pub pipeline_replace: wgpu::RenderPipeline,
+    /// Replace blending with stencil Equal test.
+    pub pipeline_replace_stencil_test: wgpu::RenderPipeline,
+}
+
+impl PipelineSet {
+    /// Returns the pipeline variant for the given blend mode and stencil test state.
+    ///
+    /// Non-native blend modes use the Replace pipeline (composited by a subsequent
+    /// shader-based blend pass).
+    #[must_use]
+    pub fn select(&self, blend: BlendMode, stencil_test: bool) -> &wgpu::RenderPipeline {
+        match (blend, stencil_test) {
+            (BlendMode::Add, false) => &self.pipeline_add,
+            (BlendMode::Add, true) => &self.pipeline_add_stencil_test,
+            (BlendMode::Normal, false) => &self.pipeline_normal,
+            (BlendMode::Normal, true) => &self.pipeline_normal_stencil_test,
+            (_, false) => &self.pipeline_replace,
+            (_, true) => &self.pipeline_replace_stencil_test,
+        }
+    }
+}
 
 /// GPU resources shared across all instanced rendering pipelines.
 ///

@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, type Mock } from "vitest";
 import { Canvas } from "./Canvas";
 import { createMockEditorRef } from "../test/mock-editor";
 
@@ -45,5 +45,168 @@ describe("Canvas", () => {
     expect(canvas).toBeTruthy();
     // The canvas has onContextMenu handler, just verify it rendered
     expect(canvas.tagName).toBe("CANVAS");
+  });
+});
+
+describe("Canvas pointer events", () => {
+  it("calls on_pointer_down with correct arguments on pointerdown", () => {
+    const ref = createMockEditorRef();
+    (ref.current.on_pointer_down as Mock).mockReturnValue("[]");
+    render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+
+    fireEvent.pointerDown(canvas, {
+      clientX: 50,
+      clientY: 60,
+      button: 0,
+      shiftKey: true,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      pointerId: 1,
+    });
+
+    expect(ref.current.on_pointer_down).toHaveBeenCalledTimes(1);
+    const args = (ref.current.on_pointer_down as Mock).mock.calls[0];
+    // x and y are DPR-adjusted relative to element, button, then modifier flags
+    expect(args[2]).toBe(0); // button
+    expect(args[3]).toBe(true); // shiftKey
+    expect(args[4]).toBe(false); // ctrlKey
+  });
+
+  it("calls on_pointer_move on pointermove", () => {
+    const ref = createMockEditorRef();
+    (ref.current.on_pointer_move as Mock).mockReturnValue("[]");
+    render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+
+    fireEvent.pointerMove(canvas, { clientX: 100, clientY: 200 });
+
+    expect(ref.current.on_pointer_move).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls on_pointer_up on pointerup", () => {
+    const ref = createMockEditorRef();
+    (ref.current.on_pointer_up as Mock).mockReturnValue("[]");
+    render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+
+    fireEvent.pointerUp(canvas, {
+      clientX: 50,
+      clientY: 60,
+      button: 0,
+      pointerId: 1,
+    });
+
+    expect(ref.current.on_pointer_up).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls on_scroll on wheel event", () => {
+    const ref = createMockEditorRef();
+    (ref.current.on_scroll as Mock).mockReturnValue("[]");
+    render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+
+    fireEvent.wheel(canvas, {
+      clientX: 50,
+      clientY: 60,
+      deltaX: 10,
+      deltaY: 20,
+    });
+
+    expect(ref.current.on_scroll).toHaveBeenCalledTimes(1);
+    const args = (ref.current.on_scroll as Mock).mock.calls[0];
+    expect(args[2]).toBe(10); // deltaX
+    expect(args[3]).toBe(20); // deltaY
+  });
+
+  it("propagates interaction events to onInteractionEvents callback", () => {
+    const ref = createMockEditorRef();
+    const mockEvents = [{ type: "Clicked", node_id: "n1" }];
+    (ref.current.on_pointer_down as Mock).mockReturnValue(
+      JSON.stringify(mockEvents),
+    );
+    const onEvents = vi.fn();
+
+    render(
+      <Canvas
+        canvasId="test-canvas"
+        editorRef={ref}
+        status="ready"
+        onInteractionEvents={onEvents}
+      />,
+    );
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+    fireEvent.pointerDown(canvas, { clientX: 50, clientY: 60, pointerId: 1 });
+
+    expect(onEvents).toHaveBeenCalledWith(mockEvents);
+  });
+
+  it("does not call onInteractionEvents for empty event arrays", () => {
+    const ref = createMockEditorRef();
+    (ref.current.on_pointer_move as Mock).mockReturnValue("[]");
+    const onEvents = vi.fn();
+
+    render(
+      <Canvas
+        canvasId="test-canvas"
+        editorRef={ref}
+        status="ready"
+        onInteractionEvents={onEvents}
+      />,
+    );
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+    fireEvent.pointerMove(canvas, { clientX: 10, clientY: 20 });
+
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("does not call WASM methods when editor is null", () => {
+    const ref = { current: null };
+    render(<Canvas canvasId="test-canvas" editorRef={ref} status="loading" />);
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+    // Should not throw
+    fireEvent.pointerDown(canvas, { clientX: 0, clientY: 0, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(canvas, { clientX: 10, clientY: 10, pointerId: 1 });
+  });
+
+  it("calls onContextMenu prop with coordinates on right-click", () => {
+    const ref = createMockEditorRef();
+    const onCtx = vi.fn();
+    render(
+      <Canvas
+        canvasId="test-canvas"
+        editorRef={ref}
+        status="ready"
+        onContextMenu={onCtx}
+      />,
+    );
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+    fireEvent.contextMenu(canvas, { clientX: 200, clientY: 300 });
+
+    expect(onCtx).toHaveBeenCalledWith(200, 300);
+  });
+
+  it("handles malformed JSON from WASM gracefully", () => {
+    const ref = createMockEditorRef();
+    (ref.current.on_pointer_move as Mock).mockReturnValue("not json");
+    const onEvents = vi.fn();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(
+      <Canvas
+        canvasId="test-canvas"
+        editorRef={ref}
+        status="ready"
+        onInteractionEvents={onEvents}
+      />,
+    );
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+    fireEvent.pointerMove(canvas, { clientX: 10, clientY: 20 });
+
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

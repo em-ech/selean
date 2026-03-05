@@ -40,6 +40,14 @@ pub fn compute_inverse(
                 new_order: children.to_vec(),
             })
         }
+        CommandDescriptor::ReparentToRoot { node_id } => {
+            let node = scene.get(*node_id)?;
+            node.parent
+                .map(|current_parent| CommandDescriptor::Reparent {
+                    node_id: *node_id,
+                    new_parent_id: current_parent,
+                })
+        }
         CommandDescriptor::ReorderRoots { .. } => Some(CommandDescriptor::ReorderRoots {
             new_order: scene.roots().to_vec(),
         }),
@@ -323,7 +331,8 @@ pub fn target_node_id(descriptor: &CommandDescriptor) -> Option<NodeId> {
         | CommandDescriptor::SetTextColor { node_id, .. }
         | CommandDescriptor::SetEffects { node_id, .. }
         | CommandDescriptor::RemoveNode { node_id }
-        | CommandDescriptor::Reparent { node_id, .. } => Some(*node_id),
+        | CommandDescriptor::Reparent { node_id, .. }
+        | CommandDescriptor::ReparentToRoot { node_id } => Some(*node_id),
         CommandDescriptor::AddRoot { node } | CommandDescriptor::AddChild { node, .. } => {
             Some(node.id)
         }

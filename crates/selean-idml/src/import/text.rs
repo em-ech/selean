@@ -112,7 +112,11 @@ pub fn parse_story(xml: &str) -> (String, ParsedStory) {
                     }
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in IDML text import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();

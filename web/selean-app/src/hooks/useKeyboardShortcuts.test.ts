@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, fireEvent } from "@testing-library/react";
 import {
   useKeyboardShortcuts,
-  pasteNode,
   type UseKeyboardShortcutsParams,
 } from "./useKeyboardShortcuts";
+import { pasteNode } from "../utils/clipboard";
 import { createMockEditor, makeNodeInfo } from "../test/mock-editor";
 import type { SeleanEditor, NodeInfo } from "../wasm/types";
 

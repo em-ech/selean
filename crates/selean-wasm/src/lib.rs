@@ -18,6 +18,30 @@ use queries::{
     get_selected_ids_json, query_nodes_json,
 };
 
+/// Parses a string as a `NodeId`, returning a JSON error string on failure.
+fn parse_node_id_or_error(s: &str) -> Result<selean_common::types::NodeId, String> {
+    uuid::Uuid::parse_str(s)
+        .map(selean_common::types::NodeId::from_uuid)
+        .map_err(|_| {
+            serde_json::json!({
+                "success": false,
+                "error": "invalid node ID"
+            })
+            .to_string()
+        })
+}
+
+/// Parses a string as a page UUID, returning a JSON error string on failure.
+fn parse_page_id_or_error(s: &str) -> Result<uuid::Uuid, String> {
+    s.parse::<uuid::Uuid>().map_err(|_| {
+        serde_json::json!({
+            "success": false,
+            "error": "invalid page ID"
+        })
+        .to_string()
+    })
+}
+
 /// Core editor state, independent of the WASM runtime.
 ///
 /// This struct holds all engine state. On native targets it can be used
@@ -351,14 +375,10 @@ impl EditorState {
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0) as f32;
 
-        let Ok(uuid) = uuid::Uuid::parse_str(node_id_str) else {
-            return serde_json::json!({
-                "success": false,
-                "error": "invalid node ID"
-            })
-            .to_string();
+        let node_id = match parse_node_id_or_error(node_id_str) {
+            Ok(id) => id,
+            Err(e) => return e,
         };
-        let node_id = selean_common::types::NodeId::from_uuid(uuid);
 
         let Some(node) = self.scene().get(node_id) else {
             return serde_json::json!({
@@ -503,14 +523,10 @@ impl EditorState {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
 
-        let Ok(uuid) = uuid::Uuid::parse_str(node_id_str) else {
-            return serde_json::json!({
-                "success": false,
-                "error": "invalid node ID"
-            })
-            .to_string();
+        let group_id = match parse_node_id_or_error(node_id_str) {
+            Ok(id) => id,
+            Err(e) => return e,
         };
-        let group_id = selean_common::types::NodeId::from_uuid(uuid);
 
         let Some(node) = self.scene().get(group_id) else {
             return serde_json::json!({
@@ -552,24 +568,9 @@ impl EditorState {
                 };
                 self.execute_descriptor(desc);
             } else {
-                // Group was a root. Use reparent_to_root via internal method.
-                // We need to detach from group first, which reparent does.
-                // Since there's no "make root" descriptor, we use remove + add root pattern.
-                // Actually, we can use the scene's reparent_to_root directly with a command wrapper.
-                // For simplicity, we'll remove the child from group and re-add as root.
-                // This is handled by the scene's internal operations.
-                // Let's just use remove + add root.
-                let Some(child_node) = self.scene().get(child_id) else {
-                    continue;
-                };
-                let child_clone = child_node.clone();
-                let desc_remove = CommandDescriptor::RemoveNode { node_id: child_id };
-                self.execute_descriptor(desc_remove);
-                let mut root_node = child_clone;
-                root_node.parent = None;
-                root_node.children.clear();
-                let desc_add = CommandDescriptor::AddRoot { node: root_node };
-                self.execute_descriptor(desc_add);
+                // Group was a root. Move child (with its full subtree) to root level.
+                let desc = CommandDescriptor::ReparentToRoot { node_id: child_id };
+                self.execute_descriptor(desc);
             }
         }
 
@@ -594,10 +595,10 @@ impl EditorState {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
 
-        let Ok(uuid) = uuid::Uuid::parse_str(node_id_str) else {
-            return z_error("invalid node ID");
+        let node_id = match parse_node_id_or_error(node_id_str) {
+            Ok(id) => id,
+            Err(_) => return z_error("invalid node ID"),
         };
-        let node_id = selean_common::types::NodeId::from_uuid(uuid);
 
         let Some(node) = self.scene().get(node_id) else {
             return z_error("node not found");
@@ -753,68 +754,62 @@ impl EditorState {
             }
         };
 
-        // Handle read-only tools directly.
-        if selean_llm::is_read_only_tool(tool_name) {
-            let result = match tool_name {
-                "get_scene_summary" => get_scene_json(self.scene()),
-                "get_node" => {
-                    let node_id = args
-                        .get("node_id")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("");
-                    get_node_json(self.scene(), node_id)
-                }
-                "query_nodes" => {
-                    let name_pattern = args.get("name_pattern").and_then(serde_json::Value::as_str);
-                    let kind = args.get("kind").and_then(serde_json::Value::as_str);
-                    query_nodes_json(self.scene(), name_pattern, kind)
-                }
-                "get_pages" => get_pages_json(&self.document),
-                _ => "null".to_string(),
-            };
-            return serde_json::json!({
-                "success": true,
-                "result": serde_json::from_str::<serde_json::Value>(&result).unwrap_or(serde_json::Value::Null)
-            })
-            .to_string();
-        }
-
-        // Handle page-level mutations (operate on Document, not CommandDescriptor).
-        if selean_llm::is_page_tool(tool_name) {
-            return self.execute_page_tool(tool_name, &args);
-        }
-
-        // Handle alignment tool (operates directly on scene via align_nodes).
-        if selean_llm::is_align_tool(tool_name) {
-            let node_ids_json = args
-                .get("node_ids")
-                .map(|v| serde_json::to_string(v).unwrap_or_default())
-                .unwrap_or_default();
-            let alignment = args
-                .get("alignment")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let ok = self.align_nodes(&node_ids_json, alignment);
-            return serde_json::json!({
-                "success": ok,
-                "result": { "aligned": ok }
-            })
-            .to_string();
-        }
-
-        // Handle rotation tool (requires scene access for bounds center).
-        if selean_llm::is_rotation_tool(tool_name) {
-            return self.execute_rotation_tool(&args);
-        }
-
-        // Handle grouping tools (require scene access for hierarchy operations).
-        if selean_llm::is_group_tool(tool_name) {
-            return self.execute_group_tool(tool_name, &args);
-        }
-
-        // Handle z-order tools (require scene access for ordering).
-        if selean_llm::is_z_order_tool(tool_name) {
-            return self.execute_z_order_tool(tool_name, &args);
+        // Dispatch by tool category.
+        match selean_llm::tool_category(tool_name) {
+            selean_llm::ToolCategory::ReadOnly => {
+                let result = match tool_name {
+                    "get_scene_summary" => get_scene_json(self.scene()),
+                    "get_node" => {
+                        let node_id = args
+                            .get("node_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        get_node_json(self.scene(), node_id)
+                    }
+                    "query_nodes" => {
+                        let name_pattern =
+                            args.get("name_pattern").and_then(serde_json::Value::as_str);
+                        let kind = args.get("kind").and_then(serde_json::Value::as_str);
+                        query_nodes_json(self.scene(), name_pattern, kind)
+                    }
+                    "get_pages" => get_pages_json(&self.document),
+                    _ => "null".to_string(),
+                };
+                return serde_json::json!({
+                    "success": true,
+                    "result": serde_json::from_str::<serde_json::Value>(&result).unwrap_or(serde_json::Value::Null)
+                })
+                .to_string();
+            }
+            selean_llm::ToolCategory::Page => {
+                return self.execute_page_tool(tool_name, &args);
+            }
+            selean_llm::ToolCategory::Align => {
+                let node_ids_json = args
+                    .get("node_ids")
+                    .map(|v| serde_json::to_string(v).unwrap_or_default())
+                    .unwrap_or_default();
+                let alignment = args
+                    .get("alignment")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let ok = self.align_nodes(&node_ids_json, alignment);
+                return serde_json::json!({
+                    "success": ok,
+                    "result": { "aligned": ok }
+                })
+                .to_string();
+            }
+            selean_llm::ToolCategory::Rotation => {
+                return self.execute_rotation_tool(&args);
+            }
+            selean_llm::ToolCategory::Group => {
+                return self.execute_group_tool(tool_name, &args);
+            }
+            selean_llm::ToolCategory::ZOrder => {
+                return self.execute_z_order_tool(tool_name, &args);
+            }
+            selean_llm::ToolCategory::Mutation => {}
         }
 
         // Map tool call to command descriptors.
@@ -2137,6 +2132,62 @@ mod tests {
         let result = state.execute_ungroup_node(&args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["success"], true);
+    }
+
+    #[test]
+    fn ungroup_preserves_grandchildren() {
+        use selean_engine::scene::{SceneNode, SceneNodeKind, BoundingBox};
+
+        let mut state = EditorState::new();
+
+        // Build a hierarchy: Group -> Child -> Grandchild
+        let grandchild_id = selean_common::types::NodeId::new();
+        let grandchild = SceneNode::new(
+            grandchild_id,
+            "Grandchild".to_string(),
+            SceneNodeKind::Frame { corner_radius: [0.0; 4] },
+            BoundingBox::new(5.0, 5.0, 20.0, 20.0),
+        );
+
+        let child_id = selean_common::types::NodeId::new();
+        let child = SceneNode::new(
+            child_id,
+            "Child".to_string(),
+            SceneNodeKind::Frame { corner_radius: [0.0; 4] },
+            BoundingBox::new(0.0, 0.0, 50.0, 50.0),
+        );
+
+        let group_id = selean_common::types::NodeId::new();
+        let group = SceneNode::new(
+            group_id,
+            "Group".to_string(),
+            SceneNodeKind::Group,
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        );
+
+        // Manually build the hierarchy in the scene graph.
+        state.scene_mut().add_root(group);
+        state.scene_mut().add_child(group_id, child);
+        state.scene_mut().add_child(child_id, grandchild);
+
+        // Verify hierarchy before ungroup.
+        assert_eq!(state.scene().children(group_id).unwrap(), &[child_id]);
+        assert_eq!(state.scene().children(child_id).unwrap(), &[grandchild_id]);
+
+        // Ungroup the root-level group.
+        let args = serde_json::json!({ "node_id": group_id.to_string() });
+        let result = state.execute_ungroup_node(&args);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["success"], true);
+
+        // Child should now be a root.
+        assert!(state.scene().roots().contains(&child_id));
+        // Group should be gone.
+        assert!(!state.scene().contains(group_id));
+        // Grandchild must still exist as a child of Child.
+        assert!(state.scene().contains(grandchild_id));
+        assert_eq!(state.scene().parent(grandchild_id), Some(child_id));
+        assert_eq!(state.scene().children(child_id).unwrap(), &[grandchild_id]);
     }
 
     #[test]

@@ -132,7 +132,11 @@ fn parse_designmap_xml(xml: &str) -> (Vec<String>, Vec<String>) {
                     }
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in IDML spread import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();

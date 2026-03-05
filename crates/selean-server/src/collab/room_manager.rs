@@ -849,6 +849,120 @@ mod tests {
         }
     }
 
+    #[test]
+    fn submit_op_group_partial_failure_keeps_valid_ops() {
+        let mut room = Room::new(RoomId::new());
+        let (sid, uid, name, tx, _rx) = make_session_with_rx();
+        room.join(sid, uid, name, tx).unwrap();
+
+        let page_id = room.document().active_page().id;
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let node_id = node.id;
+
+        let fake_id = NodeId::new();
+        let ops = vec![
+            make_op(
+                1,
+                uid,
+                sid,
+                page_id,
+                CommandDescriptor::AddRoot { node },
+            ),
+            make_op(
+                2,
+                uid,
+                sid,
+                page_id,
+                CommandDescriptor::SetBounds {
+                    node_id: fake_id,
+                    bounds: BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+                },
+            ),
+        ];
+
+        let seqs = room.submit_op_group(ops, "Partial".to_string());
+        assert_eq!(seqs.len(), 2);
+
+        // The valid AddRoot op should have been applied.
+        let scene = &room.document().active_page().scene;
+        assert!(scene.get(node_id).is_some());
+
+        // The invalid SetBounds on a nonexistent node should have been a no-op.
+        assert!(scene.get(fake_id).is_none());
+    }
+
+    #[test]
+    fn submit_op_group_empty_returns_empty() {
+        let mut room = Room::new(RoomId::new());
+        let (sid, uid, name, tx) = make_session();
+        room.join(sid, uid, name, tx).unwrap();
+
+        let seqs = room.submit_op_group(vec![], "Empty".to_string());
+        assert!(seqs.is_empty());
+    }
+
+    #[test]
+    fn submit_op_group_undo_reverts_all() {
+        let mut room = Room::new(RoomId::new());
+        let (sid, uid, name, tx, mut rx) = make_session_with_rx();
+        room.join(sid, uid, name, tx).unwrap();
+
+        let page_id = room.document().active_page().id;
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let node_id = node.id;
+
+        // First add the node.
+        room.submit_op(make_op(
+            1,
+            uid,
+            sid,
+            page_id,
+            CommandDescriptor::AddRoot { node },
+        ));
+        let _ = rx.try_recv(); // drain ack
+
+        // Then submit a group that modifies it.
+        let ops = vec![
+            make_op(
+                2,
+                uid,
+                sid,
+                page_id,
+                CommandDescriptor::SetOpacity {
+                    node_id,
+                    opacity: 0.5,
+                },
+            ),
+            make_op(
+                3,
+                uid,
+                sid,
+                page_id,
+                CommandDescriptor::SetName {
+                    node_id,
+                    name: "Changed".to_string(),
+                },
+            ),
+        ];
+        room.submit_op_group(ops, "Group".to_string());
+        let _ = rx.try_recv(); // drain group ack
+
+        // Verify both applied.
+        let scene = &room.document().active_page().scene;
+        assert!((scene.get(node_id).unwrap().opacity - 0.5).abs() < f32::EPSILON);
+        assert_eq!(scene.get(node_id).unwrap().name, "Changed");
+
+        // Undo should revert the group ops (each op individually).
+        room.handle_undo(sid, uid, page_id);
+        let _ = rx.try_recv();
+        room.handle_undo(sid, uid, page_id);
+        let _ = rx.try_recv();
+
+        let scene = &room.document().active_page().scene;
+        assert!((scene.get(node_id).unwrap().opacity - 1.0).abs() < f32::EPSILON);
+        assert_eq!(scene.get(node_id).unwrap().name, "A");
+    }
+
     // -- Undo/redo tests --
 
     #[test]

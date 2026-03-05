@@ -165,6 +165,10 @@ pub struct Renderer {
     render_order: Vec<RenderOrderEntry>,
     /// Clip state stack for DFS traversal (reused across frames).
     clip_stack: ClipStack,
+    /// Number of nodes visited during the current frame's DFS traversal.
+    nodes_processed: usize,
+    /// Reusable buffer for root IDs during DFS traversal.
+    roots_scratch: Vec<NodeId>,
 }
 
 impl Renderer {
@@ -285,6 +289,8 @@ impl Renderer {
             draw_list: DrawList::new(),
             render_order: Vec::with_capacity(256),
             clip_stack: ClipStack::new(),
+            nodes_processed: 0,
+            roots_scratch: Vec::with_capacity(64),
         })
     }
 
@@ -389,10 +395,13 @@ impl Renderer {
         self.render_order.clear();
         self.draw_list.clear();
         self.clip_stack.clear();
+        self.nodes_processed = 0;
 
         // Phase 1: DFS traversal from each root.
-        let roots = scene.roots().to_vec();
-        for root_id in roots {
+        self.roots_scratch.clear();
+        self.roots_scratch.extend_from_slice(scene.roots());
+        for i in 0..self.roots_scratch.len() {
+            let root_id = self.roots_scratch[i];
             self.dfs_visit(scene, root_id);
         }
 
@@ -459,6 +468,8 @@ impl Renderer {
         if !node.visible {
             return;
         }
+
+        self.nodes_processed += 1;
 
         let effective_clip = compute_effective_clip_mode(node.clip_mode, node.scroll_offset);
         let blend_mode = node.blend_mode;
@@ -959,6 +970,32 @@ impl Renderer {
         }
     }
 
+    /// Binds shared vertex/index buffers, camera bind group, stencil reference,
+    /// and instance buffer, then issues an indexed draw call.
+    fn bind_and_draw<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        instance_buf: &'a wgpu::Buffer,
+        stencil_ref: u32,
+        index_count: u32,
+        instance_start: u32,
+        instance_count: u32,
+    ) {
+        pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
+        pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
+        pass.set_vertex_buffer(1, instance_buf.slice(..));
+        pass.set_index_buffer(
+            self.shared.index_buffer().slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+        pass.set_stencil_reference(stencil_ref);
+        pass.draw_indexed(
+            0..index_count,
+            0,
+            instance_start..instance_start + instance_count,
+        );
+    }
+
     /// Executes a single draw command in the given render pass.
     #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     fn execute_single_command<'a>(
@@ -991,18 +1028,13 @@ impl Renderer {
                 instance_count,
             } => {
                 pass.set_pipeline(self.rect_pipeline.stencil_write_pipeline());
-                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
-                pass.set_index_buffer(
-                    self.shared.index_buffer().slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                pass.set_stencil_reference(*current_stencil_ref);
-                pass.draw_indexed(
-                    0..index_count,
-                    0,
-                    *instance_start..*instance_start + *instance_count,
+                self.bind_and_draw(
+                    pass,
+                    self.rect_instance_buf.buffer(),
+                    *current_stencil_ref,
+                    index_count,
+                    *instance_start,
+                    *instance_count,
                 );
             }
             DrawCommand::StencilDecrement {
@@ -1010,18 +1042,13 @@ impl Renderer {
                 instance_count,
             } => {
                 pass.set_pipeline(self.rect_pipeline.stencil_decrement_pipeline());
-                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
-                pass.set_index_buffer(
-                    self.shared.index_buffer().slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                pass.set_stencil_reference(*current_stencil_ref);
-                pass.draw_indexed(
-                    0..index_count,
-                    0,
-                    *instance_start..*instance_start + *instance_count,
+                self.bind_and_draw(
+                    pass,
+                    self.rect_instance_buf.buffer(),
+                    *current_stencil_ref,
+                    index_count,
+                    *instance_start,
+                    *instance_count,
                 );
             }
             DrawCommand::DrawRects {
@@ -1031,18 +1058,13 @@ impl Renderer {
                 stencil_test,
             } => {
                 pass.set_pipeline(self.rect_pipeline.select_pipeline(*blend, *stencil_test));
-                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
-                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                pass.set_vertex_buffer(1, self.rect_instance_buf.buffer().slice(..));
-                pass.set_index_buffer(
-                    self.shared.index_buffer().slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                pass.set_stencil_reference(*current_stencil_ref);
-                pass.draw_indexed(
-                    0..index_count,
-                    0,
-                    *instance_start..*instance_start + *instance_count,
+                self.bind_and_draw(
+                    pass,
+                    self.rect_instance_buf.buffer(),
+                    *current_stencil_ref,
+                    index_count,
+                    *instance_start,
+                    *instance_count,
                 );
             }
             DrawCommand::DrawGlyphs {
@@ -1052,19 +1074,14 @@ impl Renderer {
                 stencil_test,
             } => {
                 pass.set_pipeline(self.text_pipeline.select_pipeline(*blend, *stencil_test));
-                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
                 pass.set_bind_group(1, self.text_system.atlas().bind_group(), &[]);
-                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                pass.set_vertex_buffer(1, self.text_instance_buf.buffer().slice(..));
-                pass.set_index_buffer(
-                    self.shared.index_buffer().slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                pass.set_stencil_reference(*current_stencil_ref);
-                pass.draw_indexed(
-                    0..index_count,
-                    0,
-                    *instance_start..*instance_start + *instance_count,
+                self.bind_and_draw(
+                    pass,
+                    self.text_instance_buf.buffer(),
+                    *current_stencil_ref,
+                    index_count,
+                    *instance_start,
+                    *instance_count,
                 );
             }
             DrawCommand::DrawImages {
@@ -1077,19 +1094,14 @@ impl Renderer {
                     self.textured_quad_pipeline
                         .select_pipeline(*blend, *stencil_test),
                 );
-                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
                 pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
-                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                pass.set_vertex_buffer(1, self.image_instance_buf.buffer().slice(..));
-                pass.set_index_buffer(
-                    self.shared.index_buffer().slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                pass.set_stencil_reference(*current_stencil_ref);
-                pass.draw_indexed(
-                    0..index_count,
-                    0,
-                    *instance_start..*instance_start + *instance_count,
+                self.bind_and_draw(
+                    pass,
+                    self.image_instance_buf.buffer(),
+                    *current_stencil_ref,
+                    index_count,
+                    *instance_start,
+                    *instance_count,
                 );
             }
             DrawCommand::DrawVectors {
@@ -1102,19 +1114,14 @@ impl Renderer {
                     self.textured_quad_pipeline
                         .select_pipeline(*blend, *stencil_test),
                 );
-                pass.set_bind_group(0, self.shared.camera_bind_group(), &[]);
                 pass.set_bind_group(1, self.image_atlas.bind_group(), &[]);
-                pass.set_vertex_buffer(0, self.shared.vertex_buffer().slice(..));
-                pass.set_vertex_buffer(1, self.vector_instance_buf.buffer().slice(..));
-                pass.set_index_buffer(
-                    self.shared.index_buffer().slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                pass.set_stencil_reference(*current_stencil_ref);
-                pass.draw_indexed(
-                    0..index_count,
-                    0,
-                    *instance_start..*instance_start + *instance_count,
+                self.bind_and_draw(
+                    pass,
+                    self.vector_instance_buf.buffer(),
+                    *current_stencil_ref,
+                    index_count,
+                    *instance_start,
+                    *instance_count,
                 );
             }
             // CopyFramebuffer and ApplyBlend are handled by the caller
@@ -1151,7 +1158,7 @@ impl Renderer {
             image_count: self.image_batch.ordered_len(),
             vector_count: self.vector_batch.ordered_len(),
             draw_calls: self.draw_list.len(),
-            total_nodes_processed: 0,
+            total_nodes_processed: self.nodes_processed,
         }
     }
 }
@@ -1214,7 +1221,7 @@ fn build_draw_commands_from_render_order(
     render_order: &[RenderOrderEntry],
     viewport: (u32, u32),
 ) -> Vec<DrawCommand> {
-    let mut commands = Vec::new();
+    let mut commands = Vec::with_capacity(render_order.len());
     for entry in render_order {
         match entry {
             RenderOrderEntry::Rect {

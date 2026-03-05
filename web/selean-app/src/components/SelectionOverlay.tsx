@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CameraInfo, SelectionBounds, SeleanEditor } from "../wasm/types";
 import { useResizeDrag } from "../hooks/useResizeDrag";
+import { worldToScreen, worldDimsToScreen } from "../utils/camera";
 
 interface SelectionOverlayProps {
   editorRef: React.RefObject<SeleanEditor | null>;
@@ -94,14 +95,12 @@ function SelectionBox({
   getHandleProps,
   isDragging,
 }: SelectionBoxProps) {
-  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-  const screenX =
-    ((bounds.x - camera.pan_x) * camera.zoom + camera.viewport_width / 2) / dpr;
-  const screenY =
-    ((bounds.y - camera.pan_y) * camera.zoom + camera.viewport_height / 2) /
-    dpr;
-  const screenW = (bounds.width * camera.zoom) / dpr;
-  const screenH = (bounds.height * camera.zoom) / dpr;
+  const { x: screenX, y: screenY } = worldToScreen(bounds.x, bounds.y, camera);
+  const { w: screenW, h: screenH } = worldDimsToScreen(
+    bounds.width,
+    bounds.height,
+    camera.zoom,
+  );
 
   const half = HANDLE_SIZE / 2;
 

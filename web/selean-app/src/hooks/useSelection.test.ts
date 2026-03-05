@@ -1,38 +1,31 @@
 import { renderHook, act } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { useSelection } from "./useSelection";
 import { createMockEditor, makeNodeInfo } from "../test/mock-editor";
 
 describe("useSelection", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("returns null selectedNode when not ready", () => {
     const editor = createMockEditor();
     const ref = { current: editor };
     const { result } = renderHook(() => useSelection(ref, false));
 
     expect(result.current.selectedNode).toBeNull();
+    expect(result.current.selectedIds).toEqual([]);
   });
 
-  it("returns null when no node is selected", () => {
+  it("returns null when no node is selected after refresh", () => {
     const editor = createMockEditor({
       get_selected_ids: vi.fn().mockReturnValue("[]"),
     });
     const ref = { current: editor };
     const { result } = renderHook(() => useSelection(ref, true));
 
-    // Advance past the initial poll
     act(() => {
-      vi.advanceTimersByTime(200);
+      result.current.refresh();
     });
 
     expect(result.current.selectedNode).toBeNull();
+    expect(result.current.selectedIds).toEqual([]);
   });
 
   it("returns NodeInfo when a node is selected", () => {
@@ -45,7 +38,7 @@ describe("useSelection", () => {
     const { result } = renderHook(() => useSelection(ref, true));
 
     act(() => {
-      vi.advanceTimersByTime(200);
+      result.current.refresh();
     });
 
     expect(result.current.selectedNode).not.toBeNull();
@@ -58,8 +51,7 @@ describe("useSelection", () => {
     let callCount = 0;
     const getSelectedIds = vi.fn().mockImplementation(() => {
       callCount++;
-      // First two calls return selected (initial poll + potential re-poll)
-      return callCount <= 2 ? '["abc"]' : "[]";
+      return callCount <= 1 ? '["abc"]' : "[]";
     });
     const editor = createMockEditor({
       get_selected_ids: getSelectedIds,
@@ -68,20 +60,20 @@ describe("useSelection", () => {
     const ref = { current: editor };
     const { result } = renderHook(() => useSelection(ref, true));
 
-    // First poll: selected
+    // First refresh: selected
     act(() => {
-      vi.advanceTimersByTime(150);
+      result.current.refresh();
     });
     expect(result.current.selectedNode).not.toBeNull();
 
-    // Advance past the threshold so subsequent polls return empty
+    // Second refresh: deselected
     act(() => {
-      vi.advanceTimersByTime(300);
+      result.current.refresh();
     });
     expect(result.current.selectedNode).toBeNull();
   });
 
-  it("refresh forces re-fetch of node data", () => {
+  it("refresh re-reads node properties even for same id", () => {
     const node1 = makeNodeInfo({ id: "abc", name: "V1" });
     const node2 = makeNodeInfo({ id: "abc", name: "V2" });
     const getNodeJson = vi
@@ -95,16 +87,13 @@ describe("useSelection", () => {
     const ref = { current: editor };
     const { result } = renderHook(() => useSelection(ref, true));
 
-    // First poll
     act(() => {
-      vi.advanceTimersByTime(200);
+      result.current.refresh();
     });
     expect(result.current.selectedNode?.name).toBe("V1");
 
-    // Call refresh and advance
     act(() => {
       result.current.refresh();
-      vi.advanceTimersByTime(200);
     });
     expect(result.current.selectedNode?.name).toBe("V2");
   });
@@ -120,31 +109,65 @@ describe("useSelection", () => {
 
     // Should not throw
     act(() => {
-      vi.advanceTimersByTime(200);
+      result.current.refresh();
     });
     expect(result.current.selectedNode).toBeNull();
   });
 
-  it("does not fetch node json for same id on repeated polls", () => {
-    const node = makeNodeInfo({ id: "abc" });
-    const getNodeJson = vi.fn().mockReturnValue(JSON.stringify(node));
+  it("refresh is a no-op when not ready", () => {
+    const editor = createMockEditor();
+    const ref = { current: editor };
+    const { result } = renderHook(() => useSelection(ref, false));
+
+    act(() => {
+      result.current.refresh();
+    });
+
+    expect(editor.get_selected_ids).not.toHaveBeenCalled();
+    expect(result.current.selectedNode).toBeNull();
+  });
+
+  it("refresh is a no-op when editor is null", () => {
+    const ref = { current: null };
+    const { result } = renderHook(() => useSelection(ref, true));
+
+    act(() => {
+      result.current.refresh();
+    });
+
+    expect(result.current.selectedNode).toBeNull();
+  });
+
+  it("returns selectedIds array", () => {
     const editor = createMockEditor({
-      get_selected_ids: vi.fn().mockReturnValue('["abc"]'),
-      get_node_json: getNodeJson,
+      get_selected_ids: vi.fn().mockReturnValue('["a","b","c"]'),
+      get_node_json: vi
+        .fn()
+        .mockReturnValue(JSON.stringify(makeNodeInfo({ id: "a" }))),
     });
     const ref = { current: editor };
-    renderHook(() => useSelection(ref, true));
+    const { result } = renderHook(() => useSelection(ref, true));
 
-    // First poll fetches node
     act(() => {
-      vi.advanceTimersByTime(200);
+      result.current.refresh();
     });
-    expect(getNodeJson).toHaveBeenCalledTimes(1);
 
-    // Second poll with same ID skips fetch
-    act(() => {
-      vi.advanceTimersByTime(200);
+    expect(result.current.selectedIds).toEqual(["a", "b", "c"]);
+  });
+
+  it("handles get_node_json returning 'null'", () => {
+    const editor = createMockEditor({
+      get_selected_ids: vi.fn().mockReturnValue('["deleted-node"]'),
+      get_node_json: vi.fn().mockReturnValue("null"),
     });
-    expect(getNodeJson).toHaveBeenCalledTimes(1);
+    const ref = { current: editor };
+    const { result } = renderHook(() => useSelection(ref, true));
+
+    act(() => {
+      result.current.refresh();
+    });
+
+    expect(result.current.selectedNode).toBeNull();
+    expect(result.current.selectedIds).toEqual(["deleted-node"]);
   });
 });

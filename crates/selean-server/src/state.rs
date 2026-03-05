@@ -36,7 +36,10 @@ impl AppState {
         Ok(Self {
             api_key: Arc::from(api_key),
             model: Arc::from(model),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
             figma_access_token,
         })
     }

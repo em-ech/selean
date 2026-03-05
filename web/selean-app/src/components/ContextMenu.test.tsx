@@ -2,6 +2,11 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { ContextMenu } from "./ContextMenu";
 import { createMockEditorRef } from "../test/mock-editor";
+import type { NodeInfo } from "../wasm/types";
+
+function makeClipboardRef(): React.MutableRefObject<NodeInfo | null> {
+  return { current: null };
+}
 
 describe("ContextMenu", () => {
   it("renders all menu items", () => {
@@ -13,6 +18,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={() => {}}
         onClose={() => {}}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     expect(screen.getByText("Copy")).toBeInTheDocument();
@@ -36,6 +42,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={() => {}}
         onClose={() => {}}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     const menu = screen.getByTestId("context-menu");
@@ -53,6 +60,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={() => {}}
         onClose={onClose}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     fireEvent.keyDown(document, { key: "Escape" });
@@ -71,6 +79,7 @@ describe("ContextMenu", () => {
           editorRef={ref}
           onSceneChanged={() => {}}
           onClose={onClose}
+          clipboardRef={makeClipboardRef()}
         />
       </div>,
     );
@@ -89,6 +98,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={() => {}}
         onClose={() => {}}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     expect(screen.getByText("Copy")).toBeDisabled();
@@ -118,6 +128,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={() => {}}
         onClose={() => {}}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     expect(screen.getByText("Delete")).not.toBeDisabled();
@@ -147,6 +158,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={onChanged}
         onClose={onClose}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     fireEvent.click(screen.getByText("Delete"));
@@ -180,6 +192,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={() => {}}
         onClose={() => {}}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     expect(screen.getByText("Group")).not.toBeDisabled();
@@ -208,6 +221,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={() => {}}
         onClose={() => {}}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     expect(screen.getByText("Ungroup")).not.toBeDisabled();
@@ -237,6 +251,7 @@ describe("ContextMenu", () => {
         editorRef={ref}
         onSceneChanged={onChanged}
         onClose={onClose}
+        clipboardRef={makeClipboardRef()}
       />,
     );
     fireEvent.click(screen.getByText("Bring to Front"));

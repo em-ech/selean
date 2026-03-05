@@ -75,52 +75,75 @@ pub fn all_tools() -> Vec<ToolDefinition> {
     ]
 }
 
-/// Returns `true` if the given tool name is read-only (queries scene state
-/// without producing mutations).
+/// Categorizes how a tool call should be dispatched by the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCategory {
+    /// Read-only query. Does not mutate the scene.
+    ReadOnly,
+    /// Page-level mutation (add/remove/switch page). Operates on `Document` directly.
+    Page,
+    /// Alignment tool. Requires direct scene access.
+    Align,
+    /// Rotation tool. Requires scene access for center computation.
+    Rotation,
+    /// Grouping tool (group/ungroup). Requires scene access for hierarchy.
+    Group,
+    /// Z-order tool (move forward/backward/front/back). Requires scene access.
+    ZOrder,
+    /// Standard mutation. Produces `CommandDescriptor` values.
+    Mutation,
+}
+
+/// Returns the dispatch category for the given tool name.
+#[must_use]
+pub fn tool_category(name: &str) -> ToolCategory {
+    match name {
+        "get_scene_summary" | "get_node" | "query_nodes" | "get_pages" => ToolCategory::ReadOnly,
+        "add_page" | "remove_page" | "set_active_page" => ToolCategory::Page,
+        "align_nodes" => ToolCategory::Align,
+        "set_rotation" => ToolCategory::Rotation,
+        "group_nodes" | "ungroup_node" => ToolCategory::Group,
+        "move_to_front" | "move_to_back" | "move_forward" | "move_backward" => {
+            ToolCategory::ZOrder
+        }
+        _ => ToolCategory::Mutation,
+    }
+}
+
+/// Returns `true` if the given tool name is read-only.
 #[must_use]
 pub fn is_read_only_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "get_scene_summary" | "get_node" | "query_nodes" | "get_pages"
-    )
+    tool_category(name) == ToolCategory::ReadOnly
 }
 
-/// Returns `true` if the given tool name is a page-level mutation that
-/// operates on the `Document` directly (not through `CommandDescriptor`).
+/// Returns `true` if the given tool name is a page-level mutation.
 #[must_use]
 pub fn is_page_tool(name: &str) -> bool {
-    matches!(name, "add_page" | "remove_page" | "set_active_page")
+    tool_category(name) == ToolCategory::Page
 }
 
-/// Returns `true` if the given tool name is the alignment tool, which
-/// requires direct scene access and is handled by the caller.
+/// Returns `true` if the given tool name is the alignment tool.
 #[must_use]
 pub fn is_align_tool(name: &str) -> bool {
-    name == "align_nodes"
+    tool_category(name) == ToolCategory::Align
 }
 
-/// Returns `true` if the given tool name is the rotation tool, which
-/// requires scene access to read node bounds for center computation.
+/// Returns `true` if the given tool name is the rotation tool.
 #[must_use]
 pub fn is_rotation_tool(name: &str) -> bool {
-    name == "set_rotation"
+    tool_category(name) == ToolCategory::Rotation
 }
 
-/// Returns `true` if the given tool name is a grouping tool, which
-/// requires scene access for hierarchy operations.
+/// Returns `true` if the given tool name is a grouping tool.
 #[must_use]
 pub fn is_group_tool(name: &str) -> bool {
-    matches!(name, "group_nodes" | "ungroup_node")
+    tool_category(name) == ToolCategory::Group
 }
 
-/// Returns `true` if the given tool name is a z-order tool, which
-/// requires scene access to compute new ordering.
+/// Returns `true` if the given tool name is a z-order tool.
 #[must_use]
 pub fn is_z_order_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "move_to_front" | "move_to_back" | "move_forward" | "move_backward"
-    )
+    tool_category(name) == ToolCategory::ZOrder
 }
 
 /// Maps a tool call (name + JSON args) to a list of `CommandDescriptor` values.
@@ -495,11 +518,31 @@ fn get_f32(args: &serde_json::Value, field: &str) -> Result<f32, ToolCallError> 
         .ok_or_else(|| ToolCallError::InvalidArgs(format!("missing or invalid {field}")))
 }
 
+/// Gets a required f32 field clamped to `[min, max]`.
+fn get_f32_clamped(
+    args: &serde_json::Value,
+    field: &str,
+    min: f32,
+    max: f32,
+) -> Result<f32, ToolCallError> {
+    get_f32(args, field).map(|v| v.clamp(min, max))
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn get_optional_f32(args: &serde_json::Value, field: &str) -> Option<f32> {
     args.get(field)
         .and_then(serde_json::Value::as_f64)
         .map(|v| v as f32)
+}
+
+/// Gets an optional f32 field clamped to `[min, max]`.
+fn get_optional_f32_clamped(
+    args: &serde_json::Value,
+    field: &str,
+    min: f32,
+    max: f32,
+) -> Option<f32> {
+    get_optional_f32(args, field).map(|v| v.clamp(min, max))
 }
 
 fn get_string(args: &serde_json::Value, field: &str) -> Result<String, ToolCallError> {
@@ -518,10 +561,10 @@ fn color_field(prefix: &str, channel: &str) -> String {
 }
 
 fn parse_optional_color(args: &serde_json::Value, prefix: &str) -> Option<Color> {
-    let r = get_optional_f32(args, &color_field(prefix, "r"))?;
-    let g = get_optional_f32(args, &color_field(prefix, "g")).unwrap_or(0.0);
-    let b = get_optional_f32(args, &color_field(prefix, "b")).unwrap_or(0.0);
-    let a = get_optional_f32(args, &color_field(prefix, "a")).unwrap_or(1.0);
+    let r = get_optional_f32_clamped(args, &color_field(prefix, "r"), 0.0, 1.0)?;
+    let g = get_optional_f32_clamped(args, &color_field(prefix, "g"), 0.0, 1.0).unwrap_or(0.0);
+    let b = get_optional_f32_clamped(args, &color_field(prefix, "b"), 0.0, 1.0).unwrap_or(0.0);
+    let a = get_optional_f32_clamped(args, &color_field(prefix, "a"), 0.0, 1.0).unwrap_or(1.0);
     Some(Color::new(r, g, b, a))
 }
 
@@ -547,7 +590,7 @@ fn map_set_text(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, Tool
     let node_id = parse_node_id(args, "node_id")?;
     let content = get_string(args, "content")?;
     let mut cmds = vec![CommandDescriptor::SetTextContent { node_id, content }];
-    if let Some(font_size) = get_optional_f32(args, "font_size") {
+    if let Some(font_size) = get_optional_f32_clamped(args, "font_size", 1.0, 1000.0) {
         cmds.push(CommandDescriptor::SetFontSize { node_id, font_size });
     }
     Ok(cmds)
@@ -555,7 +598,7 @@ fn map_set_text(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, Tool
 
 fn map_set_opacity(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
     let node_id = parse_node_id(args, "node_id")?;
-    let opacity = get_f32(args, "opacity")?;
+    let opacity = get_f32_clamped(args, "opacity", 0.0, 1.0)?;
     Ok(vec![CommandDescriptor::SetOpacity { node_id, opacity }])
 }
 
@@ -578,7 +621,7 @@ fn map_set_stroke(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, To
     let node_id = parse_node_id(args, "node_id")?;
     let stroke = parse_optional_color(args, "");
     let mut cmds = vec![CommandDescriptor::SetStroke { node_id, stroke }];
-    if let Some(width) = get_optional_f32(args, "width") {
+    if let Some(width) = get_optional_f32_clamped(args, "width", 0.0, f32::MAX) {
         cmds.push(CommandDescriptor::SetStrokeWidth { node_id, width });
     }
     Ok(cmds)
@@ -598,14 +641,14 @@ fn parse_node_kind(
     args: &serde_json::Value,
     kind_str: &str,
 ) -> Result<SceneNodeKind, ToolCallError> {
-    let corner_radius = get_optional_f32(args, "corner_radius").unwrap_or(0.0);
+    let corner_radius = get_optional_f32_clamped(args, "corner_radius", 0.0, f32::MAX).unwrap_or(0.0);
     match kind_str {
         "Frame" => Ok(SceneNodeKind::Frame {
             corner_radius: [corner_radius; 4],
         }),
         "Text" => {
             let content = get_string(args, "text_content").unwrap_or_else(|_| String::new());
-            let font_size = get_optional_f32(args, "font_size").unwrap_or(16.0);
+            let font_size = get_optional_f32_clamped(args, "font_size", 1.0, 1000.0).unwrap_or(16.0);
             Ok(SceneNodeKind::Text {
                 content,
                 font_size,
@@ -632,7 +675,8 @@ fn parse_node_kind(
     }
 }
 
-fn map_create_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+/// Builds a `SceneNode` from the common create/add-child arguments.
+fn build_node_from_args(args: &serde_json::Value) -> Result<SceneNode, ToolCallError> {
     let name = get_string(args, "name")?;
     let kind_str = get_string(args, "kind")?;
     let x = get_f32(args, "x")?;
@@ -649,7 +693,11 @@ fn map_create_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, T
         BoundingBox::new(x, y, width, height),
     );
     node.fill = parse_optional_color(args, "fill");
+    Ok(node)
+}
 
+fn map_create_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
+    let node = build_node_from_args(args)?;
     Ok(vec![CommandDescriptor::AddRoot { node }])
 }
 
@@ -662,11 +710,11 @@ fn map_set_corner_radius(
     args: &serde_json::Value,
 ) -> Result<Vec<CommandDescriptor>, ToolCallError> {
     let node_id = parse_node_id(args, "node_id")?;
-    let base = get_f32(args, "radius")?;
-    let tl = get_optional_f32(args, "top_left").unwrap_or(base);
-    let tr = get_optional_f32(args, "top_right").unwrap_or(base);
-    let br = get_optional_f32(args, "bottom_right").unwrap_or(base);
-    let bl = get_optional_f32(args, "bottom_left").unwrap_or(base);
+    let base = get_f32_clamped(args, "radius", 0.0, f32::MAX)?;
+    let tl = get_optional_f32_clamped(args, "top_left", 0.0, f32::MAX).unwrap_or(base);
+    let tr = get_optional_f32_clamped(args, "top_right", 0.0, f32::MAX).unwrap_or(base);
+    let br = get_optional_f32_clamped(args, "bottom_right", 0.0, f32::MAX).unwrap_or(base);
+    let bl = get_optional_f32_clamped(args, "bottom_left", 0.0, f32::MAX).unwrap_or(base);
     Ok(vec![CommandDescriptor::SetCornerRadius {
         node_id,
         corner_radius: [tl, tr, br, bl],
@@ -685,7 +733,7 @@ fn map_set_font_family(args: &serde_json::Value) -> Result<Vec<CommandDescriptor
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn map_set_font_weight(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
     let node_id = parse_node_id(args, "node_id")?;
-    let weight = get_f32(args, "font_weight")?;
+    let weight = get_f32_clamped(args, "font_weight", 1.0, 1000.0)?;
     Ok(vec![CommandDescriptor::SetFontWeight {
         node_id,
         font_weight: weight as u16,
@@ -704,7 +752,7 @@ fn map_set_text_align(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>
 
 fn map_set_line_height(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
     let node_id = parse_node_id(args, "node_id")?;
-    let line_height = get_f32(args, "line_height")?;
+    let line_height = get_f32_clamped(args, "line_height", 0.1, 10.0)?;
     Ok(vec![CommandDescriptor::SetLineHeight {
         node_id,
         line_height,
@@ -722,23 +770,7 @@ fn map_set_text_color(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>
 
 fn map_add_child_node(args: &serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError> {
     let parent_id = parse_node_id(args, "parent_id")?;
-    let name = get_string(args, "name")?;
-    let kind_str = get_string(args, "kind")?;
-    let x = get_f32(args, "x")?;
-    let y = get_f32(args, "y")?;
-    let width = get_f32(args, "width")?;
-    let height = get_f32(args, "height")?;
-
-    let kind = parse_node_kind(args, &kind_str)?;
-
-    let mut node = SceneNode::new(
-        NodeId::new(),
-        name,
-        kind,
-        BoundingBox::new(x, y, width, height),
-    );
-    node.fill = parse_optional_color(args, "fill");
-
+    let node = build_node_from_args(args)?;
     Ok(vec![CommandDescriptor::AddChild { parent_id, node }])
 }
 
@@ -1005,8 +1037,13 @@ fn parse_gradient_stops(args: &serde_json::Value) -> Result<Vec<GradientStop>, T
         let a = stop_val.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
         stops.push(GradientStop {
-            position,
-            color: Color::new(r, g, b, a),
+            position: position.clamp(0.0, 1.0),
+            color: Color::new(
+                r.clamp(0.0, 1.0),
+                g.clamp(0.0, 1.0),
+                b.clamp(0.0, 1.0),
+                a.clamp(0.0, 1.0),
+            ),
         });
     }
     Ok(stops)
@@ -1231,6 +1268,28 @@ mod tests {
         assert!(!is_page_tool("get_pages"));
         assert!(!is_page_tool("set_fill"));
         assert!(!is_page_tool("nonexistent"));
+    }
+
+    #[test]
+    fn tool_category_classifies_all_categories() {
+        assert_eq!(tool_category("get_scene_summary"), ToolCategory::ReadOnly);
+        assert_eq!(tool_category("get_node"), ToolCategory::ReadOnly);
+        assert_eq!(tool_category("query_nodes"), ToolCategory::ReadOnly);
+        assert_eq!(tool_category("get_pages"), ToolCategory::ReadOnly);
+        assert_eq!(tool_category("add_page"), ToolCategory::Page);
+        assert_eq!(tool_category("remove_page"), ToolCategory::Page);
+        assert_eq!(tool_category("set_active_page"), ToolCategory::Page);
+        assert_eq!(tool_category("align_nodes"), ToolCategory::Align);
+        assert_eq!(tool_category("set_rotation"), ToolCategory::Rotation);
+        assert_eq!(tool_category("group_nodes"), ToolCategory::Group);
+        assert_eq!(tool_category("ungroup_node"), ToolCategory::Group);
+        assert_eq!(tool_category("move_to_front"), ToolCategory::ZOrder);
+        assert_eq!(tool_category("move_to_back"), ToolCategory::ZOrder);
+        assert_eq!(tool_category("move_forward"), ToolCategory::ZOrder);
+        assert_eq!(tool_category("move_backward"), ToolCategory::ZOrder);
+        assert_eq!(tool_category("set_fill"), ToolCategory::Mutation);
+        assert_eq!(tool_category("create_node"), ToolCategory::Mutation);
+        assert_eq!(tool_category("nonexistent"), ToolCategory::Mutation);
     }
 
     #[test]
@@ -2173,6 +2232,91 @@ mod tests {
                 assert!(effects.is_empty());
             }
             _ => panic!("expected SetEffects"),
+        }
+    }
+
+    #[test]
+    fn opacity_clamped_to_unit_range() {
+        let id = test_node_id();
+        let args = serde_json::json!({ "node_id": id.to_string(), "opacity": 2.5 });
+        let cmds = map_tool_call("set_opacity", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetOpacity { opacity, .. } => assert_eq!(*opacity, 1.0),
+            _ => panic!("expected SetOpacity"),
+        }
+
+        let args = serde_json::json!({ "node_id": id.to_string(), "opacity": -1.0 });
+        let cmds = map_tool_call("set_opacity", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetOpacity { opacity, .. } => assert_eq!(*opacity, 0.0),
+            _ => panic!("expected SetOpacity"),
+        }
+    }
+
+    #[test]
+    fn color_channels_clamped_to_unit_range() {
+        let id = test_node_id();
+        let args = serde_json::json!({
+            "node_id": id.to_string(),
+            "r": 2.0, "g": -0.5, "b": 0.5, "a": 3.0
+        });
+        let cmds = map_tool_call("set_fill", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetFill { fill: Some(c), .. } => {
+                assert_eq!(c.r, 1.0);
+                assert_eq!(c.g, 0.0);
+                assert_eq!(c.b, 0.5);
+                assert_eq!(c.a, 1.0);
+            }
+            _ => panic!("expected SetFill with color"),
+        }
+    }
+
+    #[test]
+    fn font_weight_clamped() {
+        let id = test_node_id();
+        let args = serde_json::json!({ "node_id": id.to_string(), "font_weight": 2000.0 });
+        let cmds = map_tool_call("set_font_weight", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetFontWeight { font_weight, .. } => {
+                assert_eq!(*font_weight, 1000);
+            }
+            _ => panic!("expected SetFontWeight"),
+        }
+    }
+
+    #[test]
+    fn corner_radius_clamped_non_negative() {
+        let id = test_node_id();
+        let args = serde_json::json!({ "node_id": id.to_string(), "radius": -5.0 });
+        let cmds = map_tool_call("set_corner_radius", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetCornerRadius { corner_radius, .. } => {
+                assert_eq!(*corner_radius, [0.0, 0.0, 0.0, 0.0]);
+            }
+            _ => panic!("expected SetCornerRadius"),
+        }
+    }
+
+    #[test]
+    fn line_height_clamped() {
+        let id = test_node_id();
+        let args = serde_json::json!({ "node_id": id.to_string(), "line_height": -1.0 });
+        let cmds = map_tool_call("set_line_height", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetLineHeight { line_height, .. } => {
+                assert_eq!(*line_height, 0.1);
+            }
+            _ => panic!("expected SetLineHeight"),
+        }
+
+        let args = serde_json::json!({ "node_id": id.to_string(), "line_height": 50.0 });
+        let cmds = map_tool_call("set_line_height", &args).unwrap();
+        match &cmds[0] {
+            CommandDescriptor::SetLineHeight { line_height, .. } => {
+                assert_eq!(*line_height, 10.0);
+            }
+            _ => panic!("expected SetLineHeight"),
         }
     }
 }

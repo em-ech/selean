@@ -12,6 +12,10 @@ use crate::text::packer::{PackResult, ShelfPacker};
 /// Default initial atlas dimensions (1024×1024).
 const DEFAULT_ATLAS_SIZE: u32 = 1024;
 
+/// Maximum atlas dimension (4096×4096 = 64MB for RGBA, 16MB for R8).
+/// Prevents unbounded VRAM growth on GPUs that allow very large textures.
+const MAX_ATLAS_SIZE: u32 = 4096;
+
 /// Padding between entries in texels (prevents texture filtering bleed).
 const ATLAS_PADDING: u32 = 1;
 
@@ -105,7 +109,10 @@ impl<const CHANNELS: u32> TextureAtlas<CHANNELS> {
     /// Creates a new texture atlas with the default initial size.
     #[must_use]
     pub fn new(device: &wgpu::Device) -> Self {
-        let max_dimension = device.limits().max_texture_dimension_2d;
+        let max_dimension = device
+            .limits()
+            .max_texture_dimension_2d
+            .min(MAX_ATLAS_SIZE);
         let initial_size = DEFAULT_ATLAS_SIZE.min(max_dimension);
 
         let (texture, texture_view) = Self::create_texture(device, initial_size, initial_size);
@@ -118,6 +125,7 @@ impl<const CHANNELS: u32> TextureAtlas<CHANNELS> {
             width = initial_size,
             height = initial_size,
             channels = CHANNELS,
+            max_dimension,
             "{} created",
             Self::label_prefix()
         );

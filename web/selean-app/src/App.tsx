@@ -427,6 +427,7 @@ export function App() {
                 editorRef={editorRef}
                 onSceneChanged={onSceneChanged}
                 onClose={handleCloseContextMenu}
+                clipboardRef={clipboardRef}
               />
             )}
             {creationHandlers && (

@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
-import { PropertyInspector } from "./PropertyInspector";
+import { PropertyInspector, extractRotationDegrees } from "./PropertyInspector";
 import { createMockEditorRef, makeNodeInfo } from "../test/mock-editor";
 
 describe("PropertyInspector", () => {
@@ -284,5 +284,237 @@ describe("PropertyInspector", () => {
       />,
     );
     expect(screen.getByText(`${longPath.slice(0, 30)}...`)).toBeInTheDocument();
+  });
+});
+
+describe("PropertyInspector edge cases", () => {
+  it("renders Group node without Frame/Text/Image/Vector sections", () => {
+    const node = makeNodeInfo({ kind: "Group" });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    expect(screen.getByText("Identity")).toBeInTheDocument();
+    expect(screen.queryByText("Radius")).not.toBeInTheDocument();
+    expect(screen.queryByText("Content")).not.toBeInTheDocument();
+    expect(screen.queryByText("Replace Image")).not.toBeInTheDocument();
+    // Group kind visible
+    const groupTexts = screen.getAllByText("Group");
+    expect(groupTexts.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders Effects section with empty effects array", () => {
+    const node = makeNodeInfo({ effects: [] });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    expect(screen.getByText("Effects")).toBeInTheDocument();
+    expect(screen.getByText("Add Effect")).toBeInTheDocument();
+  });
+
+  it("renders existing Drop Shadow effect fields", () => {
+    const node = makeNodeInfo({
+      effects: [
+        {
+          type: "DropShadow",
+          color: { r: 0, g: 0, b: 0, a: 0.5 },
+          offset_x: 4,
+          offset_y: 4,
+          blur_radius: 8,
+        },
+      ],
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    // "Drop Shadow" appears as effect label and dropdown option
+    const labels = screen.getAllByText("Drop Shadow");
+    expect(labels.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByTitle("Remove effect")).toBeInTheDocument();
+  });
+
+  it("renders existing Blur effect fields", () => {
+    const node = makeNodeInfo({
+      effects: [{ type: "Blur", radius: 10 }],
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    // "Blur" appears as effect label
+    const blurLabels = screen.getAllByText("Blur");
+    expect(blurLabels.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByDisplayValue("10")).toBeInTheDocument();
+  });
+
+  it("adds effect when Add Effect is clicked", () => {
+    const node = makeNodeInfo({ id: "n1", effects: [] });
+    const ref = createMockEditorRef();
+    const onChanged = vi.fn();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={onChanged}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Add Effect"));
+    const call = (ref.current.execute_command as ReturnType<typeof vi.fn>).mock
+      .calls[0][0];
+    const parsed = JSON.parse(call);
+    expect(parsed.type).toBe("SetEffects");
+    expect(parsed.effects.length).toBe(1);
+    expect(parsed.effects[0].type).toBe("DropShadow");
+  });
+
+  it("removes effect when remove button is clicked", () => {
+    const node = makeNodeInfo({
+      id: "n1",
+      effects: [{ type: "Blur", radius: 10 }],
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("Remove effect"));
+    const call = (ref.current.execute_command as ReturnType<typeof vi.fn>).mock
+      .calls[0][0];
+    const parsed = JSON.parse(call);
+    expect(parsed.type).toBe("SetEffects");
+    expect(parsed.effects.length).toBe(0);
+  });
+
+  it("handles Text node with null optional fields using defaults", () => {
+    const node = makeNodeInfo({
+      kind: "Text",
+      text_content: null,
+      font_size: null,
+      font_family: null,
+      font_weight: null,
+      font_style: null,
+      text_align: null,
+      line_height: null,
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    // Should render with defaults, not crash
+    expect(screen.getByDisplayValue("")).toBeInTheDocument(); // empty text_content
+    expect(screen.getByDisplayValue("16")).toBeInTheDocument(); // default font_size
+    expect(screen.getByDisplayValue("Inter")).toBeInTheDocument(); // default font_family
+    expect(screen.getByDisplayValue("400")).toBeInTheDocument(); // default font_weight
+  });
+
+  it("renders null fill color as 'none'", () => {
+    const node = makeNodeInfo({ fill: null });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    // "none" appears for null fill and possibly null stroke
+    const noneLabels = screen.getAllByText("none");
+    expect(noneLabels.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("executes SetBlendMode when blend dropdown changes", () => {
+    const node = makeNodeInfo({ id: "n1", blend_mode: "Normal" });
+    const ref = createMockEditorRef();
+    const onChanged = vi.fn();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={onChanged}
+      />,
+    );
+
+    const select = screen.getByDisplayValue("Normal");
+    fireEvent.change(select, { target: { value: "Multiply" } });
+
+    const call = (ref.current.execute_command as ReturnType<typeof vi.fn>).mock
+      .calls[0][0];
+    const parsed = JSON.parse(call);
+    expect(parsed.type).toBe("SetBlendMode");
+    expect(parsed.blend_mode).toBe("Multiply");
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("does not fire command for NaN number input on blur", () => {
+    const node = makeNodeInfo({
+      id: "n1",
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 50,
+    });
+    const ref = createMockEditorRef();
+    render(
+      <PropertyInspector
+        node={node}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+
+    const xInput = screen.getByDisplayValue("10");
+    fireEvent.change(xInput, { target: { value: "abc" } });
+    fireEvent.blur(xInput);
+
+    expect(ref.current.execute_command).not.toHaveBeenCalled();
+  });
+});
+
+describe("extractRotationDegrees", () => {
+  it("returns 0 for identity transform", () => {
+    expect(extractRotationDegrees([1, 0, 0, 1, 0, 0])).toBe(0);
+  });
+
+  it("returns 90 for 90-degree rotation", () => {
+    expect(extractRotationDegrees([0, 1, -1, 0, 0, 0])).toBe(90);
+  });
+
+  it("returns -90 for -90-degree rotation", () => {
+    expect(extractRotationDegrees([0, -1, 1, 0, 0, 0])).toBe(-90);
+  });
+
+  it("returns 45 for 45-degree rotation", () => {
+    const cos45 = Math.cos(Math.PI / 4);
+    const sin45 = Math.sin(Math.PI / 4);
+    expect(extractRotationDegrees([cos45, sin45, -sin45, cos45, 0, 0])).toBe(
+      45,
+    );
   });
 });

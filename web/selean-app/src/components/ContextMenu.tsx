@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { colors, fontSizes } from "../theme";
 import type { NodeInfo, SeleanEditor } from "../wasm/types";
+import { pasteNode } from "../utils/clipboard";
 
 interface ContextMenuProps {
   x: number;
@@ -8,6 +9,7 @@ interface ContextMenuProps {
   editorRef: React.RefObject<SeleanEditor | null>;
   onSceneChanged: () => void;
   onClose: () => void;
+  clipboardRef: React.MutableRefObject<NodeInfo | null>;
 }
 
 interface MenuItem {
@@ -33,9 +35,9 @@ export function ContextMenu({
   editorRef,
   onSceneChanged,
   onClose,
+  clipboardRef,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const clipboardRef = useRef<NodeInfo | null>(null);
 
   // Close on outside click or Escape.
   useEffect(() => {
@@ -216,28 +218,6 @@ function getFirstSelectedNode(
     console.warn("context-menu:get-node failed", e);
     return null;
   }
-}
-
-function pasteNode(editor: SeleanEditor, node: NodeInfo) {
-  const args: Record<string, unknown> = {
-    name: `${node.name} copy`,
-    kind: node.kind,
-    x: node.x + 10,
-    y: node.y + 10,
-    width: node.width,
-    height: node.height,
-  };
-  if (node.fill) {
-    args.fill_r = node.fill[0];
-    args.fill_g = node.fill[1];
-    args.fill_b = node.fill[2];
-    args.fill_a = node.fill[3];
-  }
-  if (node.text_content) args.text_content = node.text_content;
-  if (node.font_size) args.font_size = node.font_size;
-  if (node.asset_ref) args.asset_ref = node.asset_ref;
-  if (node.path_data) args.path_data = node.path_data;
-  editor.execute_tool_call("create_node", JSON.stringify(args));
 }
 
 const menuStyle: React.CSSProperties = {

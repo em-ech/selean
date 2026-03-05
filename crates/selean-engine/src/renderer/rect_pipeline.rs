@@ -9,8 +9,9 @@ use tracing::warn;
 
 use super::quad::{QUAD_INDICES, QuadVertex};
 use super::shared::{
-    BLEND_STATE_ADD, BLEND_STATE_REPLACE, PersistentInstanceBuffer, STENCIL_DECREMENT,
-    STENCIL_NOOP, STENCIL_TEST, STENCIL_WRITE, SharedPipelineResources, create_pipeline_with_blend,
+    BLEND_STATE_ADD, BLEND_STATE_REPLACE, PersistentInstanceBuffer, PipelineSet,
+    STENCIL_DECREMENT, STENCIL_NOOP, STENCIL_TEST, STENCIL_WRITE, SharedPipelineResources,
+    create_pipeline_with_blend,
 };
 use crate::scene::{
     BlendMode, ClipRect, Color, Gradient, SceneNode, SceneNodeKind, TransformColumns,
@@ -436,20 +437,9 @@ impl Default for RectBatch {
 ///
 /// Shared resources (vertex/index buffers, camera uniform) are provided by
 /// [`SharedPipelineResources`] during creation and draw calls.
-#[allow(clippy::struct_field_names)]
 pub struct RectPipeline {
-    /// Pipeline variant for Normal (alpha) blending.
-    pipeline_normal: wgpu::RenderPipeline,
-    /// Pipeline variant for Additive blending.
-    pipeline_add: wgpu::RenderPipeline,
-    /// Replace blending (for non-native blend modes, composited by blend pass).
-    pipeline_replace: wgpu::RenderPipeline,
-    /// Normal blend with stencil Equal test (render inside stencil clip).
-    pipeline_normal_stencil_test: wgpu::RenderPipeline,
-    /// Additive blend with stencil Equal test (render inside stencil clip).
-    pipeline_add_stencil_test: wgpu::RenderPipeline,
-    /// Replace blend with stencil Equal test.
-    pipeline_replace_stencil_test: wgpu::RenderPipeline,
+    /// Normal/Add/Replace x stencil variants.
+    pipelines: PipelineSet,
     /// Stencil write: `IncrementClamp`, no color output (clip push).
     pipeline_stencil_write: wgpu::RenderPipeline,
     /// Stencil decrement: `DecrementClamp`, no color output (clip pop).
@@ -576,31 +566,23 @@ impl RectPipeline {
         );
 
         Self {
-            pipeline_normal,
-            pipeline_add,
-            pipeline_replace,
-            pipeline_normal_stencil_test,
-            pipeline_add_stencil_test,
-            pipeline_replace_stencil_test,
+            pipelines: PipelineSet {
+                pipeline_normal,
+                pipeline_add,
+                pipeline_replace,
+                pipeline_normal_stencil_test,
+                pipeline_add_stencil_test,
+                pipeline_replace_stencil_test,
+            },
             pipeline_stencil_write,
             pipeline_stencil_decrement,
         }
     }
 
     /// Returns the pipeline variant for the given blend mode and stencil test state.
-    ///
-    /// Non-native blend modes use the Replace pipeline (composited by a subsequent
-    /// shader-based blend pass).
     #[must_use]
     pub fn select_pipeline(&self, blend: BlendMode, stencil_test: bool) -> &wgpu::RenderPipeline {
-        match (blend, stencil_test) {
-            (BlendMode::Add, false) => &self.pipeline_add,
-            (BlendMode::Add, true) => &self.pipeline_add_stencil_test,
-            (BlendMode::Normal, false) => &self.pipeline_normal,
-            (BlendMode::Normal, true) => &self.pipeline_normal_stencil_test,
-            (_, false) => &self.pipeline_replace,
-            (_, true) => &self.pipeline_replace_stencil_test,
-        }
+        self.pipelines.select(blend, stencil_test)
     }
 
     /// Returns the stencil-write pipeline (`IncrementClamp`, no color output).
@@ -648,13 +630,13 @@ impl RectPipeline {
 
         // Draw Normal instances.
         if normal_count > 0 {
-            pass.set_pipeline(&self.pipeline_normal);
+            pass.set_pipeline(&self.pipelines.pipeline_normal);
             pass.draw_indexed(0..index_count, 0, 0..normal_count);
         }
 
         // Draw Add instances (offset by normal_count in the instance buffer).
         if add_count > 0 {
-            pass.set_pipeline(&self.pipeline_add);
+            pass.set_pipeline(&self.pipelines.pipeline_add);
             pass.draw_indexed(0..index_count, 0, normal_count..normal_count + add_count);
         }
     }

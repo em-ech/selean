@@ -295,6 +295,84 @@ impl Command for ReparentCommand {
     }
 }
 
+// --- ReparentToRootCommand ---
+
+/// Moves a node from its current parent to become a root node.
+///
+/// Captures the old parent ID and child index on execute so the node can be
+/// reparented back on undo. The subtree (all descendants) moves with the node.
+#[derive(Debug)]
+pub struct ReparentToRootCommand {
+    node_id: NodeId,
+    old_parent_id: Option<NodeId>,
+    old_child_index: usize,
+}
+
+impl ReparentToRootCommand {
+    /// Creates a command that will move `node_id` to become a root node.
+    #[must_use]
+    pub fn new(node_id: NodeId) -> Self {
+        Self {
+            node_id,
+            old_parent_id: None,
+            old_child_index: 0,
+        }
+    }
+}
+
+impl Command for ReparentToRootCommand {
+    fn execute(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(node) = scene.get(self.node_id) else {
+            return false;
+        };
+
+        self.old_parent_id = node.parent;
+
+        if let Some(pid) = self.old_parent_id {
+            self.old_child_index = scene.children(pid).map_or(0, |kids| {
+                kids.iter().position(|&c| c == self.node_id).unwrap_or(0)
+            });
+        } else {
+            // Already a root, nothing to do.
+            return false;
+        }
+
+        scene.reparent_to_root(self.node_id, scene.roots().len())
+    }
+
+    fn undo(&mut self, scene: &mut SceneGraph) -> bool {
+        let Some(old_pid) = self.old_parent_id else {
+            return false;
+        };
+
+        if !scene.reparent(self.node_id, old_pid) {
+            return false;
+        }
+
+        // Restore original index within parent's children.
+        if let Some(parent) = scene.get(old_pid) {
+            let current_children = parent.children.clone();
+            let current_pos = current_children
+                .iter()
+                .position(|&c| c == self.node_id)
+                .unwrap_or(0);
+            if current_pos != self.old_child_index {
+                let mut new_order = current_children;
+                new_order.remove(current_pos);
+                let insert_at = self.old_child_index.min(new_order.len());
+                new_order.insert(insert_at, self.node_id);
+                scene.reorder_children(old_pid, &new_order);
+            }
+        }
+
+        true
+    }
+
+    fn description(&self) -> &str {
+        "Reparent to Root"
+    }
+}
+
 // --- ReorderRootsCommand ---
 
 /// Reorders the root nodes of the scene graph.
@@ -608,6 +686,70 @@ mod tests {
         assert_eq!(scene.parent(child_id), Some(a_id));
         assert_eq!(scene.children(a_id).unwrap(), &[child_id]);
         assert!(scene.children(b_id).unwrap().is_empty());
+    }
+
+    // --- ReparentToRootCommand ---
+
+    #[test]
+    fn reparent_to_root_and_undo() {
+        let mut scene = SceneGraph::new();
+        let parent = make_frame("Parent");
+        let parent_id = scene.add_root(parent);
+        let child = make_frame("Child");
+        let child_id = child.id;
+        scene.add_child(parent_id, child);
+
+        let mut cmd = ReparentToRootCommand::new(child_id);
+
+        assert!(cmd.execute(&mut scene));
+        // Child should now be a root with no parent.
+        assert_eq!(scene.parent(child_id), None);
+        assert!(scene.roots().contains(&child_id));
+        assert!(scene.children(parent_id).unwrap().is_empty());
+
+        // Undo should restore the child back under parent.
+        assert!(cmd.undo(&mut scene));
+        assert_eq!(scene.parent(child_id), Some(parent_id));
+        assert_eq!(scene.children(parent_id).unwrap(), &[child_id]);
+        assert!(!scene.roots().contains(&child_id));
+    }
+
+    #[test]
+    fn reparent_to_root_preserves_subtree() {
+        let mut scene = SceneGraph::new();
+        let parent = make_frame("Parent");
+        let parent_id = scene.add_root(parent);
+        let child = make_frame("Child");
+        let child_id = child.id;
+        scene.add_child(parent_id, child);
+        let grandchild = make_frame("Grandchild");
+        let grandchild_id = grandchild.id;
+        scene.add_child(child_id, grandchild);
+
+        let mut cmd = ReparentToRootCommand::new(child_id);
+
+        assert!(cmd.execute(&mut scene));
+        // Child is now root, grandchild should still be its child.
+        assert_eq!(scene.parent(child_id), None);
+        assert!(scene.contains(grandchild_id));
+        assert_eq!(scene.parent(grandchild_id), Some(child_id));
+        assert_eq!(scene.children(child_id).unwrap(), &[grandchild_id]);
+
+        // Undo: child back under parent, grandchild preserved.
+        assert!(cmd.undo(&mut scene));
+        assert_eq!(scene.parent(child_id), Some(parent_id));
+        assert_eq!(scene.parent(grandchild_id), Some(child_id));
+        assert_eq!(scene.children(child_id).unwrap(), &[grandchild_id]);
+    }
+
+    #[test]
+    fn reparent_to_root_already_root_returns_false() {
+        let mut scene = SceneGraph::new();
+        let root = make_frame("Root");
+        let root_id = scene.add_root(root);
+
+        let mut cmd = ReparentToRootCommand::new(root_id);
+        assert!(!cmd.execute(&mut scene));
     }
 
     // --- ReorderChildrenCommand ---

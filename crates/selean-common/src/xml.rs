@@ -41,6 +41,19 @@ pub fn append_end_tag(s: &mut String, e: &BytesEnd<'_>) {
     s.push('>');
 }
 
+/// Escapes the five XML special characters in a string for safe embedding
+/// in XML text content or attribute values.
+///
+/// Replaces `&`, `<`, `>`, `"`, and `'` with their corresponding XML entities.
+#[must_use]
+pub fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 /// Appends a self-closing XML tag with attributes to the buffer.
 ///
 /// Produces `<tagName attr1="val1" attr2="val2"/>`.
@@ -127,5 +140,28 @@ mod tests {
         e.push_attribute(("src", "pic.png"));
         append_empty_tag(&mut buf, &e);
         assert_eq!(buf, r#"<img src="pic.png"/>"#);
+    }
+
+    #[test]
+    fn xml_escape_all_special_chars() {
+        assert_eq!(
+            xml_escape(r#"A & B < C > D " E ' F"#),
+            "A &amp; B &lt; C &gt; D &quot; E &apos; F"
+        );
+    }
+
+    #[test]
+    fn xml_escape_no_special_chars() {
+        assert_eq!(xml_escape("hello world"), "hello world");
+    }
+
+    #[test]
+    fn xml_escape_empty_string() {
+        assert_eq!(xml_escape(""), "");
+    }
+
+    #[test]
+    fn xml_escape_only_ampersands() {
+        assert_eq!(xml_escape("&&"), "&amp;&amp;");
     }
 }

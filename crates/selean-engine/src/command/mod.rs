@@ -20,7 +20,7 @@ pub use batch::CommandGroup;
 pub use descriptor::{CommandDescriptor, create_frame_node};
 pub use hierarchy::{
     AddChildCommand, AddRootCommand, RemoveNodeCommand, ReorderChildrenCommand,
-    ReorderRootsCommand, ReparentCommand,
+    ReorderRootsCommand, ReparentCommand, ReparentToRootCommand,
 };
 pub use history::CommandHistory;
 pub use property::{

@@ -1,9 +1,8 @@
 //! Image cache mapping asset references to atlas locations.
 //!
-//! Simple `HashMap<String, CachedImage>` with lookup via `&str`.
+//! Simple bounded cache keyed by asset reference string.
 
-use std::collections::HashMap;
-
+use crate::cache::BoundedCache;
 use crate::renderer::texture_atlas::AtlasRegion;
 
 /// Cached information about an image stored in the atlas.
@@ -28,8 +27,7 @@ const DEFAULT_MAX_IMAGE_ENTRIES: usize = 256;
 /// This simple eviction strategy works well with atlas textures (the atlas
 /// is rebuilt from scratch after a clear).
 pub struct ImageCache {
-    entries: HashMap<String, CachedImage>,
-    max_entries: usize,
+    inner: BoundedCache<String, CachedImage>,
 }
 
 impl ImageCache {
@@ -37,8 +35,7 @@ impl ImageCache {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
-            max_entries: DEFAULT_MAX_IMAGE_ENTRIES,
+            inner: BoundedCache::new(DEFAULT_MAX_IMAGE_ENTRIES),
         }
     }
 
@@ -46,15 +43,14 @@ impl ImageCache {
     #[must_use]
     pub fn with_max_entries(max: usize) -> Self {
         Self {
-            entries: HashMap::new(),
-            max_entries: max,
+            inner: BoundedCache::new(max),
         }
     }
 
     /// Looks up a cached image by asset reference.
     #[must_use]
     pub fn get(&self, asset_ref: &str) -> Option<&CachedImage> {
-        self.entries.get(asset_ref)
+        self.inner.get(&asset_ref.to_string())
     }
 
     /// Inserts an image into the cache.
@@ -62,44 +58,41 @@ impl ImageCache {
     /// If the cache is at capacity, all existing entries are cleared before
     /// inserting. This ensures the cache never exceeds its maximum size.
     pub fn insert(&mut self, asset_ref: String, image: CachedImage) {
-        if self.entries.len() >= self.max_entries {
-            self.entries.clear();
-        }
-        self.entries.insert(asset_ref, image);
+        self.inner.insert(asset_ref, image);
     }
 
     /// Returns `true` if the cache contains the given asset reference.
     #[must_use]
     pub fn contains(&self, asset_ref: &str) -> bool {
-        self.entries.contains_key(asset_ref)
+        self.inner.contains(&asset_ref.to_string())
     }
 
     /// Returns the number of cached images.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.inner.len()
     }
 
     /// Returns `true` if the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.inner.is_empty()
     }
 
     /// Returns the maximum number of entries the cache will hold before evicting.
     #[must_use]
     pub fn max_entries(&self) -> usize {
-        self.max_entries
+        self.inner.max_entries()
     }
 
     /// Removes a specific cached image by asset reference.
     pub fn clear_entry(&mut self, asset_ref: &str) {
-        self.entries.remove(asset_ref);
+        self.inner.remove(&asset_ref.to_string());
     }
 
     /// Removes all cached images.
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.inner.clear();
     }
 }
 
@@ -205,5 +198,17 @@ mod tests {
     fn default_max_entries() {
         let cache = ImageCache::new();
         assert_eq!(cache.max_entries(), 256);
+    }
+
+    #[test]
+    fn clear_entry_removes_specific_image() {
+        let mut cache = ImageCache::new();
+        cache.insert("a.png".to_string(), test_cached_image());
+        cache.insert("b.png".to_string(), test_cached_image());
+
+        cache.clear_entry("a.png");
+        assert!(!cache.contains("a.png"));
+        assert!(cache.contains("b.png"));
+        assert_eq!(cache.len(), 1);
     }
 }

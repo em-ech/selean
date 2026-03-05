@@ -14,7 +14,8 @@ use crate::scene::{
 
 use super::{
     AddChildCommand, AddRootCommand, Command, RemoveNodeCommand, ReorderChildrenCommand,
-    ReorderRootsCommand, ReparentCommand, SetAssetRefCommand, SetBlendModeCommand,
+    ReorderRootsCommand, ReparentCommand, ReparentToRootCommand, SetAssetRefCommand,
+    SetBlendModeCommand,
     SetBoundsCommand, SetClipModeCommand, SetCornerRadiusCommand, SetEffectsCommand,
     SetFillCommand, SetFillGradientCommand, SetFontFamilyCommand, SetFontSizeCommand,
     SetFontStyleCommand, SetFontWeightCommand, SetLineHeightCommand, SetNameCommand,
@@ -230,6 +231,11 @@ pub enum CommandDescriptor {
         /// New effects list.
         effects: Vec<Effect>,
     },
+    /// Move a node to become a root (detach from parent).
+    ReparentToRoot {
+        /// Node to move to root level.
+        node_id: NodeId,
+    },
     /// Reorder root nodes.
     ReorderRoots {
         /// New order of root node IDs.
@@ -327,6 +333,7 @@ impl CommandDescriptor {
             Self::SetEffects { node_id, effects } => {
                 Box::new(SetEffectsCommand::new(node_id, effects))
             }
+            Self::ReparentToRoot { node_id } => Box::new(ReparentToRootCommand::new(node_id)),
             Self::ReorderRoots { new_order } => Box::new(ReorderRootsCommand::new(new_order)),
         }
     }
@@ -987,5 +994,236 @@ mod tests {
 
         cmd.undo(&mut scene);
         assert!(scene.get(id).expect("exists").effects.is_empty());
+    }
+
+    #[test]
+    fn reparent_to_root_roundtrip() {
+        let id = sample_node_id();
+        let desc = CommandDescriptor::ReparentToRoot { node_id: id };
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let back: CommandDescriptor = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(desc, back);
+    }
+
+    #[test]
+    fn into_command_set_opacity_executes_and_undoes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+        assert_eq!(scene.get(id).expect("exists").opacity, 1.0);
+
+        let desc = CommandDescriptor::SetOpacity {
+            node_id: id,
+            opacity: 0.3,
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert!((scene.get(id).expect("exists").opacity - 0.3).abs() < f32::EPSILON);
+
+        cmd.undo(&mut scene);
+        assert!((scene.get(id).expect("exists").opacity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn into_command_set_visible_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetVisible {
+            node_id: id,
+            visible: false,
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert!(!scene.get(id).expect("exists").visible);
+    }
+
+    #[test]
+    fn into_command_set_name_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("Old", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetName {
+            node_id: id,
+            name: "New Name".to_string(),
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert_eq!(scene.get(id).expect("exists").name, "New Name");
+    }
+
+    #[test]
+    fn into_command_set_stroke_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetStroke {
+            node_id: id,
+            stroke: Some(Color::BLACK),
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert!(scene.get(id).expect("exists").stroke.is_some());
+    }
+
+    #[test]
+    fn into_command_set_stroke_width_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetStrokeWidth {
+            node_id: id,
+            width: 3.0,
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert!((scene.get(id).expect("exists").stroke_width - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn into_command_add_child_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let parent = create_frame_node("Parent", 0.0, 0.0, 200.0, 200.0, None, [0.0; 4]);
+        let parent_id = parent.id;
+        scene.add_root(parent);
+
+        let child = create_frame_node("Child", 10.0, 10.0, 50.0, 50.0, None, [0.0; 4]);
+        let child_id = child.id;
+        let desc = CommandDescriptor::AddChild {
+            parent_id,
+            node: child,
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert!(scene.get(child_id).is_some());
+        assert_eq!(scene.children(parent_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn into_command_set_corner_radius_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetCornerRadius {
+            node_id: id,
+            corner_radius: [5.0, 10.0, 15.0, 20.0],
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        match &scene.get(id).expect("exists").kind {
+            SceneNodeKind::Frame { corner_radius } => {
+                assert_eq!(*corner_radius, [5.0, 10.0, 15.0, 20.0]);
+            }
+            _ => panic!("expected Frame"),
+        }
+    }
+
+    #[test]
+    fn into_command_set_text_content_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "T".to_string(),
+            SceneNodeKind::Text {
+                content: "old".to_string(),
+                font_size: 16.0,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 30.0),
+        );
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetTextContent {
+            node_id: id,
+            content: "new text".to_string(),
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        match &scene.get(id).expect("exists").kind {
+            SceneNodeKind::Text { content, .. } => assert_eq!(content, "new text"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn into_command_reparent_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let parent_a = create_frame_node("A", 0.0, 0.0, 100.0, 100.0, None, [0.0; 4]);
+        let parent_b = create_frame_node("B", 0.0, 0.0, 100.0, 100.0, None, [0.0; 4]);
+        let child = create_frame_node("C", 10.0, 10.0, 50.0, 50.0, None, [0.0; 4]);
+        let a_id = parent_a.id;
+        let b_id = parent_b.id;
+        let c_id = child.id;
+        scene.add_root(parent_a);
+        scene.add_root(parent_b);
+        scene.add_child(a_id, child);
+        assert_eq!(scene.children(a_id).unwrap().len(), 1);
+
+        let desc = CommandDescriptor::Reparent {
+            node_id: c_id,
+            new_parent_id: b_id,
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert_eq!(scene.children(a_id).unwrap().len(), 0);
+        assert_eq!(scene.children(b_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn into_command_nonexistent_node_returns_false() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let fake_id = sample_node_id();
+        let desc = CommandDescriptor::SetOpacity {
+            node_id: fake_id,
+            opacity: 0.5,
+        };
+        let mut cmd = desc.into_command();
+        assert!(!cmd.execute(&mut scene));
+    }
+
+    #[test]
+    fn into_command_set_fill_gradient_executes() {
+        let mut scene = crate::scene::SceneGraph::new();
+        let node = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let id = node.id;
+        scene.add_root(node);
+
+        let desc = CommandDescriptor::SetFillGradient {
+            node_id: id,
+            fill_gradient: Some(Gradient::Linear {
+                start: [0.0, 0.0],
+                end: [1.0, 1.0],
+                stops: vec![
+                    GradientStop {
+                        position: 0.0,
+                        color: Color::new(1.0, 0.0, 0.0, 1.0),
+                    },
+                    GradientStop {
+                        position: 1.0,
+                        color: Color::new(0.0, 0.0, 1.0, 1.0),
+                    },
+                ],
+            }),
+        };
+        let mut cmd = desc.into_command();
+        assert!(cmd.execute(&mut scene));
+        assert!(scene.get(id).expect("exists").fill_gradient.is_some());
     }
 }

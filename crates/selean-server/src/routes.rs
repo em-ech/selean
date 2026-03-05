@@ -42,6 +42,10 @@ pub fn create_router_with_options(
 ) -> Router {
     let collab_routes = Router::new()
         .route("/api/ws", get(ws_handler))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_config.clone(),
+            auth_middleware,
+        ))
         .with_state(collab_state);
 
     Router::new()
@@ -132,101 +136,92 @@ fn document_json_response<E: std::fmt::Display>(
     }
 }
 
-/// PPTX content type for responses.
-const PPTX_CONTENT_TYPE: &str =
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-
-/// IDML content type for responses.
-const IDML_CONTENT_TYPE: &str = "application/vnd.adobe.indesign-idml-package";
-
-/// Handles PPTX import. Accepts multipart form data with a `file` field
-/// containing the `.pptx` bytes. Returns the parsed `Document` as JSON.
-async fn import_pptx_handler(mut multipart: Multipart) -> axum::response::Response {
+/// Reads multipart file bytes, calls the format-specific import function,
+/// and returns the resulting `Document` as JSON.
+async fn handle_import<E: std::fmt::Display>(
+    mut multipart: Multipart,
+    import_fn: fn(&[u8]) -> Result<selean_engine::persistence::Document, E>,
+    format_name: &str,
+) -> axum::response::Response {
     let bytes = match read_multipart_file(&mut multipart).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
-    match selean_pptx::import_pptx(&bytes) {
+    match import_fn(&bytes) {
         Ok(doc) => document_json_response(selean_engine::persistence::save_document(&doc)),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, &format!("pptx import failed: {e}")),
+        Err(e) => error_response(
+            StatusCode::BAD_REQUEST,
+            &format!("{format_name} import failed: {e}"),
+        ),
     }
 }
 
-/// Handles PPTX export. Accepts a `Document` as JSON body and returns the
-/// `.pptx` bytes with the appropriate content type.
+/// Parses a `Document` from JSON body, calls the format-specific export
+/// function, and returns the binary with appropriate content headers.
+fn handle_export<E: std::fmt::Display>(
+    body: &axum::body::Bytes,
+    export_fn: fn(&selean_engine::persistence::Document) -> Result<Vec<u8>, E>,
+    content_type: &str,
+    filename: &str,
+    format_name: &str,
+) -> axum::response::Response {
+    let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(body)) {
+        Ok(d) => d,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("invalid document JSON: {e}"),
+            );
+        }
+    };
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    match export_fn(&doc) {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, content_type.to_owned()),
+                (header::CONTENT_DISPOSITION, disposition),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("{format_name} export failed: {e}"),
+        ),
+    }
+}
+
+/// Handles PPTX import.
+async fn import_pptx_handler(multipart: Multipart) -> axum::response::Response {
+    handle_import(multipart, selean_pptx::import_pptx, "pptx").await
+}
+
+/// Handles PPTX export.
 async fn export_pptx_handler(body: axum::body::Bytes) -> axum::response::Response {
-    let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(&body)) {
-        Ok(d) => d,
-        Err(e) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                &format!("invalid document JSON: {e}"),
-            );
-        }
-    };
-    match selean_pptx::export_pptx(&doc) {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, PPTX_CONTENT_TYPE),
-                (
-                    header::CONTENT_DISPOSITION,
-                    "attachment; filename=\"export.pptx\"",
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("pptx export failed: {e}"),
-        ),
-    }
+    handle_export(
+        &body,
+        selean_pptx::export_pptx,
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "export.pptx",
+        "pptx",
+    )
 }
 
-/// Handles IDML import. Accepts multipart form data with a `file` field
-/// containing the `.idml` bytes. Returns the parsed `Document` as JSON.
-async fn import_idml_handler(mut multipart: Multipart) -> axum::response::Response {
-    let bytes = match read_multipart_file(&mut multipart).await {
-        Ok(b) => b,
-        Err(resp) => return resp,
-    };
-    match selean_idml::import_idml(&bytes) {
-        Ok(doc) => document_json_response(selean_engine::persistence::save_document(&doc)),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, &format!("idml import failed: {e}")),
-    }
+/// Handles IDML import.
+async fn import_idml_handler(multipart: Multipart) -> axum::response::Response {
+    handle_import(multipart, selean_idml::import_idml, "idml").await
 }
 
-/// Handles IDML export. Accepts a `Document` as JSON body and returns the
-/// `.idml` bytes with the appropriate content type.
+/// Handles IDML export.
 async fn export_idml_handler(body: axum::body::Bytes) -> axum::response::Response {
-    let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(&body)) {
-        Ok(d) => d,
-        Err(e) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                &format!("invalid document JSON: {e}"),
-            );
-        }
-    };
-    match selean_idml::export_idml(&doc) {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, IDML_CONTENT_TYPE),
-                (
-                    header::CONTENT_DISPOSITION,
-                    "attachment; filename=\"export.idml\"",
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("idml export failed: {e}"),
-        ),
-    }
+    handle_export(
+        &body,
+        selean_idml::export_idml,
+        "application/vnd.adobe.indesign-idml-package",
+        "export.idml",
+        "idml",
+    )
 }
 
 /// Request body for Figma import.
@@ -532,6 +527,55 @@ mod tests {
 
         // Should be 404, but importantly the route itself matches (not 405).
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn ws_endpoint_requires_auth_when_enabled() {
+        let auth = AuthConfig::with_secret("s3cret");
+        let app = create_router_with_options(test_state(), CollabState::new(), auth);
+
+        // Attempt WebSocket upgrade without auth token.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ws")
+                    .header("connection", "upgrade")
+                    .header("upgrade", "websocket")
+                    .header("sec-websocket-version", "13")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ws_endpoint_allows_valid_auth_token() {
+        let auth = AuthConfig::with_secret("s3cret");
+        let app = create_router_with_options(test_state(), CollabState::new(), auth);
+
+        // Attempt WebSocket upgrade with valid auth token.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ws")
+                    .header("authorization", "Bearer s3cret")
+                    .header("connection", "upgrade")
+                    .header("upgrade", "websocket")
+                    .header("sec-websocket-version", "13")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Auth should pass. The actual status depends on the WebSocket
+        // handshake details, but critically it must NOT be 401 Unauthorized.
+        assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

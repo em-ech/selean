@@ -104,7 +104,11 @@ pub fn parse_text_body(xml: &str) -> ParsedText {
                     result.content.push_str(&text);
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in PPTX text import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();

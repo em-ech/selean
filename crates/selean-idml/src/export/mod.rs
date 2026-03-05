@@ -16,6 +16,7 @@ use std::io::{Cursor, Write};
 
 use zip::write::{SimpleFileOptions, ZipWriter};
 
+use selean_common::xml::xml_escape;
 use selean_engine::persistence::{Document, Page};
 use selean_engine::scene::SceneNodeKind;
 
@@ -164,14 +165,6 @@ fn build_designmap(spread_refs: &[String], story_refs: &[String]) -> String {
     <idPkg:Styles src="Styles/RootCharacterStyleGroup.xml"/>
 </Document>"#
     )
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

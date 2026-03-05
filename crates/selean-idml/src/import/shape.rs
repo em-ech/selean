@@ -110,7 +110,11 @@ pub fn parse_page_items(
                     element_xml.push_str(&String::from_utf8_lossy(e.as_ref()));
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in IDML shape import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();
@@ -191,7 +195,11 @@ fn parse_single_element(
                     }
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in IDML shape import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();

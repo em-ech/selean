@@ -130,7 +130,11 @@ fn parse_slide_size(xml: &str) -> (f32, f32) {
                     break;
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in PPTX slide import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();

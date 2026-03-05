@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { SeleanEditor, NodeInfo } from "../wasm/types";
 import type { ToolType } from "../components/Toolbar";
+import { pasteNode } from "../utils/clipboard";
 
 /** Tags that should suppress single-key shortcuts. */
 const INPUT_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
@@ -14,46 +15,6 @@ export interface UseKeyboardShortcutsParams {
   handleToolChange: (tool: ToolType) => void;
   clipboardRef: React.MutableRefObject<NodeInfo | null>;
   onUndoRedoTick: () => void;
-}
-
-/** Creates a copy of a node at an offset position. */
-export function pasteNode(
-  editor: { execute_tool_call: (name: string, args: string) => string },
-  node: NodeInfo,
-): void {
-  const args: Record<string, unknown> = {
-    name: `${node.name} copy`,
-    kind: node.kind,
-    x: node.x + 10,
-    y: node.y + 10,
-    width: node.width,
-    height: node.height,
-  };
-
-  if (node.fill) {
-    args.fill_r = node.fill[0];
-    args.fill_g = node.fill[1];
-    args.fill_b = node.fill[2];
-    args.fill_a = node.fill[3];
-  }
-
-  if (node.text_content) {
-    args.text_content = node.text_content;
-  }
-
-  if (node.font_size) {
-    args.font_size = node.font_size;
-  }
-
-  if (node.asset_ref) {
-    args.asset_ref = node.asset_ref;
-  }
-
-  if (node.path_data) {
-    args.path_data = node.path_data;
-  }
-
-  editor.execute_tool_call("create_node", JSON.stringify(args));
 }
 
 /**

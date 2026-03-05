@@ -49,4 +49,70 @@ describe("AlignmentBar", () => {
     );
     expect(onChanged).toHaveBeenCalled();
   });
+
+  it("renders nothing for empty selectedIds", () => {
+    const ref = createMockEditorRef();
+    const { container } = render(
+      <AlignmentBar
+        selectedIds={[]}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("renders all 8 alignment buttons", () => {
+    const ref = createMockEditorRef();
+    render(
+      <AlignmentBar
+        selectedIds={["a", "b"]}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    for (const kind of [
+      "Left",
+      "CenterH",
+      "Right",
+      "Top",
+      "CenterV",
+      "Bottom",
+      "DistributeH",
+      "DistributeV",
+    ]) {
+      expect(screen.getByTitle(kind)).toBeInTheDocument();
+    }
+  });
+
+  it("does not throw when editor is null", () => {
+    const ref = { current: null };
+    render(
+      <AlignmentBar
+        selectedIds={["a", "b"]}
+        editorRef={ref}
+        onSceneChanged={() => {}}
+      />,
+    );
+    // Should not throw on click
+    fireEvent.click(screen.getByTitle("Left"));
+  });
+
+  it("passes correct kind for each alignment button", () => {
+    const ref = createMockEditorRef();
+    const onChanged = vi.fn();
+    render(
+      <AlignmentBar
+        selectedIds={["a", "b"]}
+        editorRef={ref}
+        onSceneChanged={onChanged}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("DistributeV"));
+    expect(ref.current.align_nodes).toHaveBeenCalledWith(
+      JSON.stringify(["a", "b"]),
+      "DistributeV",
+    );
+  });
 });

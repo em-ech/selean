@@ -4,7 +4,7 @@
 //! and stored in the atlas. Since SDF is scale-independent, a single SDF render
 //! per unique glyph shape is sufficient for all font sizes.
 
-use std::collections::HashMap;
+use crate::cache::BoundedCache;
 
 use super::atlas::AtlasRegion;
 use super::font::FontId;
@@ -49,8 +49,7 @@ const DEFAULT_MAX_GLYPH_ENTRIES: usize = 4096;
 /// simple eviction strategy works well with atlas textures (the atlas is
 /// rebuilt from scratch after a clear).
 pub struct GlyphCache {
-    entries: HashMap<GlyphCacheKey, CachedGlyph>,
-    max_entries: usize,
+    inner: BoundedCache<GlyphCacheKey, CachedGlyph>,
 }
 
 impl GlyphCache {
@@ -58,8 +57,7 @@ impl GlyphCache {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
-            max_entries: DEFAULT_MAX_GLYPH_ENTRIES,
+            inner: BoundedCache::new(DEFAULT_MAX_GLYPH_ENTRIES),
         }
     }
 
@@ -67,15 +65,14 @@ impl GlyphCache {
     #[must_use]
     pub fn with_max_entries(max: usize) -> Self {
         Self {
-            entries: HashMap::new(),
-            max_entries: max,
+            inner: BoundedCache::new(max),
         }
     }
 
     /// Looks up a cached glyph.
     #[must_use]
     pub fn get(&self, key: &GlyphCacheKey) -> Option<&CachedGlyph> {
-        self.entries.get(key)
+        self.inner.get(key)
     }
 
     /// Inserts a glyph into the cache.
@@ -83,34 +80,31 @@ impl GlyphCache {
     /// If the cache is at capacity, all existing entries are cleared before
     /// inserting. This ensures the cache never exceeds its maximum size.
     pub fn insert(&mut self, key: GlyphCacheKey, glyph: CachedGlyph) {
-        if self.entries.len() >= self.max_entries {
-            self.entries.clear();
-        }
-        self.entries.insert(key, glyph);
+        self.inner.insert(key, glyph);
     }
 
     /// Returns the number of cached glyphs.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.inner.len()
     }
 
     /// Returns `true` if the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.inner.is_empty()
     }
 
     /// Returns `true` if the cache contains the given key.
     #[must_use]
     pub fn contains(&self, key: &GlyphCacheKey) -> bool {
-        self.entries.contains_key(key)
+        self.inner.contains(key)
     }
 
     /// Returns the maximum number of entries the cache will hold before evicting.
     #[must_use]
     pub fn max_entries(&self) -> usize {
-        self.max_entries
+        self.inner.max_entries()
     }
 
     /// Removes all cached glyphs.
@@ -118,7 +112,7 @@ impl GlyphCache {
     /// Use when switching fonts or documents. The atlas should also be reset
     /// since cached atlas regions become invalid.
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.inner.clear();
     }
 }
 
@@ -131,8 +125,8 @@ impl Default for GlyphCache {
 impl std::fmt::Debug for GlyphCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlyphCache")
-            .field("count", &self.entries.len())
-            .field("max_entries", &self.max_entries)
+            .field("count", &self.inner.len())
+            .field("max_entries", &self.inner.max_entries())
             .finish()
     }
 }

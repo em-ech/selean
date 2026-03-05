@@ -375,12 +375,15 @@ pub fn get_selected_bounds_json(scene: &SceneGraph, selected_ids: &[NodeId]) -> 
     let bounds: Vec<SelectionBounds> = selected_ids
         .iter()
         .filter_map(|&id| scene.get(id))
-        .map(|node| SelectionBounds {
-            node_id: node.id.to_string(),
-            x: node.bounds.x,
-            y: node.bounds.y,
-            width: node.bounds.width,
-            height: node.bounds.height,
+        .map(|node| {
+            let world_bb = node.world_transform.transform_aabb(&node.bounds);
+            SelectionBounds {
+                node_id: node.id.to_string(),
+                x: world_bb.x,
+                y: world_bb.y,
+                width: world_bb.width,
+                height: world_bb.height,
+            }
         })
         .collect();
     serde_json::to_string(&bounds).unwrap_or_else(|_| "[]".to_string())
@@ -833,6 +836,35 @@ mod tests {
         let json = get_selected_bounds_json(&scene, &[id1, id2]);
         let bounds: Vec<super::SelectionBounds> = serde_json::from_str(&json).expect("valid json");
         assert_eq!(bounds.len(), 2);
+    }
+
+    #[test]
+    fn get_selected_bounds_uses_world_transform() {
+        use selean_engine::scene::Transform2D;
+
+        let mut scene = SceneGraph::new();
+        // Parent at (100, 200) with a child at local (10, 20).
+        // World-space child bounds should be (110, 220).
+        let parent = make_frame("Parent", 100.0, 200.0, 300.0, 300.0);
+        let parent_id = parent.id;
+        scene.add_root(parent);
+
+        let child = make_frame("Child", 10.0, 20.0, 50.0, 30.0);
+        let child_id = child.id;
+        scene.add_child(parent_id, child);
+
+        // Set a translation transform on the parent.
+        scene.set_transform(parent_id, Transform2D::translation(100.0, 200.0));
+        scene.recompute_world_transforms();
+
+        let json = get_selected_bounds_json(&scene, &[child_id]);
+        let bounds: Vec<super::SelectionBounds> = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(bounds.len(), 1);
+        // Child world position: parent_transform * child_local = (100+10, 200+20) = (110, 220).
+        assert!((bounds[0].x - 110.0).abs() < 0.1, "x was {}", bounds[0].x);
+        assert!((bounds[0].y - 220.0).abs() < 0.1, "y was {}", bounds[0].y);
+        assert!((bounds[0].width - 50.0).abs() < 0.1);
+        assert!((bounds[0].height - 30.0).abs() < 0.1);
     }
 
     #[test]

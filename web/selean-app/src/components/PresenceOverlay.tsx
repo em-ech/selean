@@ -5,9 +5,10 @@
  * using the current camera state.
  */
 
-import type { CameraInfo, SeleanEditor } from "../wasm/types";
+import type { SeleanEditor } from "../wasm/types";
 import type { CursorPosition, Participant } from "../collab/types";
 import { colors } from "../theme";
+import { worldToScreen } from "../utils/camera";
 
 /** Presence data for a single remote participant. */
 export interface RemotePresence {
@@ -40,18 +41,6 @@ export function colorForUser(userId: string): string {
     hash = (hash * 31 + userId.charCodeAt(i)) | 0;
   }
   return PRESENCE_COLORS[Math.abs(hash) % PRESENCE_COLORS.length];
-}
-
-/** Converts world coordinates to screen coordinates using camera state. */
-function worldToScreen(
-  worldX: number,
-  worldY: number,
-  camera: CameraInfo,
-): { x: number; y: number } {
-  return {
-    x: (worldX - camera.pan_x) * camera.zoom,
-    y: (worldY - camera.pan_y) * camera.zoom,
-  };
 }
 
 export function PresenceOverlay({

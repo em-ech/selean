@@ -61,7 +61,11 @@ pub fn parse_shapes(slide_xml: &str) -> Vec<SceneNode> {
                     shape_xml.push_str(&String::from_utf8_lossy(e.as_ref()));
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in PPTX shape import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();
@@ -275,7 +279,11 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
                     _ => {}
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                tracing::warn!("XML parse error in PPTX shape import: {e}");
+                break;
+            }
             _ => {}
         }
         buf.clear();
