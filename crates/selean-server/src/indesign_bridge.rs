@@ -129,4 +129,115 @@ mod tests {
             "timeout should be 120 seconds for large .indd files"
         );
     }
+
+    /// Creates a minimal valid IDML ZIP for testing.
+    fn make_test_idml() -> Vec<u8> {
+        let doc = selean_engine::persistence::Document::new();
+        selean_idml::export_idml(&doc).expect("export minimal IDML")
+    }
+
+    /// Spawns a local axum server that returns the given body with the given status.
+    async fn spawn_mock_server(
+        status: u16,
+        body: Vec<u8>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use axum::{Router, routing::post};
+        use std::sync::Arc;
+
+        let body = Arc::new(body);
+        let status_code = axum::http::StatusCode::from_u16(status).unwrap();
+
+        let app = Router::new().route(
+            "/convert/idml",
+            post(move || {
+                let body = Arc::clone(&body);
+                async move { (status_code, body.to_vec()) }
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+
+        (url, handle)
+    }
+
+    #[tokio::test]
+    async fn happy_path_converts_indd_to_document() {
+        let idml_bytes = make_test_idml();
+        let (url, handle) = spawn_mock_server(200, idml_bytes).await;
+
+        let client = reqwest::Client::new();
+        let result = convert_indd_to_document(&client, Some(&url), b"fake-indd-data").await;
+
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+        let doc = result.unwrap();
+        assert!(
+            !doc.pages().is_empty(),
+            "document should have at least one page"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn server_error_returns_conversion_failed() {
+        let (url, handle) = spawn_mock_server(500, b"internal error".to_vec()).await;
+
+        let client = reqwest::Client::new();
+        let result = convert_indd_to_document(&client, Some(&url), b"fake-indd").await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, IndesignBridgeError::ConversionFailed { .. }),
+            "expected ConversionFailed, got: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("500"),
+            "error should include status code: {msg}"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn invalid_idml_response_returns_idml_import_error() {
+        // Server returns 200 but with garbage bytes (not valid IDML ZIP).
+        let (url, handle) = spawn_mock_server(200, b"not-a-zip-file".to_vec()).await;
+
+        let client = reqwest::Client::new();
+        let result = convert_indd_to_document(&client, Some(&url), b"fake-indd").await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, IndesignBridgeError::IdmlImport(_)),
+            "expected IdmlImport, got: {err}"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn connection_refused_returns_http_error() {
+        // Use a URL that's unlikely to have a listener.
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(500))
+            .build()
+            .unwrap();
+        let result = convert_indd_to_document(&client, Some("http://127.0.0.1:1"), b"fake").await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, IndesignBridgeError::Http(_)),
+            "expected Http, got: {err}"
+        );
+    }
 }

@@ -609,8 +609,9 @@ impl EditorState {
         let desc = if is_root {
             CommandDescriptor::ReorderRoots { new_order }
         } else {
-            // `is_root` is false only when `parent_id` is `Some`.
-            let pid = parent_id.unwrap_or_else(|| unreachable!());
+            let Some(pid) = parent_id else {
+                return z_error("parent_id missing for non-root node");
+            };
             CommandDescriptor::ReorderChildren {
                 parent_id: pid,
                 new_order,

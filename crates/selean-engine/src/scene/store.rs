@@ -920,8 +920,9 @@ impl SceneGraph {
             return;
         }
 
-        let roots: Vec<NodeId> = self.roots.clone();
-        for &root_id in &roots {
+        // Iterate by index to avoid cloning the roots vec.
+        for i in 0..self.roots.len() {
+            let root_id = self.roots[i];
             self.recompute_world_transform_recursive(root_id, Transform2D::identity());
         }
 
@@ -1310,20 +1311,20 @@ impl SceneGraph {
 
     /// Marks a node and all its descendants with `TRANSFORM` dirty.
     ///
-    /// Uses the clone-children-per-level pattern to avoid borrow conflicts.
+    /// Uses an explicit stack instead of recursion to avoid cloning children
+    /// at each level of the tree.
     fn propagate_transform_dirty_down(&mut self, id: NodeId) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            node.dirty |= DirtyFlags::TRANSFORM;
-        }
         self.has_any_transform_dirty = true;
 
-        let children = self
-            .nodes
-            .get(&id)
-            .map(|n| n.children.clone())
-            .unwrap_or_default();
-        for child_id in children {
-            self.propagate_transform_dirty_down(child_id);
+        let mut stack = vec![id];
+        while let Some(current) = stack.pop() {
+            if let Some(node) = self.nodes.get_mut(&current) {
+                node.dirty |= DirtyFlags::TRANSFORM;
+                // Read children by index to avoid cloning the children vec.
+                for i in 0..node.children.len() {
+                    stack.push(node.children[i]);
+                }
+            }
         }
     }
 

@@ -31,7 +31,37 @@ Selean is a design tool that combines the capabilities of Canva, Figma, and Adob
 
 # Engine Session Notes
 
-## Current Phase: 11 Complete (End-to-End Editor Wiring)
+## Current Phase: All Phases Complete + Code Review
+
+### Code Review Session (2026-03-06)
+
+12 of 14 identified issues implemented across Architecture, Code Quality, Tests, and Performance.
+
+**Architecture:**
+- A2-b: Graceful mutex recovery in `ws_handler.rs`. Replaced all `expect("room poisoned")` with `match` on lock results. Extracted `handle_join()` and `dispatch_message()` helpers with `JoinOutcome` enum.
+- A3-b: Body size limits in `routes.rs`. Split into `upload_routes` (50 MiB) and `json_routes` (1 MiB) via `DefaultBodyLimit` layer.
+- A4-b: Replaced `unreachable!()` in `selean-wasm/src/lib.rs` with error return for missing `parent_id` on non-root nodes.
+
+**Code Quality:**
+- CQ1-b: `ErrorToast` pub/sub notification system (`showError()` global function, auto-dismiss, click-dismiss, max 5 toasts). Added to `App.tsx`.
+- CQ2-b: `useFileOperations.ts` hooks (`importFileViaUpload`, `exportViaFetch`, `useFileImportHandler`, `useFileExportHandler`). `FileMenu.tsx` refactored from 6 repetitive handlers to hook calls.
+- CQ3-b: `executeToolOnSelection` helper in `useKeyboardShortcuts.ts` with `minSelection`/`maxSelection` params. Replaced 5 repetitive z-order/group shortcut handlers.
+
+**Tests:**
+- T1-b: 9 unit tests for `ws_handler` (CollabState creation/clone, join flow, leave flow, disconnect cleanup, error messages).
+- T2-b: 5 integration tests in `crates/selean-engine/tests/integration.rs` (create+save+load roundtrip, command+undo, command+persist, multi-page, multi-undo).
+- T3-b: 4 InDesign bridge tests with inline axum mock server in `indesign_bridge.rs`.
+- T4-b: 4 `GpuContextDescriptor` tests in `gpu.rs`.
+
+**Performance:**
+- P1-b: `SmallVec<[NodeId; 16]>` for DFS children iteration in `pipeline.rs` (avoids `.to_vec()` heap allocation).
+- P3-b: Explicit stack for dirty flag propagation in `store.rs` (replaces recursive `propagate_transform_dirty_down`). Also replaced `self.roots.clone()` with index-based iteration in `recompute_world_transforms`.
+
+**Deferred:**
+- A1-b: Typed `wasm-bindgen` returns for hot paths (pointer events, selection, camera). ~10-15 WASM methods to change from JSON strings to primitives/JsValue.
+- CQ4-c: Extract mutations from `store.rs` into `scene/mutations.rs`. Large refactor with medium risk.
+
+**Test counts after review:** 1531 Rust + 351 frontend (up from 1509 + 345).
 
 ### Phase 11 Summary (End-to-End Editor Wiring)
 
@@ -182,7 +212,8 @@ Selean is a design tool that combines the capabilities of Canva, Figma, and Adob
 
 ### Test Count
 
-- 828 tests passing (16 common + 650 engine + 46 llm + 58 pptx + 16 server + 42 wasm)
+- 1531 Rust tests passing across 9 crates (`cargo test --workspace`)
+- 351 frontend tests passing (`cd web/selean-app && npx vitest run`)
 - 17 benchmark groups
 
 ### Key Architecture Notes
@@ -207,15 +238,17 @@ crates/
   selean-engine/           # Core rendering engine
     src/
       scene/               # Scene graph
-        node.rs            # SceneNode, SceneNodeKind, BoundingBox, Color, BlendMode
-        store.rs           # SceneGraph (central store, transforms, hit testing, scroll)
+        node.rs            # SceneNode, SceneNodeKind, BoundingBox, Color, BlendMode, Gradient, Effect
+        store.rs           # SceneGraph (central store, transforms, hit testing, scroll, alignment)
         transform.rs       # Transform2D (3x2 affine matrix)
         dirty.rs           # DirtyFlags (8-bit bitmask)
         clip.rs            # ClipMode, ClipRect
       renderer/            # GPU rendering
-        pipeline.rs        # Renderer (top-level orchestrator, DFS traversal)
+        pipeline.rs        # Renderer (top-level orchestrator, DFS traversal, SmallVec children)
         rect_pipeline.rs   # RectPipeline, RectInstance, RectBatch
         textured_quad.rs   # TexturedQuadPipeline, TexturedQuadInstance, TexturedQuadBatch
+        blend_pipeline.rs  # BlendPipeline (11 non-native blend modes)
+        blur_pipeline.rs   # BlurPipeline (Dual Kawase, ping-pong half-res)
         shared.rs          # SharedPipelineResources, PersistentInstanceBuffer
         clip_stack.rs      # ClipStack, ResolvedClipState
         draw_list.rs       # DrawCommand, DrawList
@@ -223,14 +256,14 @@ crates/
         texture_atlas.rs   # TextureAtlas<CHANNELS>
         gpu.rs             # GpuContext, GpuContextDescriptor
         quad.rs            # Unit quad vertices/indices
-        shaders/           # WGSL shaders (rect, text, textured_quad)
+        shaders/           # WGSL shaders (rect, text, textured_quad, blend, blur)
       text/                # Text subsystem
-        mod.rs             # TextSystem (coordinator)
-        font.rs            # FontData (Inter Regular embedded)
-        shaper.rs          # shape_text (rustybuzz)
-        layout.rs          # layout_text, PositionedGlyph
+        mod.rs             # TextSystem (coordinator, FontRegistry)
+        font.rs            # FontData, FontRegistry (FontId, multi-font)
+        shaper.rs          # shape_text (rustybuzz, weight-aware)
+        layout.rs          # layout_text, PositionedGlyph (13 args, font_id)
         sdf.rs             # generate_glyph_sdf (Felzenszwalb EDT)
-        cache.rs           # GlyphCache
+        cache.rs           # GlyphCache (GlyphCacheKey with font_id)
         atlas.rs           # GlyphAtlas (TextureAtlas<1>)
         packer.rs          # ShelfPacker
         pipeline.rs        # TextPipeline, GlyphInstance, TextBatch
@@ -265,15 +298,40 @@ crates/
     benches/
       bench_utils.rs       # SceneConfig, generate_scene
       engine_benchmarks.rs # 17 Criterion benchmark groups
+    tests/
+      integration.rs       # Cross-module integration tests (commands + persistence roundtrips)
+  selean-wasm/             # WASM binding layer (SeleanEditor, EditorState, queries)
+  selean-llm/              # LLM tool definitions (41 tools) and execution mapping
   selean-pptx/             # PPTX import/export
     src/
       lib.rs               # PptxError, import_pptx(), export_pptx()
       coord.rs             # EMU/pixel conversion, OOXML color parsing, font size conversion
-      import/
-        mod.rs             # ZIP reading, slide parsing, Page creation
-        shape.rs           # <p:sp> to SceneNode conversion
-        text.rs            # <a:txBody> run parsing (font, color, alignment)
-      export/
-        mod.rs             # OOXML ZIP building (Content_Types, rels, presentation, slides)
-        shape.rs           # SceneNode to <p:sp> XML conversion
+      import/              # ZIP reading, slide parsing, shape/text conversion
+      export/              # OOXML ZIP building, shape XML generation
+  selean-idml/             # InDesign IDML import/export
+  selean-figma/            # Figma REST API import, interchange export
+  selean-collab/           # Collaborative editing protocol, OpLog, operation inverses
+  selean-server/           # Axum HTTP server
+    src/
+      main.rs              # Server binary with CORS, static serving, tracing
+      routes.rs            # API routes (split upload/json with body size limits)
+      indesign_bridge.rs   # InDesign .indd server bridge
+      collab/
+        ws_handler.rs      # WebSocket handler, CollabState, graceful mutex recovery
+        room_manager.rs    # Room, RoomManager
+
+web/
+  selean-app/              # React + TypeScript frontend (Vite)
+    src/
+      components/          # Canvas, ChatSidebar, PropertyInspector, FileMenu, LayerPanel,
+                           # AlignmentBar, ContextMenu, InlineTextEditor, SelectionOverlay,
+                           # Toolbar, PageBar, ErrorBoundary, ErrorToast, CollabBar, PresenceOverlay
+      hooks/               # useSeleanEditor, useSelection, useCreationTool, useResizeDrag,
+                           # useMoveDrag, useAutoSave, useKeyboardShortcuts, useCollabSession,
+                           # useFileOperations, useFontLoader
+      collab/              # WsClient, OperationBuffer, CollabContext
+      wasm/                # TypeScript type stubs for WASM bindings
+      theme.ts             # Shared design tokens (colors, font sizes)
+
+figma-plugin/              # Figma plugin for importing Selean interchange format
 ```

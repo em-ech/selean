@@ -6,6 +6,32 @@ import { pasteNode } from "../utils/clipboard";
 /** Tags that should suppress single-key shortcuts. */
 const INPUT_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 
+/**
+ * Executes a tool call on the first selected node via the editor.
+ * Parses selected IDs, validates the count requirement, calls the tool, and
+ * triggers `onSceneChanged`. Catches and logs errors without surfacing them.
+ */
+function executeToolOnSelection(
+  editor: SeleanEditor,
+  toolName: string,
+  buildArgs: (ids: string[]) => Record<string, unknown> | null,
+  onSceneChanged: () => void,
+  label: string,
+  minSelection = 1,
+  maxSelection = Infinity,
+): void {
+  try {
+    const ids: string[] = JSON.parse(editor.get_selected_ids());
+    if (ids.length < minSelection || ids.length > maxSelection) return;
+    const args = buildArgs(ids);
+    if (args === null) return;
+    editor.execute_tool_call(toolName, JSON.stringify(args));
+    onSceneChanged();
+  } catch (err) {
+    console.warn(`shortcut:${label} failed`, err);
+  }
+}
+
 export interface UseKeyboardShortcutsParams {
   editorRef: React.RefObject<SeleanEditor | null>;
   isReady: boolean;
@@ -148,18 +174,14 @@ export function useKeyboardShortcuts({
       // Cmd+G: Group selected nodes
       if (isCtrlOrMeta && e.key === "g" && !e.shiftKey) {
         e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length >= 2) {
-            editor.execute_tool_call(
-              "group_nodes",
-              JSON.stringify({ node_ids: ids }),
-            );
-            onSceneChanged();
-          }
-        } catch (err) {
-          console.warn("shortcut:group failed", err);
-        }
+        executeToolOnSelection(
+          editor,
+          "group_nodes",
+          (ids) => ({ node_ids: ids }),
+          onSceneChanged,
+          "group",
+          2,
+        );
         return;
       }
 
@@ -190,72 +212,60 @@ export function useKeyboardShortcuts({
       // Cmd+]: Bring Forward
       if (isCtrlOrMeta && e.key === "]" && !e.shiftKey) {
         e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_forward",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch (err) {
-          console.warn("shortcut:move-forward failed", err);
-        }
+        executeToolOnSelection(
+          editor,
+          "move_forward",
+          (ids) => ({ node_id: ids[0] }),
+          onSceneChanged,
+          "move-forward",
+          1,
+          1,
+        );
         return;
       }
 
       // Cmd+[: Send Backward
       if (isCtrlOrMeta && e.key === "[" && !e.shiftKey) {
         e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_backward",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch (err) {
-          console.warn("shortcut:move-backward failed", err);
-        }
+        executeToolOnSelection(
+          editor,
+          "move_backward",
+          (ids) => ({ node_id: ids[0] }),
+          onSceneChanged,
+          "move-backward",
+          1,
+          1,
+        );
         return;
       }
 
       // Cmd+Shift+]: Bring to Front
       if (isCtrlOrMeta && e.key === "}" && e.shiftKey) {
         e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_to_front",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch (err) {
-          console.warn("shortcut:move-to-front failed", err);
-        }
+        executeToolOnSelection(
+          editor,
+          "move_to_front",
+          (ids) => ({ node_id: ids[0] }),
+          onSceneChanged,
+          "move-to-front",
+          1,
+          1,
+        );
         return;
       }
 
       // Cmd+Shift+[: Send to Back
       if (isCtrlOrMeta && e.key === "{" && e.shiftKey) {
         e.preventDefault();
-        try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
-          if (ids.length === 1) {
-            editor.execute_tool_call(
-              "move_to_back",
-              JSON.stringify({ node_id: ids[0] }),
-            );
-            onSceneChanged();
-          }
-        } catch (err) {
-          console.warn("shortcut:move-to-back failed", err);
-        }
+        executeToolOnSelection(
+          editor,
+          "move_to_back",
+          (ids) => ({ node_id: ids[0] }),
+          onSceneChanged,
+          "move-to-back",
+          1,
+          1,
+        );
         return;
       }
 

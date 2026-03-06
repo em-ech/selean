@@ -619,7 +619,13 @@ impl Renderer {
         }
 
         // Recurse into children (depth-first, back-to-front order).
-        let children = scene.children(node_id).unwrap_or(&[]).to_vec();
+        // SmallVec avoids heap allocation for nodes with up to 16 children.
+        let children: smallvec::SmallVec<[NodeId; 16]> = scene
+            .children(node_id)
+            .unwrap_or(&[])
+            .iter()
+            .copied()
+            .collect();
         for child_id in children {
             self.dfs_visit(scene, child_id);
         }

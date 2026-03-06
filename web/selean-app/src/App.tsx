@@ -3,6 +3,7 @@ import { Canvas, type InteractionEvent } from "./components/Canvas";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { CollabBar } from "./components/CollabBar";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ErrorToast } from "./components/ErrorToast";
 import { FileMenu } from "./components/FileMenu";
 import { LayerPanel } from "./components/LayerPanel";
 import { PageBar } from "./components/PageBar";
@@ -277,192 +278,198 @@ export function App() {
   }, [collab]);
 
   return (
-    <CollabContext.Provider value={collab}>
-      <div style={rootStyle}>
-        <header style={headerStyle}>
-          <span style={{ fontWeight: 600 }}>Selean</span>
+    <>
+      <CollabContext.Provider value={collab}>
+        <div style={rootStyle}>
+          <header style={headerStyle}>
+            <span style={{ fontWeight: 600 }}>Selean</span>
+            {status === "ready" && (
+              <FileMenu
+                editorRef={editorRef}
+                onSceneChanged={onSceneChanged}
+                onClearAutoSave={clearSavedDocument}
+              />
+            )}
+            <span style={statusStyle}>
+              {status === "loading" && "Initializing..."}
+              {status === "ready" && "Ready"}
+              {status === "error" && `Error: ${error}`}
+              {status === "unsupported" && "WebGPU not supported"}
+            </span>
+            {status === "ready" && (
+              <CollabBar
+                status={collab.status}
+                participants={collab.participants}
+                hasPendingOps={collab.hasPendingOps}
+                onConnect={handleCollabConnect}
+                onDisconnect={handleCollabDisconnect}
+              />
+            )}
+            {status === "ready" && (
+              <div style={headerToolbarStyle}>
+                <button
+                  style={{
+                    ...buttonStyle,
+                    opacity: canUndo ? 1 : 0.4,
+                    cursor: canUndo ? "pointer" : "default",
+                  }}
+                  onClick={handleUndo}
+                  disabled={!canUndo}
+                >
+                  Undo
+                </button>
+                <button
+                  style={{
+                    ...buttonStyle,
+                    opacity: canRedo ? 1 : 0.4,
+                    cursor: canRedo ? "pointer" : "default",
+                  }}
+                  onClick={handleRedo}
+                  disabled={!canRedo}
+                >
+                  Redo
+                </button>
+              </div>
+            )}
+          </header>
           {status === "ready" && (
-            <FileMenu
+            <PageBar
               editorRef={editorRef}
               onSceneChanged={onSceneChanged}
-              onClearAutoSave={clearSavedDocument}
+              refreshTick={refreshTick}
             />
           )}
-          <span style={statusStyle}>
-            {status === "loading" && "Initializing..."}
-            {status === "ready" && "Ready"}
-            {status === "error" && `Error: ${error}`}
-            {status === "unsupported" && "WebGPU not supported"}
-          </span>
-          {status === "ready" && (
-            <CollabBar
-              status={collab.status}
-              participants={collab.participants}
-              hasPendingOps={collab.hasPendingOps}
-              onConnect={handleCollabConnect}
-              onDisconnect={handleCollabDisconnect}
-            />
-          )}
-          {status === "ready" && (
-            <div style={headerToolbarStyle}>
-              <button
-                style={{
-                  ...buttonStyle,
-                  opacity: canUndo ? 1 : 0.4,
-                  cursor: canUndo ? "pointer" : "default",
-                }}
-                onClick={handleUndo}
-                disabled={!canUndo}
-              >
-                Undo
-              </button>
-              <button
-                style={{
-                  ...buttonStyle,
-                  opacity: canRedo ? 1 : 0.4,
-                  cursor: canRedo ? "pointer" : "default",
-                }}
-                onClick={handleRedo}
-                disabled={!canRedo}
-              >
-                Redo
-              </button>
-            </div>
-          )}
-        </header>
-        {status === "ready" && (
-          <PageBar
-            editorRef={editorRef}
-            onSceneChanged={onSceneChanged}
-            refreshTick={refreshTick}
-          />
-        )}
-        <div style={bodyStyle}>
-          {status === "ready" && (
-            <ErrorBoundary name="Chat">
-              <ChatSidebar
-                editorRef={editorRef}
-                onSceneChanged={onSceneChanged}
-              />
-            </ErrorBoundary>
-          )}
-          {status === "ready" && (
-            <Toolbar activeTool={activeTool} onToolChange={handleToolChange} />
-          )}
-          <div style={canvasAreaStyle}>
-            <ErrorBoundary name="Canvas">
-              <Canvas
-                canvasId="selean-canvas"
-                editorRef={editorRef}
-                status={status}
-                onInteractionEvents={handleInteractionEvents}
-                onContextMenu={handleContextMenu}
-              />
-            </ErrorBoundary>
+          <div style={bodyStyle}>
             {status === "ready" && (
-              <SelectionOverlay
-                editorRef={editorRef}
-                onSceneChanged={onSceneChanged}
-              />
-            )}
-            {status === "ready" && collab.status === "connected" && (
-              <PresenceOverlay
-                editorRef={editorRef}
-                presences={presenceOverlayData}
-                activePageId={activePageId}
-              />
-            )}
-            {editingNodeId &&
-              status === "ready" &&
-              (() => {
-                const editor = editorRef.current;
-                if (!editor) return null;
-                try {
-                  const json = editor.get_node_json(editingNodeId);
-                  if (json === "null") return null;
-                  const node: NodeInfo = JSON.parse(json);
-                  if (node.kind !== "Text") return null;
-                  return (
-                    <InlineTextEditor
-                      nodeId={editingNodeId}
-                      initialContent={node.text_content ?? ""}
-                      bounds={{
-                        x: node.x,
-                        y: node.y,
-                        width: node.width,
-                        height: node.height,
-                      }}
-                      fontSize={node.font_size ?? 16}
-                      editorRef={editorRef}
-                      onCommit={(content) => {
-                        editor.execute_tool_call(
-                          "set_text",
-                          JSON.stringify({
-                            node_id: editingNodeId,
-                            content,
-                          }),
-                        );
-                        setEditingNodeId(null);
-                        onSceneChanged();
-                      }}
-                      onCancel={() => setEditingNodeId(null)}
-                    />
-                  );
-                } catch (e) {
-                  console.warn("inline text editor setup failed", e);
-                  return null;
-                }
-              })()}
-            {status === "ready" && (
-              <AlignmentBar
-                selectedIds={selectedIds}
-                editorRef={editorRef}
-                onSceneChanged={onSceneChanged}
-              />
-            )}
-            {contextMenuPos && (
-              <ContextMenu
-                x={contextMenuPos.x}
-                y={contextMenuPos.y}
-                editorRef={editorRef}
-                onSceneChanged={onSceneChanged}
-                onClose={handleCloseContextMenu}
-                clipboardRef={clipboardRef}
-              />
-            )}
-            {creationHandlers && (
-              <div style={creationOverlayStyle} {...creationHandlers} />
-            )}
-          </div>
-          {status === "ready" && (
-            <div style={rightPanelStyle}>
-              <ErrorBoundary name="Layers">
-                <LayerPanel
+              <ErrorBoundary name="Chat">
+                <ChatSidebar
                   editorRef={editorRef}
                   onSceneChanged={onSceneChanged}
-                  refreshTick={refreshTick}
                 />
               </ErrorBoundary>
-              <ErrorBoundary name="Properties">
-                <PropertyInspector
-                  node={selectedNode}
+            )}
+            {status === "ready" && (
+              <Toolbar
+                activeTool={activeTool}
+                onToolChange={handleToolChange}
+              />
+            )}
+            <div style={canvasAreaStyle}>
+              <ErrorBoundary name="Canvas">
+                <Canvas
+                  canvasId="selean-canvas"
+                  editorRef={editorRef}
+                  status={status}
+                  onInteractionEvents={handleInteractionEvents}
+                  onContextMenu={handleContextMenu}
+                />
+              </ErrorBoundary>
+              {status === "ready" && (
+                <SelectionOverlay
                   editorRef={editorRef}
                   onSceneChanged={onSceneChanged}
+                />
+              )}
+              {status === "ready" && collab.status === "connected" && (
+                <PresenceOverlay
+                  editorRef={editorRef}
+                  presences={presenceOverlayData}
                   activePageId={activePageId}
                 />
-              </ErrorBoundary>
+              )}
+              {editingNodeId &&
+                status === "ready" &&
+                (() => {
+                  const editor = editorRef.current;
+                  if (!editor) return null;
+                  try {
+                    const json = editor.get_node_json(editingNodeId);
+                    if (json === "null") return null;
+                    const node: NodeInfo = JSON.parse(json);
+                    if (node.kind !== "Text") return null;
+                    return (
+                      <InlineTextEditor
+                        nodeId={editingNodeId}
+                        initialContent={node.text_content ?? ""}
+                        bounds={{
+                          x: node.x,
+                          y: node.y,
+                          width: node.width,
+                          height: node.height,
+                        }}
+                        fontSize={node.font_size ?? 16}
+                        editorRef={editorRef}
+                        onCommit={(content) => {
+                          editor.execute_tool_call(
+                            "set_text",
+                            JSON.stringify({
+                              node_id: editingNodeId,
+                              content,
+                            }),
+                          );
+                          setEditingNodeId(null);
+                          onSceneChanged();
+                        }}
+                        onCancel={() => setEditingNodeId(null)}
+                      />
+                    );
+                  } catch (e) {
+                    console.warn("inline text editor setup failed", e);
+                    return null;
+                  }
+                })()}
+              {status === "ready" && (
+                <AlignmentBar
+                  selectedIds={selectedIds}
+                  editorRef={editorRef}
+                  onSceneChanged={onSceneChanged}
+                />
+              )}
+              {contextMenuPos && (
+                <ContextMenu
+                  x={contextMenuPos.x}
+                  y={contextMenuPos.y}
+                  editorRef={editorRef}
+                  onSceneChanged={onSceneChanged}
+                  onClose={handleCloseContextMenu}
+                  clipboardRef={clipboardRef}
+                />
+              )}
+              {creationHandlers && (
+                <div style={creationOverlayStyle} {...creationHandlers} />
+              )}
             </div>
-          )}
+            {status === "ready" && (
+              <div style={rightPanelStyle}>
+                <ErrorBoundary name="Layers">
+                  <LayerPanel
+                    editorRef={editorRef}
+                    onSceneChanged={onSceneChanged}
+                    refreshTick={refreshTick}
+                  />
+                </ErrorBoundary>
+                <ErrorBoundary name="Properties">
+                  <PropertyInspector
+                    node={selectedNode}
+                    editorRef={editorRef}
+                    onSceneChanged={onSceneChanged}
+                    activePageId={activePageId}
+                  />
+                </ErrorBoundary>
+              </div>
+            )}
+          </div>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            style={{ display: "none" }}
+            onChange={handleImageSelected}
+          />
         </div>
-        <input
-          ref={imageInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          style={{ display: "none" }}
-          onChange={handleImageSelected}
-        />
-      </div>
-    </CollabContext.Provider>
+      </CollabContext.Provider>
+      <ErrorToast />
+    </>
   );
 }
 

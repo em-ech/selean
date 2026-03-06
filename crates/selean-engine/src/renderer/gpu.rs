@@ -150,3 +150,45 @@ impl std::fmt::Debug for GpuContext {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_descriptor_has_label_and_no_texture_cap() {
+        let desc = GpuContextDescriptor::default();
+        assert_eq!(desc.label, "Selean GPU");
+        assert!(desc.max_texture_dimension.is_none());
+    }
+
+    #[test]
+    fn descriptor_custom_values() {
+        let desc = GpuContextDescriptor {
+            label: "Test GPU".to_string(),
+            max_texture_dimension: Some(4096),
+        };
+        assert_eq!(desc.label, "Test GPU");
+        assert_eq!(desc.max_texture_dimension, Some(4096));
+    }
+
+    #[test]
+    fn descriptor_clone_preserves_fields() {
+        let desc = GpuContextDescriptor {
+            label: "Clone Test".to_string(),
+            max_texture_dimension: Some(2048),
+        };
+        let cloned = desc.clone();
+        assert_eq!(cloned.label, "Clone Test");
+        assert_eq!(cloned.max_texture_dimension, Some(2048));
+    }
+
+    #[test]
+    fn descriptor_debug_format() {
+        let desc = GpuContextDescriptor::default();
+        let debug = format!("{desc:?}");
+        assert!(debug.contains("Selean GPU"));
+        assert!(debug.contains("max_texture_dimension"));
+    }
+}

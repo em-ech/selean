@@ -113,7 +113,10 @@ function convertPaintToFigma(paint: InterchangePaint): Paint | null {
     ];
 
     return {
-      type: paint.type === "GRADIENT_LINEAR" ? "GRADIENT_LINEAR" : "GRADIENT_RADIAL",
+      type:
+        paint.type === "GRADIENT_LINEAR"
+          ? "GRADIENT_LINEAR"
+          : "GRADIENT_RADIAL",
       gradientTransform: transform,
       gradientStops: stops,
     } as GradientPaint;
@@ -153,9 +156,7 @@ function convertEffectsToFigma(effects: InterchangeEffect[]): Effect[] {
 }
 
 function convertFillsToFigma(paints: InterchangePaint[]): Paint[] {
-  return paints
-    .map(convertPaintToFigma)
-    .filter((p): p is Paint => p !== null);
+  return paints.map(convertPaintToFigma).filter((p): p is Paint => p !== null);
 }
 
 async function createNode(
@@ -188,7 +189,10 @@ async function createNode(
       const fontName =
         weight === 400
           ? { family, style }
-          : { family, style: `${weightToStyle(weight)}${style === "Italic" ? " Italic" : ""}` };
+          : {
+              family,
+              style: `${weightToStyle(weight)}${style === "Italic" ? " Italic" : ""}`,
+            };
 
       try {
         await figma.loadFontAsync(fontName);
@@ -207,7 +211,12 @@ async function createNode(
 
       if (node.textAlignHorizontal) {
         const align = node.textAlignHorizontal.toUpperCase();
-        if (align === "CENTER" || align === "LEFT" || align === "RIGHT" || align === "JUSTIFIED") {
+        if (
+          align === "CENTER" ||
+          align === "LEFT" ||
+          align === "RIGHT" ||
+          align === "JUSTIFIED"
+        ) {
           text.textAlignHorizontal = align;
         }
       }

@@ -24,6 +24,9 @@ use crate::state::AppState;
 /// 50 MiB upload limit for file import endpoints.
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
+/// 1 MiB limit for JSON API endpoints (chat, export, figma import).
+const MAX_JSON_BYTES: usize = 1024 * 1024;
+
 /// Creates the Axum router with all API routes and auth disabled.
 pub fn create_router(state: AppState) -> Router {
     create_router_with_options(state, CollabState::new(), AuthConfig::disabled())
@@ -48,19 +51,27 @@ pub fn create_router_with_options(
         ))
         .with_state(collab_state);
 
-    Router::new()
+    // File upload routes: 50 MiB limit.
+    let upload_routes = Router::new()
+        .route("/api/import/pptx", post(import_pptx_handler))
+        .route("/api/import/idml", post(import_idml_handler))
+        .route("/api/import/indd", post(import_indd_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES));
+
+    // JSON API routes: 1 MiB limit.
+    let json_routes = Router::new()
         .route("/api/health", get(health))
         .route("/api/tools", get(list_tools))
         .route("/api/chat", post(chat_handler))
-        .route("/api/import/pptx", post(import_pptx_handler))
         .route("/api/export/pptx", post(export_pptx_handler))
-        .route("/api/import/idml", post(import_idml_handler))
         .route("/api/export/idml", post(export_idml_handler))
         .route("/api/import/figma", post(import_figma_handler))
         .route("/api/export/figma", post(export_figma_handler))
-        .route("/api/import/indd", post(import_indd_handler))
         .route("/api/fonts/{family}", get(serve_font))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_JSON_BYTES));
+
+    upload_routes
+        .merge(json_routes)
         .layer(axum::middleware::from_fn_with_state(
             auth_config,
             auth_middleware,

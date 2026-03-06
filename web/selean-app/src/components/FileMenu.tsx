@@ -1,6 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 import { colors, fontSizes } from "../theme";
 import type { SeleanEditor } from "../wasm/types";
+import {
+  useFileImportHandler,
+  useFileExportHandler,
+  importFileViaUpload,
+} from "../hooks/useFileOperations";
 
 interface FileMenuProps {
   editorRef: React.RefObject<SeleanEditor | null>;
@@ -90,116 +95,42 @@ export function FileMenu({
     close();
   }, [close]);
 
-  const handlePptxSelected = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const editor = editorRef.current;
-      if (!editor) return;
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
-        const response = await fetch("/api/import/pptx", {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) {
-          throw new Error(`Import failed: ${response.status}`);
-        }
-        const json = await response.text();
-        editor.import_document(json);
-        onSceneChanged();
-      } catch (e) {
-        console.warn("file-menu:import-pptx failed", e);
-      }
-      e.target.value = "";
-    },
-    [editorRef, onSceneChanged],
+  const handlePptxSelected = useFileImportHandler(
+    editorRef,
+    "/api/import/pptx",
+    onSceneChanged,
+    "import-pptx",
   );
 
-  const handleExportPptx = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    try {
-      const docJson = editor.export_document_json();
-      const response = await fetch("/api/export/pptx", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: docJson,
-      });
-      if (!response.ok) {
-        throw new Error(`Export failed: ${response.status}`);
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "document.pptx";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      console.warn("file-menu:export-pptx failed", e);
-    }
-    close();
-  }, [editorRef, close]);
+  const handleExportPptx = useFileExportHandler(
+    editorRef,
+    "/api/export/pptx",
+    "document.pptx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "export-pptx",
+    close,
+  );
 
   const handleImportIdml = useCallback(() => {
     idmlInputRef.current?.click();
     close();
   }, [close]);
 
-  const handleIdmlSelected = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const editor = editorRef.current;
-      if (!editor) return;
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
-        const response = await fetch("/api/import/idml", {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) {
-          throw new Error(`Import failed: ${response.status}`);
-        }
-        const json = await response.text();
-        editor.import_document(json);
-        onSceneChanged();
-      } catch (e) {
-        console.warn("file-menu:import-idml failed", e);
-      }
-      e.target.value = "";
-    },
-    [editorRef, onSceneChanged],
+  const handleIdmlSelected = useFileImportHandler(
+    editorRef,
+    "/api/import/idml",
+    onSceneChanged,
+    "import-idml",
   );
 
-  const handleExportIdml = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    try {
-      const docJson = editor.export_document_json();
-      const response = await fetch("/api/export/idml", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: docJson,
-      });
-      if (!response.ok) {
-        throw new Error(`Export failed: ${response.status}`);
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "document.idml";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      console.warn("file-menu:export-idml failed", e);
-    }
-    close();
-  }, [editorRef, close]);
+  const handleExportIdml = useFileExportHandler(
+    editorRef,
+    "/api/export/idml",
+    "document.idml",
+    "application/octet-stream",
+    "export-idml",
+    close,
+  );
 
   const handleImportIndd = useCallback(() => {
     inddInputRef.current?.click();
@@ -215,18 +146,13 @@ export function FileMenu({
       const ext = file.name.toLowerCase().split(".").pop();
       try {
         if (ext === "idml") {
-          const formData = new FormData();
-          formData.append("file", file);
-          const response = await fetch("/api/import/idml", {
-            method: "POST",
-            body: formData,
-          });
-          if (!response.ok) {
-            throw new Error(`IDML import failed: ${response.status}`);
-          }
-          const json = await response.text();
-          editor.import_document(json);
-          onSceneChanged();
+          await importFileViaUpload(
+            editor,
+            file,
+            "/api/import/idml",
+            onSceneChanged,
+            "import-idml",
+          );
         } else {
           const formData = new FormData();
           formData.append("file", file);
@@ -248,40 +174,22 @@ export function FileMenu({
             onSceneChanged();
           }
         }
-      } catch (e) {
-        console.warn("file-menu:import-indesign failed", e);
+      } catch (err) {
+        console.warn("file-menu:import-indesign failed", err);
       }
       e.target.value = "";
     },
     [editorRef, onSceneChanged],
   );
 
-  const handleExportFigma = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    try {
-      const docJson = editor.export_document_json();
-      const response = await fetch("/api/export/figma", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: docJson,
-      });
-      if (!response.ok) {
-        throw new Error(`Export failed: ${response.status}`);
-      }
-      const json = await response.text();
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "document.selean-figma.json";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      console.warn("file-menu:export-figma failed", e);
-    }
-    close();
-  }, [editorRef, close]);
+  const handleExportFigma = useFileExportHandler(
+    editorRef,
+    "/api/export/figma",
+    "document.selean-figma.json",
+    "application/json",
+    "export-figma",
+    close,
+  );
 
   const handleImportFigma = useCallback(async () => {
     const input = window.prompt("Enter Figma file URL or key:");

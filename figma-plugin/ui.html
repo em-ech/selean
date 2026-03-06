@@ -1,104 +1,134 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-  <style>
-    body {
-      font-family: Inter, system-ui, sans-serif;
-      font-size: 13px;
-      margin: 0;
-      padding: 16px;
-      color: #333;
-      background: #fff;
-    }
-    h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
-    .drop-zone {
-      border: 2px dashed #ccc;
-      border-radius: 8px;
-      padding: 32px 16px;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .drop-zone:hover, .drop-zone.active {
-      border-color: #18A0FB;
-      background: #f0f8ff;
-    }
-    .drop-zone input { display: none; }
-    .status {
-      margin-top: 12px;
-      padding: 8px;
-      border-radius: 4px;
-      font-size: 12px;
-      display: none;
-    }
-    .status.visible { display: block; }
-    .status.success { background: #e6f9e6; color: #1a7a1a; }
-    .status.error { background: #fde8e8; color: #c53030; }
-    .status.progress { background: #e8f0fe; color: #1a56db; }
-  </style>
-</head>
-<body>
-  <h3>Import from Selean</h3>
-  <div class="drop-zone" id="dropZone">
-    <p>Drop a <strong>.selean-figma.json</strong> file here</p>
-    <p style="color:#999; font-size:11px">or click to browse</p>
-    <input type="file" id="fileInput" accept=".json">
-  </div>
-  <div class="status" id="status"></div>
+  <head>
+    <style>
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        font-size: 13px;
+        margin: 0;
+        padding: 16px;
+        color: #333;
+        background: #fff;
+      }
+      h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .drop-zone {
+        border: 2px dashed #ccc;
+        border-radius: 8px;
+        padding: 32px 16px;
+        text-align: center;
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          background 0.15s;
+      }
+      .drop-zone:hover,
+      .drop-zone.active {
+        border-color: #18a0fb;
+        background: #f0f8ff;
+      }
+      .drop-zone input {
+        display: none;
+      }
+      .status {
+        margin-top: 12px;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        display: none;
+      }
+      .status.visible {
+        display: block;
+      }
+      .status.success {
+        background: #e6f9e6;
+        color: #1a7a1a;
+      }
+      .status.error {
+        background: #fde8e8;
+        color: #c53030;
+      }
+      .status.progress {
+        background: #e8f0fe;
+        color: #1a56db;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>Import from Selean</h3>
+    <div class="drop-zone" id="dropZone">
+      <p>Drop a <strong>.selean-figma.json</strong> file here</p>
+      <p style="color: #999; font-size: 11px">or click to browse</p>
+      <input type="file" id="fileInput" accept=".json" />
+    </div>
+    <div class="status" id="status"></div>
 
-  <script>
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    const status = document.getElementById('status');
+    <script>
+      const dropZone = document.getElementById("dropZone");
+      const fileInput = document.getElementById("fileInput");
+      const status = document.getElementById("status");
 
-    function showStatus(message, type) {
-      status.textContent = message;
-      status.className = 'status visible ' + type;
-    }
+      function showStatus(message, type) {
+        status.textContent = message;
+        status.className = "status visible " + type;
+      }
 
-    function processFile(file) {
-      if (!file) return;
-      showStatus('Reading file...', 'progress');
+      function processFile(file) {
+        if (!file) return;
+        showStatus("Reading file...", "progress");
 
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          const data = JSON.parse(e.target.result);
-          showStatus('Creating nodes...', 'progress');
-          parent.postMessage({ pluginMessage: { type: 'import', data: data } }, '*');
-        } catch (err) {
-          showStatus('Invalid JSON file: ' + err.message, 'error');
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          try {
+            const data = JSON.parse(e.target.result);
+            showStatus("Creating nodes...", "progress");
+            parent.postMessage(
+              { pluginMessage: { type: "import", data: data } },
+              "*",
+            );
+          } catch (err) {
+            showStatus("Invalid JSON file: " + err.message, "error");
+          }
+        };
+        reader.onerror = function () {
+          showStatus("Failed to read file", "error");
+        };
+        reader.readAsText(file);
+      }
+
+      dropZone.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", (e) =>
+        processFile(e.target.files[0]),
+      );
+
+      dropZone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropZone.classList.add("active");
+      });
+      dropZone.addEventListener("dragleave", () =>
+        dropZone.classList.remove("active"),
+      );
+      dropZone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropZone.classList.remove("active");
+        processFile(e.dataTransfer.files[0]);
+      });
+
+      window.onmessage = (event) => {
+        const msg = event.data.pluginMessage;
+        if (!msg) return;
+        if (msg.type === "done") {
+          showStatus(
+            "Imported " + msg.count + " nodes across " + msg.pages + " page(s)",
+            "success",
+          );
+        } else if (msg.type === "error") {
+          showStatus(msg.message, "error");
         }
       };
-      reader.onerror = function() {
-        showStatus('Failed to read file', 'error');
-      };
-      reader.readAsText(file);
-    }
-
-    dropZone.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', (e) => processFile(e.target.files[0]));
-
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('active');
-    });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('active');
-      processFile(e.dataTransfer.files[0]);
-    });
-
-    window.onmessage = (event) => {
-      const msg = event.data.pluginMessage;
-      if (!msg) return;
-      if (msg.type === 'done') {
-        showStatus('Imported ' + msg.count + ' nodes across ' + msg.pages + ' page(s)', 'success');
-      } else if (msg.type === 'error') {
-        showStatus(msg.message, 'error');
-      }
-    };
-  </script>
-</body>
+    </script>
+  </body>
 </html>
