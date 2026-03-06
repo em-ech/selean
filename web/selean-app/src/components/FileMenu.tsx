@@ -10,7 +10,7 @@ interface FileMenuProps {
 
 /**
  * File menu dropdown in the header.
- * Provides New, Save, Open, and import/export for PPTX, IDML, and Figma.
+ * Provides New, Save, Open, and import/export for PPTX, IDML, InDesign, and Figma.
  */
 export function FileMenu({
   editorRef,
@@ -21,6 +21,7 @@ export function FileMenu({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pptxInputRef = useRef<HTMLInputElement>(null);
   const idmlInputRef = useRef<HTMLInputElement>(null);
+  const inddInputRef = useRef<HTMLInputElement>(null);
 
   const close = useCallback(() => setOpen(false), []);
 
@@ -200,6 +201,88 @@ export function FileMenu({
     close();
   }, [editorRef, close]);
 
+  const handleImportIndd = useCallback(() => {
+    inddInputRef.current?.click();
+    close();
+  }, [close]);
+
+  const handleInddSelected = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const editor = editorRef.current;
+      if (!editor) return;
+      const ext = file.name.toLowerCase().split(".").pop();
+      try {
+        if (ext === "idml") {
+          const formData = new FormData();
+          formData.append("file", file);
+          const response = await fetch("/api/import/idml", {
+            method: "POST",
+            body: formData,
+          });
+          if (!response.ok) {
+            throw new Error(`IDML import failed: ${response.status}`);
+          }
+          const json = await response.text();
+          editor.import_document(json);
+          onSceneChanged();
+        } else {
+          const formData = new FormData();
+          formData.append("file", file);
+          const response = await fetch("/api/import/indd", {
+            method: "POST",
+            body: formData,
+          });
+          if (response.status === 501) {
+            const body = await response.json();
+            window.alert(
+              body.error ||
+                "InDesign Server not configured. Export as IDML instead.",
+            );
+          } else if (!response.ok) {
+            throw new Error(`InDesign import failed: ${response.status}`);
+          } else {
+            const json = await response.text();
+            editor.import_document(json);
+            onSceneChanged();
+          }
+        }
+      } catch (e) {
+        console.warn("file-menu:import-indesign failed", e);
+      }
+      e.target.value = "";
+    },
+    [editorRef, onSceneChanged],
+  );
+
+  const handleExportFigma = useCallback(async () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    try {
+      const docJson = editor.export_document_json();
+      const response = await fetch("/api/export/figma", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: docJson,
+      });
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.status}`);
+      }
+      const json = await response.text();
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "document.selean-figma.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.warn("file-menu:export-figma failed", e);
+    }
+    close();
+  }, [editorRef, close]);
+
   const handleImportFigma = useCallback(async () => {
     const input = window.prompt("Enter Figma file URL or key:");
     if (!input) {
@@ -283,8 +366,15 @@ export function FileMenu({
               Export IDML
             </button>
             <div style={dividerStyle} />
+            <button style={menuItemStyle} onClick={handleImportIndd}>
+              Import InDesign...
+            </button>
+            <div style={dividerStyle} />
             <button style={menuItemStyle} onClick={handleImportFigma}>
               Import Figma...
+            </button>
+            <button style={menuItemStyle} onClick={handleExportFigma}>
+              Export to Figma
             </button>
           </div>
         </>
@@ -309,6 +399,13 @@ export function FileMenu({
         accept=".idml"
         style={{ display: "none" }}
         onChange={handleIdmlSelected}
+      />
+      <input
+        ref={inddInputRef}
+        type="file"
+        accept=".indd,.idml"
+        style={{ display: "none" }}
+        onChange={handleInddSelected}
       />
     </div>
   );

@@ -13,6 +13,9 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     /// Figma personal access token. Read from `FIGMA_ACCESS_TOKEN` env var.
     pub figma_access_token: Option<Arc<str>>,
+    /// `InDesign` Server URL for `.indd` to IDML conversion. Read from
+    /// `INDESIGN_SERVER_URL` env var. When `None`, `.indd` import returns 501.
+    pub indesign_server_url: Option<Arc<str>>,
 }
 
 impl AppState {
@@ -33,6 +36,11 @@ impl AppState {
             .filter(|s| !s.is_empty())
             .map(Arc::from);
 
+        let indesign_server_url = std::env::var("INDESIGN_SERVER_URL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(Arc::from);
+
         Ok(Self {
             api_key: Arc::from(api_key),
             model: Arc::from(model),
@@ -41,6 +49,7 @@ impl AppState {
                 .build()
                 .unwrap_or_default(),
             figma_access_token,
+            indesign_server_url,
         })
     }
 
@@ -52,6 +61,7 @@ impl AppState {
             model: Arc::from("claude-sonnet-4-6"),
             http_client: reqwest::Client::new(),
             figma_access_token: None,
+            indesign_server_url: None,
         }
     }
 }
@@ -86,6 +96,12 @@ mod tests {
     fn test_state_figma_token_is_none() {
         let state = AppState::new_test();
         assert!(state.figma_access_token.is_none());
+    }
+
+    #[test]
+    fn test_state_indesign_server_url_is_none() {
+        let state = AppState::new_test();
+        assert!(state.indesign_server_url.is_none());
     }
 
     #[test]

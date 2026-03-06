@@ -4,17 +4,20 @@
 //! the node tree into a Selean `Document`. Each Figma canvas (page) maps to a
 //! `Page`, and nodes map to scene nodes based on their type.
 //!
-//! Import only in v1. Figma does not expose a simple write API, so export
-//! is not supported.
+//! Export is supported via a JSON interchange format that a Figma plugin
+//! can consume to recreate designs in Figma.
 
 pub mod api;
 pub mod client;
 pub mod color;
 pub mod convert;
+pub mod export;
 
 use selean_engine::persistence::Document;
 
-/// Errors that can occur during Figma import.
+pub use export::export_figma_interchange;
+
+/// Errors that can occur during Figma import or export.
 #[derive(Debug, thiserror::Error)]
 pub enum FigmaError {
     /// HTTP request to the Figma API failed.

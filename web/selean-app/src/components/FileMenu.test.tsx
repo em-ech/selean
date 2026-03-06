@@ -29,7 +29,9 @@ describe("FileMenu", () => {
     expect(screen.getByText("Export PPTX")).toBeInTheDocument();
     expect(screen.getByText("Import IDML...")).toBeInTheDocument();
     expect(screen.getByText("Export IDML")).toBeInTheDocument();
+    expect(screen.getByText("Import InDesign...")).toBeInTheDocument();
     expect(screen.getByText("Import Figma...")).toBeInTheDocument();
+    expect(screen.getByText("Export to Figma")).toBeInTheDocument();
   });
 
   it("calls import_document when New is clicked", () => {
@@ -153,6 +155,36 @@ describe("FileMenu", () => {
           method: "POST",
           body: JSON.stringify({ file_key: "abc123" }),
         }),
+      );
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("calls Export to Figma via fetch", async () => {
+    const revokeUrl = vi.fn();
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn().mockReturnValue("blob:figma"),
+      revokeObjectURL: revokeUrl,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve('{"name":"doc","pages":[]}'),
+      }),
+    );
+
+    const ref = createMockEditorRef();
+    render(<FileMenu editorRef={ref} onSceneChanged={() => {}} />);
+
+    fireEvent.click(screen.getByText("File"));
+    fireEvent.click(screen.getByText("Export to Figma"));
+
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/export/figma",
+        expect.objectContaining({ method: "POST" }),
       );
     });
 

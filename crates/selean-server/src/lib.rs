@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod chat;
 pub mod collab;
+pub mod indesign_bridge;
 pub mod routes;
 pub mod state;
 pub mod stream;

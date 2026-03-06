@@ -57,6 +57,8 @@ pub fn create_router_with_options(
         .route("/api/import/idml", post(import_idml_handler))
         .route("/api/export/idml", post(export_idml_handler))
         .route("/api/import/figma", post(import_figma_handler))
+        .route("/api/export/figma", post(export_figma_handler))
+        .route("/api/import/indd", post(import_indd_handler))
         .route("/api/fonts/{family}", get(serve_font))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(axum::middleware::from_fn_with_state(
@@ -262,6 +264,66 @@ async fn import_figma_handler(
     }
 }
 
+/// Handles Figma interchange export.
+///
+/// Accepts a `Document` JSON body and returns the Figma interchange
+/// JSON that can be consumed by the Selean Figma plugin.
+async fn export_figma_handler(body: axum::body::Bytes) -> axum::response::Response {
+    let doc = match selean_engine::persistence::load_document(&String::from_utf8_lossy(&body)) {
+        Ok(d) => d,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("invalid document JSON: {e}"),
+            );
+        }
+    };
+
+    match selean_figma::export_figma_interchange(&doc) {
+        Ok(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json,
+        )
+            .into_response(),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("figma export failed: {e}"),
+        ),
+    }
+}
+
+/// Handles `InDesign` `.indd` import.
+///
+/// If `InDesign` Server is configured (`INDESIGN_SERVER_URL`), converts
+/// the `.indd` file via the server, then returns the `Document` as JSON.
+/// If not configured, returns 501 with guidance to use IDML instead.
+async fn import_indd_handler(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> axum::response::Response {
+    let bytes = match read_multipart_file(&mut multipart).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+
+    match crate::indesign_bridge::convert_indd_to_document(
+        &state.http_client,
+        state.indesign_server_url.as_deref(),
+        &bytes,
+    )
+    .await
+    {
+        Ok(doc) => document_json_response(selean_engine::persistence::save_document(&doc)),
+        Err(crate::indesign_bridge::IndesignBridgeError::NotConfigured) => error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "InDesign Server not configured. Export your file as IDML (.idml) \
+             from InDesign and use Import IDML instead.",
+        ),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, &format!("indd import failed: {e}")),
+    }
+}
+
 /// Serves a font file by family name from the `fonts/` directory.
 ///
 /// Font files are looked up as `fonts/{family}.ttf` or `fonts/{family}.otf`
@@ -458,6 +520,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn figma_export_route_exists() {
+        let app = create_router(test_state());
+        let doc = selean_engine::persistence::Document::new();
+        let doc_json = selean_engine::persistence::save_document(&doc).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/export/figma")
+                    .header("content-type", "application/json")
+                    .body(Body::from(doc_json))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let ct = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("application/json"));
+    }
+
+    #[tokio::test]
+    async fn figma_export_invalid_json_returns_400() {
+        let app = create_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/export/figma")
+                    .header("content-type", "application/json")
+                    .body(Body::from("not valid json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn font_endpoint_unknown_returns_404() {
         let app = create_router(test_state());
         let response = app
@@ -595,5 +704,72 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Builds a minimal multipart/form-data body with a single "file" field.
+    fn multipart_file_body(data: &[u8]) -> (String, Vec<u8>) {
+        let boundary = "----TestBoundary123";
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"test.indd\"\r\n",
+        );
+        body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        body.extend_from_slice(data);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        (content_type, body)
+    }
+
+    #[tokio::test]
+    async fn indd_import_not_configured_returns_501() {
+        let app = create_router(test_state());
+        let (content_type, body) = multipart_file_body(b"fake-indd-data");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/import/indd")
+                    .header("content-type", content_type)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let msg = json["error"].as_str().unwrap();
+        assert!(
+            msg.contains("IDML"),
+            "error should mention IDML alternative"
+        );
+        assert!(
+            msg.contains("not configured"),
+            "error should mention server not configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn indd_import_route_exists() {
+        let app = create_router(test_state());
+        // POST with empty body should not return 404 or 405.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/import/indd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }
