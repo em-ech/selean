@@ -31,17 +31,6 @@ fn parse_node_id_or_error(s: &str) -> Result<selean_common::types::NodeId, Strin
         })
 }
 
-/// Parses a string as a page UUID, returning a JSON error string on failure.
-fn parse_page_id_or_error(s: &str) -> Result<uuid::Uuid, String> {
-    s.parse::<uuid::Uuid>().map_err(|_| {
-        serde_json::json!({
-            "success": false,
-            "error": "invalid page ID"
-        })
-        .to_string()
-    })
-}
-
 /// Core editor state, independent of the WASM runtime.
 ///
 /// This struct holds all engine state. On native targets it can be used
@@ -595,9 +584,8 @@ impl EditorState {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
 
-        let node_id = match parse_node_id_or_error(node_id_str) {
-            Ok(id) => id,
-            Err(_) => return z_error("invalid node ID"),
+        let Ok(node_id) = parse_node_id_or_error(node_id_str) else {
+            return z_error("invalid node ID");
         };
 
         let Some(node) = self.scene().get(node_id) else {
@@ -812,8 +800,12 @@ impl EditorState {
             selean_llm::ToolCategory::Mutation => {}
         }
 
-        // Map tool call to command descriptors.
-        let descriptors = match selean_llm::map_tool_call(tool_name, &args) {
+        self.execute_mutation_tool(tool_name, &args)
+    }
+
+    /// Executes a mutation tool by mapping it to command descriptors.
+    fn execute_mutation_tool(&mut self, tool_name: &str, args: &serde_json::Value) -> String {
+        let descriptors = match selean_llm::map_tool_call(tool_name, args) {
             Ok(descs) => descs,
             Err(e) => {
                 return serde_json::json!({
@@ -824,7 +816,6 @@ impl EditorState {
             }
         };
 
-        // Wrap multiple descriptors in a group.
         let use_group = descriptors.len() > 1;
         if use_group {
             self.history_mut().begin_group(tool_name);
@@ -2136,7 +2127,7 @@ mod tests {
 
     #[test]
     fn ungroup_preserves_grandchildren() {
-        use selean_engine::scene::{SceneNode, SceneNodeKind, BoundingBox};
+        use selean_engine::scene::{BoundingBox, SceneNode, SceneNodeKind};
 
         let mut state = EditorState::new();
 
@@ -2145,7 +2136,9 @@ mod tests {
         let grandchild = SceneNode::new(
             grandchild_id,
             "Grandchild".to_string(),
-            SceneNodeKind::Frame { corner_radius: [0.0; 4] },
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
             BoundingBox::new(5.0, 5.0, 20.0, 20.0),
         );
 
@@ -2153,7 +2146,9 @@ mod tests {
         let child = SceneNode::new(
             child_id,
             "Child".to_string(),
-            SceneNodeKind::Frame { corner_radius: [0.0; 4] },
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
             BoundingBox::new(0.0, 0.0, 50.0, 50.0),
         );
 

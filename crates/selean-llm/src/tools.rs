@@ -103,9 +103,7 @@ pub fn tool_category(name: &str) -> ToolCategory {
         "align_nodes" => ToolCategory::Align,
         "set_rotation" => ToolCategory::Rotation,
         "group_nodes" | "ungroup_node" => ToolCategory::Group,
-        "move_to_front" | "move_to_back" | "move_forward" | "move_backward" => {
-            ToolCategory::ZOrder
-        }
+        "move_to_front" | "move_to_back" | "move_forward" | "move_backward" => ToolCategory::ZOrder,
         _ => ToolCategory::Mutation,
     }
 }
@@ -641,14 +639,16 @@ fn parse_node_kind(
     args: &serde_json::Value,
     kind_str: &str,
 ) -> Result<SceneNodeKind, ToolCallError> {
-    let corner_radius = get_optional_f32_clamped(args, "corner_radius", 0.0, f32::MAX).unwrap_or(0.0);
+    let corner_radius =
+        get_optional_f32_clamped(args, "corner_radius", 0.0, f32::MAX).unwrap_or(0.0);
     match kind_str {
         "Frame" => Ok(SceneNodeKind::Frame {
             corner_radius: [corner_radius; 4],
         }),
         "Text" => {
             let content = get_string(args, "text_content").unwrap_or_else(|_| String::new());
-            let font_size = get_optional_f32_clamped(args, "font_size", 1.0, 1000.0).unwrap_or(16.0);
+            let font_size =
+                get_optional_f32_clamped(args, "font_size", 1.0, 1000.0).unwrap_or(16.0);
             Ok(SceneNodeKind::Text {
                 content,
                 font_size,

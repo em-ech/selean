@@ -446,10 +446,10 @@ impl TexturedQuadPipeline {
         Self {
             pipelines: PipelineSet {
                 pipeline_normal,
-                pipeline_add,
-                pipeline_replace,
                 pipeline_normal_stencil_test,
+                pipeline_add,
                 pipeline_add_stencil_test,
+                pipeline_replace,
                 pipeline_replace_stencil_test,
             },
         }

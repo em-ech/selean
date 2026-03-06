@@ -861,13 +861,7 @@ mod tests {
 
         let fake_id = NodeId::new();
         let ops = vec![
-            make_op(
-                1,
-                uid,
-                sid,
-                page_id,
-                CommandDescriptor::AddRoot { node },
-            ),
+            make_op(1, uid, sid, page_id, CommandDescriptor::AddRoot { node }),
             make_op(
                 2,
                 uid,

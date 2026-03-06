@@ -9,9 +9,8 @@ use tracing::warn;
 
 use super::quad::{QUAD_INDICES, QuadVertex};
 use super::shared::{
-    BLEND_STATE_ADD, BLEND_STATE_REPLACE, PersistentInstanceBuffer, PipelineSet,
-    STENCIL_DECREMENT, STENCIL_NOOP, STENCIL_TEST, STENCIL_WRITE, SharedPipelineResources,
-    create_pipeline_with_blend,
+    BLEND_STATE_ADD, BLEND_STATE_REPLACE, PersistentInstanceBuffer, PipelineSet, STENCIL_DECREMENT,
+    STENCIL_NOOP, STENCIL_TEST, STENCIL_WRITE, SharedPipelineResources, create_pipeline_with_blend,
 };
 use crate::scene::{
     BlendMode, ClipRect, Color, Gradient, SceneNode, SceneNodeKind, TransformColumns,
@@ -568,10 +567,10 @@ impl RectPipeline {
         Self {
             pipelines: PipelineSet {
                 pipeline_normal,
-                pipeline_add,
-                pipeline_replace,
                 pipeline_normal_stencil_test,
+                pipeline_add,
                 pipeline_add_stencil_test,
+                pipeline_replace,
                 pipeline_replace_stencil_test,
             },
             pipeline_stencil_write,

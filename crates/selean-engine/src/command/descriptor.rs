@@ -15,13 +15,12 @@ use crate::scene::{
 use super::{
     AddChildCommand, AddRootCommand, Command, RemoveNodeCommand, ReorderChildrenCommand,
     ReorderRootsCommand, ReparentCommand, ReparentToRootCommand, SetAssetRefCommand,
-    SetBlendModeCommand,
-    SetBoundsCommand, SetClipModeCommand, SetCornerRadiusCommand, SetEffectsCommand,
-    SetFillCommand, SetFillGradientCommand, SetFontFamilyCommand, SetFontSizeCommand,
-    SetFontStyleCommand, SetFontWeightCommand, SetLineHeightCommand, SetNameCommand,
-    SetOpacityCommand, SetPathDataCommand, SetScrollOffsetCommand, SetStrokeCommand,
-    SetStrokeWidthCommand, SetTextAlignCommand, SetTextColorCommand, SetTextContentCommand,
-    SetTransformCommand, SetVisibleCommand,
+    SetBlendModeCommand, SetBoundsCommand, SetClipModeCommand, SetCornerRadiusCommand,
+    SetEffectsCommand, SetFillCommand, SetFillGradientCommand, SetFontFamilyCommand,
+    SetFontSizeCommand, SetFontStyleCommand, SetFontWeightCommand, SetLineHeightCommand,
+    SetNameCommand, SetOpacityCommand, SetPathDataCommand, SetScrollOffsetCommand,
+    SetStrokeCommand, SetStrokeWidthCommand, SetTextAlignCommand, SetTextColorCommand,
+    SetTextContentCommand, SetTransformCommand, SetVisibleCommand,
 };
 
 /// A serializable description of a scene graph mutation.
@@ -1105,7 +1104,13 @@ mod tests {
         let mut cmd = desc.into_command();
         assert!(cmd.execute(&mut scene));
         assert!(scene.get(child_id).is_some());
-        assert_eq!(scene.children(parent_id).unwrap().len(), 1);
+        assert_eq!(
+            scene
+                .children(parent_id)
+                .expect("parent has children")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1174,7 +1179,7 @@ mod tests {
         scene.add_root(parent_a);
         scene.add_root(parent_b);
         scene.add_child(a_id, child);
-        assert_eq!(scene.children(a_id).unwrap().len(), 1);
+        assert_eq!(scene.children(a_id).expect("a has children").len(), 1);
 
         let desc = CommandDescriptor::Reparent {
             node_id: c_id,
@@ -1182,8 +1187,8 @@ mod tests {
         };
         let mut cmd = desc.into_command();
         assert!(cmd.execute(&mut scene));
-        assert_eq!(scene.children(a_id).unwrap().len(), 0);
-        assert_eq!(scene.children(b_id).unwrap().len(), 1);
+        assert_eq!(scene.children(a_id).expect("a exists").len(), 0);
+        assert_eq!(scene.children(b_id).expect("b has children").len(), 1);
     }
 
     #[test]

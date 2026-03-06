@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-/// A bounded HashMap cache that clears all entries on overflow.
+/// A bounded `HashMap` cache that clears all entries on overflow.
 ///
 /// When [`insert`](BoundedCache::insert) is called and the cache is at
 /// capacity, all existing entries are removed before the new entry is added.

@@ -109,10 +109,7 @@ impl<const CHANNELS: u32> TextureAtlas<CHANNELS> {
     /// Creates a new texture atlas with the default initial size.
     #[must_use]
     pub fn new(device: &wgpu::Device) -> Self {
-        let max_dimension = device
-            .limits()
-            .max_texture_dimension_2d
-            .min(MAX_ATLAS_SIZE);
+        let max_dimension = device.limits().max_texture_dimension_2d.min(MAX_ATLAS_SIZE);
         let initial_size = DEFAULT_ATLAS_SIZE.min(max_dimension);
 
         let (texture, texture_view) = Self::create_texture(device, initial_size, initial_size);
