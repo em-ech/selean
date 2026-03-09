@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { colors, fontSizes } from "../theme";
+import { authFetch } from "../utils/api";
 import type { SeleanEditor } from "../wasm/types";
 import {
   useFileImportHandler,
@@ -156,7 +157,7 @@ export function FileMenu({
         } else {
           const formData = new FormData();
           formData.append("file", file);
-          const response = await fetch("/api/import/indd", {
+          const response = await authFetch("/api/import/indd", {
             method: "POST",
             body: formData,
           });
@@ -209,7 +210,7 @@ export function FileMenu({
       fileKey = urlMatch[1];
     }
     try {
-      const response = await fetch("/api/import/figma", {
+      const response = await authFetch("/api/import/figma", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file_key: fileKey }),

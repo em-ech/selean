@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { colors, fontSizes } from "../theme";
+import { authFetch } from "../utils/api";
 import type { ChatEvent, SeleanEditor } from "../wasm/types";
 
 /** Maximum number of tool-loop iterations before stopping. */
@@ -92,7 +93,7 @@ export function ChatSidebar({ editorRef, onSceneChanged }: ChatSidebarProps) {
       rawBlocks: unknown[];
       stopReason: string;
     }> => {
-      const response = await fetch("/api/chat", {
+      const response = await authFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal,

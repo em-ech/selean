@@ -16,7 +16,8 @@ use axum::{
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
 
-use crate::auth::{AuthConfig, auth_middleware};
+use crate::auth::AuthConfig;
+use crate::auth::middleware::{AuthState, auth_middleware};
 use crate::chat::{ChatRequest, send_chat_request_streaming};
 use crate::collab::ws_handler::{CollabState, ws_handler};
 use crate::state::AppState;
@@ -43,10 +44,15 @@ pub fn create_router_with_options(
     collab_state: CollabState,
     auth_config: AuthConfig,
 ) -> Router {
+    let auth_state = AuthState {
+        config: auth_config,
+        jwt: state.jwt.clone(),
+    };
+
     let collab_routes = Router::new()
         .route("/api/ws", get(ws_handler))
         .layer(axum::middleware::from_fn_with_state(
-            auth_config.clone(),
+            auth_state.clone(),
             auth_middleware,
         ))
         .with_state(collab_state);
@@ -61,6 +67,7 @@ pub fn create_router_with_options(
     // JSON API routes: 1 MiB limit.
     let json_routes = Router::new()
         .route("/api/health", get(health))
+        .route("/api/health/ready", get(health_ready))
         .route("/api/tools", get(list_tools))
         .route("/api/chat", post(chat_handler))
         .route("/api/export/pptx", post(export_pptx_handler))
@@ -70,19 +77,57 @@ pub fn create_router_with_options(
         .route("/api/fonts/{family}", get(serve_font))
         .layer(DefaultBodyLimit::max(MAX_JSON_BYTES));
 
+    // Document management routes (database-backed).
+    let doc_routes = crate::documents::document_routes();
+
+    // Auth routes (public, no auth middleware).
+    let auth_api_routes = crate::auth::routes::auth_routes();
+
     upload_routes
         .merge(json_routes)
+        .merge(doc_routes)
+        .merge(auth_api_routes)
         .layer(axum::middleware::from_fn_with_state(
-            auth_config,
+            auth_state,
             auth_middleware,
         ))
         .with_state(state)
         .merge(collab_routes)
 }
 
-/// Health check endpoint.
+/// Health check endpoint (liveness).
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Readiness check. Verifies database connectivity when configured.
+async fn health_ready(State(state): State<AppState>) -> impl IntoResponse {
+    let mut checks = serde_json::json!({ "status": "ok" });
+
+    if let Some(ref pool) = state.db {
+        match sqlx::query_scalar::<_, i32>("SELECT 1")
+            .fetch_one(pool)
+            .await
+        {
+            Ok(_) => {
+                checks["database"] = serde_json::json!("connected");
+            }
+            Err(e) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "status": "degraded",
+                        "database": format!("error: {e}")
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        checks["database"] = serde_json::json!("not configured");
+    }
+
+    (StatusCode::OK, Json(checks)).into_response()
 }
 
 /// Lists all available LLM tools.

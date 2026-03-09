@@ -20,6 +20,7 @@ import { useCollabSession } from "./hooks/useCollabSession";
 import { useCreationTool } from "./hooks/useCreationTool";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMoveDrag } from "./hooks/useMoveDrag";
+import { useAuth } from "./auth/AuthContext";
 import { useSeleanEditor } from "./hooks/useSeleanEditor";
 import { useSelection } from "./hooks/useSelection";
 import type { NodeInfo } from "./wasm/types";
@@ -33,6 +34,7 @@ const REFRESH_EVENT_TYPES = new Set([
 ]);
 
 export function App() {
+  const { user, logout } = useAuth();
   const [undoRedoTick, setUndoRedoTick] = useState(0);
   const [activeTool, setActiveTool] = useState<ToolType>("select");
   const [refreshTick, setRefreshTick] = useState(0);
@@ -329,6 +331,18 @@ export function App() {
                 >
                   Redo
                 </button>
+                {user && (
+                  <>
+                    <span
+                      style={{ color: colors.textDim, fontSize: fontSizes.sm }}
+                    >
+                      {user.display_name}
+                    </span>
+                    <button style={buttonStyle} onClick={logout}>
+                      Sign out
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </header>

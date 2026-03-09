@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { authFetch } from "../utils/api";
 import type { SeleanEditor } from "../wasm/types";
 
 /**
@@ -14,7 +15,7 @@ export async function importFileViaUpload(
 ): Promise<void> {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch(endpoint, {
+  const response = await authFetch(endpoint, {
     method: "POST",
     body: formData,
   });
@@ -38,7 +39,7 @@ export async function exportViaFetch(
   label: string,
 ): Promise<void> {
   const docJson = editor.export_document_json();
-  const response = await fetch(endpoint, {
+  const response = await authFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: docJson,

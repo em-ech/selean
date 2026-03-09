@@ -2,6 +2,10 @@
 
 use std::sync::Arc;
 
+use sqlx::PgPool;
+
+use crate::auth::jwt::JwtConfig;
+
 /// Shared application state for the Axum server.
 #[derive(Clone)]
 pub struct AppState {
@@ -16,6 +20,11 @@ pub struct AppState {
     /// `InDesign` Server URL for `.indd` to IDML conversion. Read from
     /// `INDESIGN_SERVER_URL` env var. When `None`, `.indd` import returns 501.
     pub indesign_server_url: Option<Arc<str>>,
+    /// `PostgreSQL` connection pool. `None` when `DATABASE_URL` is not set
+    /// (local dev without database).
+    pub db: Option<PgPool>,
+    /// JWT configuration for token-based auth. `None` when `JWT_SECRET` is not set.
+    pub jwt: Option<JwtConfig>,
 }
 
 impl AppState {
@@ -50,7 +59,25 @@ impl AppState {
                 .unwrap_or_default(),
             figma_access_token,
             indesign_server_url,
+            db: None,
+            jwt: JwtConfig::from_env(),
         })
+    }
+
+    /// Sets the database pool on this state.
+    #[must_use]
+    pub fn with_db(mut self, pool: PgPool) -> Self {
+        self.db = Some(pool);
+        self
+    }
+
+    /// Returns a reference to the database pool, or an error if not configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppStateError::NoDatabaseConfigured` if `DATABASE_URL` was not set.
+    pub fn require_db(&self) -> Result<&PgPool, AppStateError> {
+        self.db.as_ref().ok_or(AppStateError::NoDatabaseConfigured)
     }
 
     /// Creates app state with explicit values (for testing).
@@ -62,6 +89,8 @@ impl AppState {
             http_client: reqwest::Client::new(),
             figma_access_token: None,
             indesign_server_url: None,
+            db: None,
+            jwt: None,
         }
     }
 }
@@ -72,6 +101,9 @@ pub enum AppStateError {
     /// The `ANTHROPIC_API_KEY` environment variable is not set.
     #[error("ANTHROPIC_API_KEY environment variable not set")]
     MissingApiKey,
+    /// Database pool was requested but `DATABASE_URL` was not configured.
+    #[error("DATABASE_URL not configured; database features are unavailable")]
+    NoDatabaseConfigured,
 }
 
 #[cfg(test)]
@@ -105,11 +137,24 @@ mod tests {
     }
 
     #[test]
+    fn test_state_db_is_none_by_default() {
+        let state = AppState::new_test();
+        assert!(state.db.is_none());
+        assert!(state.require_db().is_err());
+    }
+
+    #[test]
     fn from_env_missing_key_errors() {
         // Verify the error type is constructed correctly.
         // We can't safely unset env vars in Rust 2024 edition,
         // so we test the error type directly.
         let err = AppStateError::MissingApiKey;
         assert!(err.to_string().contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn no_database_error_message() {
+        let err = AppStateError::NoDatabaseConfigured;
+        assert!(err.to_string().contains("DATABASE_URL"));
     }
 }

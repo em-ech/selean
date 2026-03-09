@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OperationBuffer } from "../collab/op-buffer";
+import { authWsUrl } from "../utils/api";
 import type {
   ClientSeqNum,
   CursorPosition,
@@ -248,8 +249,7 @@ export function useCollabSession(
       });
       wsRef.current = ws;
 
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+      const wsUrl = authWsUrl("/api/ws");
       ws.connect(wsUrl);
 
       // Send JoinRoom once connected. Poll until open.

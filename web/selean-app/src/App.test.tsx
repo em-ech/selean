@@ -4,6 +4,23 @@ import { App } from "./App";
 import { createMockEditor } from "./test/mock-editor";
 import type { SeleanEditor } from "./wasm/types";
 
+// Mock useAuth to bypass authentication.
+vi.mock("./auth/AuthContext", () => ({
+  useAuth: () => ({
+    user: {
+      id: "test-user",
+      email: "test@test.com",
+      display_name: "Test User",
+      avatar_url: null,
+    },
+    isLoading: false,
+    isAuthenticated: true,
+    login: vi.fn(),
+    signup: vi.fn(),
+    logout: vi.fn(),
+  }),
+}));
+
 // Mock useSeleanEditor to inject a controlled editor ref.
 let mockEditor: SeleanEditor;
 let mockStatus: "loading" | "ready" | "error" | "unsupported";

@@ -1,0 +1,24 @@
+[package]
+name = "selean-db"
+version = "0.1.0"
+description = "Database layer for the Selean design platform (PostgreSQL via sqlx)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+selean-common = { path = "../selean-common" }
+sqlx.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

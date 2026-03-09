@@ -38,26 +38,31 @@ Selean is a design tool that combines the capabilities of Canva, Figma, and Adob
 12 of 14 identified issues implemented across Architecture, Code Quality, Tests, and Performance.
 
 **Architecture:**
+
 - A2-b: Graceful mutex recovery in `ws_handler.rs`. Replaced all `expect("room poisoned")` with `match` on lock results. Extracted `handle_join()` and `dispatch_message()` helpers with `JoinOutcome` enum.
 - A3-b: Body size limits in `routes.rs`. Split into `upload_routes` (50 MiB) and `json_routes` (1 MiB) via `DefaultBodyLimit` layer.
 - A4-b: Replaced `unreachable!()` in `selean-wasm/src/lib.rs` with error return for missing `parent_id` on non-root nodes.
 
 **Code Quality:**
+
 - CQ1-b: `ErrorToast` pub/sub notification system (`showError()` global function, auto-dismiss, click-dismiss, max 5 toasts). Added to `App.tsx`.
 - CQ2-b: `useFileOperations.ts` hooks (`importFileViaUpload`, `exportViaFetch`, `useFileImportHandler`, `useFileExportHandler`). `FileMenu.tsx` refactored from 6 repetitive handlers to hook calls.
 - CQ3-b: `executeToolOnSelection` helper in `useKeyboardShortcuts.ts` with `minSelection`/`maxSelection` params. Replaced 5 repetitive z-order/group shortcut handlers.
 
 **Tests:**
+
 - T1-b: 9 unit tests for `ws_handler` (CollabState creation/clone, join flow, leave flow, disconnect cleanup, error messages).
 - T2-b: 5 integration tests in `crates/selean-engine/tests/integration.rs` (create+save+load roundtrip, command+undo, command+persist, multi-page, multi-undo).
 - T3-b: 4 InDesign bridge tests with inline axum mock server in `indesign_bridge.rs`.
 - T4-b: 4 `GpuContextDescriptor` tests in `gpu.rs`.
 
 **Performance:**
+
 - P1-b: `SmallVec<[NodeId; 16]>` for DFS children iteration in `pipeline.rs` (avoids `.to_vec()` heap allocation).
 - P3-b: Explicit stack for dirty flag propagation in `store.rs` (replaces recursive `propagate_transform_dirty_down`). Also replaced `self.roots.clone()` with index-based iteration in `recompute_world_transforms`.
 
 **Deferred:**
+
 - A1-b: Typed `wasm-bindgen` returns for hot paths (pointer events, selection, camera). ~10-15 WASM methods to change from JSON strings to primitives/JsValue.
 - CQ4-c: Extract mutations from `store.rs` into `scene/mutations.rs`. Large refactor with medium risk.
 

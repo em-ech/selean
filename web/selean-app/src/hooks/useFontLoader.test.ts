@@ -76,7 +76,10 @@ describe("useFontLoader", () => {
     renderHook(() => useFontLoader(ref, json));
 
     await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/fonts/roboto");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/fonts/roboto",
+        expect.anything(),
+      );
       expect(editor.register_font).toHaveBeenCalledWith(
         "Roboto",
         expect.any(Uint8Array),
@@ -115,7 +118,10 @@ describe("useFontLoader", () => {
     renderHook(() => useFontLoader(ref, json));
 
     await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/fonts/missing");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/fonts/missing",
+        expect.anything(),
+      );
     });
 
     // register_font should NOT have been called.

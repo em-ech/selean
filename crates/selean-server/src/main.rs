@@ -23,7 +23,7 @@ async fn main() {
         )
         .init();
 
-    let state = match AppState::from_env() {
+    let mut state = match AppState::from_env() {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Failed to initialize: {e}");
@@ -31,6 +31,24 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Connect to database if DATABASE_URL is set.
+    if let Ok(db_config) = selean_db::DbConfig::from_env() {
+        match selean_db::create_pool(&db_config).await {
+            Ok(pool) => {
+                tracing::info!("database connected and migrations applied");
+                state = state.with_db(pool);
+            }
+            Err(e) => {
+                tracing::error!("database connection failed: {e}");
+                tracing::warn!(
+                    "continuing without database; document persistence via snapshots only"
+                );
+            }
+        }
+    } else {
+        tracing::info!("DATABASE_URL not set; running without database");
+    }
 
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -47,9 +65,13 @@ async fn main() {
 
     let auth_config = AuthConfig::from_env();
     if auth_config.is_enabled() {
-        tracing::info!("Auth enabled (SELEAN_AUTH_SECRET is set)");
-    } else {
-        tracing::warn!("Auth disabled (set SELEAN_AUTH_SECRET to enable)");
+        tracing::info!("Legacy auth enabled (SELEAN_AUTH_SECRET is set)");
+    }
+    if state.jwt.is_some() {
+        tracing::info!("JWT auth enabled (JWT_SECRET is set)");
+    }
+    if !auth_config.is_enabled() && state.jwt.is_none() {
+        tracing::warn!("Auth disabled (set JWT_SECRET or SELEAN_AUTH_SECRET to enable)");
     }
 
     let snapshot_dir: PathBuf = std::env::var("SELEAN_DATA_DIR")

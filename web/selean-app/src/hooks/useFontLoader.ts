@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { authFetch } from "../utils/api";
 import type { SeleanEditor } from "../wasm/types";
 
 /**
@@ -54,7 +55,7 @@ async function fetchAndRegisterFont(
   key: string,
   family: string,
 ): Promise<void> {
-  const response = await fetch(`/api/fonts/${key}`);
+  const response = await authFetch(`/api/fonts/${key}`);
   if (!response.ok) {
     console.warn(`Failed to load font "${family}": ${response.status}`);
     return;
