@@ -12,15 +12,22 @@ import { PropertyInspector } from "./components/PropertyInspector";
 import { SelectionOverlay } from "./components/SelectionOverlay";
 import { Toolbar, type ToolType } from "./components/Toolbar";
 import { AlignmentBar } from "./components/AlignmentBar";
+import { CodePanel } from "./components/CodePanel";
 import { ContextMenu } from "./components/ContextMenu";
 import { InlineTextEditor } from "./components/InlineTextEditor";
+import { MemberManager } from "./components/MemberManager";
+import { WorkspaceSelector } from "./components/WorkspaceSelector";
 import { CollabContext } from "./collab/CollabContext";
 import { useAutoSave } from "./hooks/useAutoSave";
 import { useCollabSession } from "./hooks/useCollabSession";
 import { useCreationTool } from "./hooks/useCreationTool";
+import { uploadAsset } from "./hooks/useFileOperations";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMoveDrag } from "./hooks/useMoveDrag";
+import { WorkspaceProvider, useWorkspace } from "./hooks/useWorkspace";
 import { useAuth } from "./auth/AuthContext";
+import { showError } from "./components/ErrorToast";
+import { authFetch } from "./utils/api";
 import { useSeleanEditor } from "./hooks/useSeleanEditor";
 import { useSelection } from "./hooks/useSelection";
 import type { NodeInfo } from "./wasm/types";
@@ -34,7 +41,16 @@ const REFRESH_EVENT_TYPES = new Set([
 ]);
 
 export function App() {
+  return (
+    <WorkspaceProvider>
+      <AppContent />
+    </WorkspaceProvider>
+  );
+}
+
+function AppContent() {
   const { user, logout } = useAuth();
+  const { activeWorkspace } = useWorkspace();
   const [undoRedoTick, setUndoRedoTick] = useState(0);
   const [activeTool, setActiveTool] = useState<ToolType>("select");
   const [refreshTick, setRefreshTick] = useState(0);
@@ -45,6 +61,8 @@ export function App() {
     y: number;
   } | null>(null);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [showMembers, setShowMembers] = useState(false);
+  const [rightPanel, setRightPanel] = useState<"design" | "code">("design");
   const lastClickNodeIdRef = useRef<string | null>(null);
   const lastClickTimeRef = useRef(0);
 
@@ -111,32 +129,86 @@ export function App() {
       const editor = editorRef.current;
       if (!editor) return;
       try {
-        const buffer = await file.arrayBuffer();
-        const data = new Uint8Array(buffer);
-        const assetRef = `img_${Date.now()}`;
-        const ok = editor.register_image_asset(assetRef, data);
-        if (ok) {
-          // Create an image node at the center of the viewport.
-          editor.execute_tool_call(
-            "create_node",
-            JSON.stringify({
-              name: file.name.replace(/\.[^.]+$/, ""),
-              kind: "Image",
-              x: 100,
-              y: 100,
-              width: 400,
-              height: 300,
-              asset_ref: assetRef,
-            }),
+        if (activeWorkspace) {
+          // Online mode: upload to server, then register in WASM.
+          const asset = await uploadAsset(file, activeWorkspace.id);
+          if (asset) {
+            const res = await authFetch(asset.url);
+            if (!res.ok) {
+              showError("Failed to fetch uploaded asset bytes.");
+            } else {
+              const bytes = new Uint8Array(await res.arrayBuffer());
+              editor.register_image_asset(asset.id, bytes);
+              editor.execute_tool_call(
+                "create_node",
+                JSON.stringify({
+                  name: file.name.replace(/\.[^.]+$/, ""),
+                  kind: "Image",
+                  x: 100,
+                  y: 100,
+                  width: 400,
+                  height: 300,
+                  asset_ref: asset.id,
+                }),
+              );
+              onSceneChanged();
+            }
+          } else {
+            // Upload failed; fall back to local-only registration.
+            showError(
+              "Asset upload failed. Image stored locally only and will be lost on reload.",
+            );
+            const buffer = await file.arrayBuffer();
+            const data = new Uint8Array(buffer);
+            const assetRef = `img_${Date.now()}`;
+            const ok = editor.register_image_asset(assetRef, data);
+            if (ok) {
+              editor.execute_tool_call(
+                "create_node",
+                JSON.stringify({
+                  name: file.name.replace(/\.[^.]+$/, ""),
+                  kind: "Image",
+                  x: 100,
+                  y: 100,
+                  width: 400,
+                  height: 300,
+                  asset_ref: assetRef,
+                }),
+              );
+              onSceneChanged();
+            }
+          }
+        } else {
+          // Offline mode: register locally only.
+          const buffer = await file.arrayBuffer();
+          const data = new Uint8Array(buffer);
+          const assetRef = `img_${Date.now()}`;
+          const ok = editor.register_image_asset(assetRef, data);
+          if (ok) {
+            editor.execute_tool_call(
+              "create_node",
+              JSON.stringify({
+                name: file.name.replace(/\.[^.]+$/, ""),
+                kind: "Image",
+                x: 100,
+                y: 100,
+                width: 400,
+                height: 300,
+                asset_ref: assetRef,
+              }),
+            );
+            onSceneChanged();
+          }
+          showError(
+            "Image stored locally only. Connect to a workspace to persist.",
           );
-          onSceneChanged();
         }
-      } catch (e) {
-        console.warn("image upload failed", e);
+      } catch (err) {
+        console.warn("image upload failed", err);
       }
       e.target.value = "";
     },
-    [editorRef, onSceneChanged],
+    [editorRef, onSceneChanged, activeWorkspace],
   );
 
   // Convert collab remote presences to PresenceOverlay format.
@@ -292,6 +364,7 @@ export function App() {
                 onClearAutoSave={clearSavedDocument}
               />
             )}
+            {status === "ready" && <WorkspaceSelector />}
             <span style={statusStyle}>
               {status === "loading" && "Initializing..."}
               {status === "ready" && "Ready"}
@@ -330,6 +403,25 @@ export function App() {
                   disabled={!canRedo}
                 >
                   Redo
+                </button>
+                <button
+                  style={{
+                    ...buttonStyle,
+                    ...(rightPanel === "code"
+                      ? { background: colors.accent, color: colors.bg }
+                      : {}),
+                  }}
+                  onClick={() =>
+                    setRightPanel((p) => (p === "code" ? "design" : "code"))
+                  }
+                >
+                  Code
+                </button>
+                <button
+                  style={buttonStyle}
+                  onClick={() => setShowMembers(true)}
+                >
+                  Team
                 </button>
                 {user && (
                   <>
@@ -455,21 +547,29 @@ export function App() {
             </div>
             {status === "ready" && (
               <div style={rightPanelStyle}>
-                <ErrorBoundary name="Layers">
-                  <LayerPanel
-                    editorRef={editorRef}
-                    onSceneChanged={onSceneChanged}
-                    refreshTick={refreshTick}
-                  />
-                </ErrorBoundary>
-                <ErrorBoundary name="Properties">
-                  <PropertyInspector
-                    node={selectedNode}
-                    editorRef={editorRef}
-                    onSceneChanged={onSceneChanged}
-                    activePageId={activePageId}
-                  />
-                </ErrorBoundary>
+                {rightPanel === "design" ? (
+                  <>
+                    <ErrorBoundary name="Layers">
+                      <LayerPanel
+                        editorRef={editorRef}
+                        onSceneChanged={onSceneChanged}
+                        refreshTick={refreshTick}
+                      />
+                    </ErrorBoundary>
+                    <ErrorBoundary name="Properties">
+                      <PropertyInspector
+                        node={selectedNode}
+                        editorRef={editorRef}
+                        onSceneChanged={onSceneChanged}
+                        activePageId={activePageId}
+                      />
+                    </ErrorBoundary>
+                  </>
+                ) : (
+                  <ErrorBoundary name="Code">
+                    <CodePanel editorRef={editorRef} refreshKey={refreshTick} />
+                  </ErrorBoundary>
+                )}
               </div>
             )}
           </div>
@@ -482,6 +582,7 @@ export function App() {
           />
         </div>
       </CollabContext.Provider>
+      {showMembers && <MemberManager onClose={() => setShowMembers(false)} />}
       <ErrorToast />
     </>
   );

@@ -4,6 +4,7 @@
 //! for automatic deserialization from query results.
 
 pub mod asset;
+pub mod billing;
 pub mod document;
 pub mod session;
 pub mod user;

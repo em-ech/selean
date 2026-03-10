@@ -1,3 +1,4 @@
+import React from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { App } from "./App";
@@ -57,6 +58,26 @@ vi.mock("./hooks/useAutoSave", () => ({
     markDirty: vi.fn(),
     loadSavedDocument: vi.fn().mockReturnValue(null),
     clearSavedDocument: vi.fn(),
+  }),
+}));
+
+// Mock useWorkspace (used by AppContent inside WorkspaceProvider).
+vi.mock("./hooks/useWorkspace", () => ({
+  WorkspaceProvider: ({ children }: { children: React.ReactNode }) => children,
+  useWorkspace: () => ({
+    workspaces: [],
+    activeWorkspace: null,
+    members: [],
+    userRole: null,
+    isLoading: false,
+    switchWorkspace: vi.fn(),
+    createWorkspace: vi.fn(),
+    renameWorkspace: vi.fn(),
+    deleteWorkspace: vi.fn(),
+    inviteMember: vi.fn(),
+    updateMemberRole: vi.fn(),
+    removeMember: vi.fn(),
+    refreshWorkspaces: vi.fn(),
   }),
 }));
 

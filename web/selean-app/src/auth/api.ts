@@ -95,3 +95,9 @@ export async function getMe(accessToken: string): Promise<AuthUser> {
   }
   return response.json();
 }
+
+export async function githubAuthorizeUrl(): Promise<string> {
+  const resp = await fetch("/api/github/authorize");
+  const data = await resp.json();
+  return data.url;
+}

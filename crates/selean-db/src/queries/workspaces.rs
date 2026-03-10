@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::DbError;
-use crate::models::workspace::{Workspace, WorkspaceMember, WorkspaceRole};
+use crate::models::workspace::{MemberWithUser, Workspace, WorkspaceMember, WorkspaceRole};
 
 /// Creates a workspace and adds the creator as owner.
 ///
@@ -214,6 +214,91 @@ pub async fn list_members(
 ) -> Result<Vec<WorkspaceMember>, DbError> {
     let members = sqlx::query_as::<_, WorkspaceMember>(
         "SELECT * FROM workspace_members WHERE workspace_id = $1 ORDER BY joined_at",
+    )
+    .bind(workspace_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(members)
+}
+
+/// Hard-deletes a workspace.
+///
+/// # Errors
+///
+/// Returns `NotFound` if the workspace does not exist.
+pub async fn delete_workspace(pool: &PgPool, id: Uuid) -> Result<(), DbError> {
+    let result = sqlx::query("DELETE FROM workspaces WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::NotFound("workspace".to_string()));
+    }
+    Ok(())
+}
+
+/// Counts workspaces owned by a user.
+///
+/// # Errors
+///
+/// Returns an error if the query fails.
+pub async fn count_user_workspaces(pool: &PgPool, user_id: Uuid) -> Result<i64, DbError> {
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM workspaces WHERE owner_id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count)
+}
+
+/// Counts members in a workspace.
+///
+/// # Errors
+///
+/// Returns an error if the query fails.
+pub async fn count_workspace_members(pool: &PgPool, workspace_id: Uuid) -> Result<i64, DbError> {
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM workspace_members WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(count)
+}
+
+/// Counts non-deleted documents in a workspace.
+///
+/// # Errors
+///
+/// Returns an error if the query fails.
+pub async fn count_workspace_documents(pool: &PgPool, workspace_id: Uuid) -> Result<i64, DbError> {
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM documents WHERE workspace_id = $1 AND deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+/// Lists members of a workspace joined with user profile data.
+///
+/// # Errors
+///
+/// Returns an error if the query fails.
+pub async fn list_members_with_users(
+    pool: &PgPool,
+    workspace_id: Uuid,
+) -> Result<Vec<MemberWithUser>, DbError> {
+    let members = sqlx::query_as::<_, MemberWithUser>(
+        r"
+        SELECT wm.workspace_id, wm.user_id, wm.role, wm.joined_at,
+               u.email, u.display_name
+        FROM workspace_members wm
+        JOIN users u ON u.id = wm.user_id
+        WHERE wm.workspace_id = $1
+        ORDER BY wm.joined_at
+        ",
     )
     .bind(workspace_id)
     .fetch_all(pool)

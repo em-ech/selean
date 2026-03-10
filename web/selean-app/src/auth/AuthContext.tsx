@@ -86,14 +86,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => setRefreshFunction(null);
   }, [performRefresh]);
 
-  // Try to restore session on mount.
+  // Try to restore session on mount, including GitHub OAuth callback.
   useEffect(() => {
-    const stored = localStorage.getItem(REFRESH_TOKEN_KEY);
-    if (stored) {
-      refreshTokenRef.current = stored;
-      performRefresh().finally(() => setIsLoading(false));
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const ghState = params.get("state");
+
+    if (code && ghState) {
+      // GitHub OAuth callback: clear URL params and exchange code for tokens.
+      window.history.replaceState({}, "", window.location.pathname);
+      fetch("/api/github/callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, state: ghState }),
+      })
+        .then((r) => r.json())
+        .then((response) => {
+          handleAuthResponse(response);
+          setIsLoading(false);
+        })
+        .catch(() => setIsLoading(false));
     } else {
-      setIsLoading(false);
+      const stored = localStorage.getItem(REFRESH_TOKEN_KEY);
+      if (stored) {
+        refreshTokenRef.current = stored;
+        performRefresh().finally(() => setIsLoading(false));
+      } else {
+        setIsLoading(false);
+      }
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

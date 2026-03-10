@@ -148,6 +148,17 @@ async fn signup(
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
+    // Create default workspace for new user.
+    let workspace_name = format!("{}'s Workspace", user.display_name);
+    if let Err(e) =
+        selean_db::queries::workspaces::create_workspace(pool, &workspace_name, user.id).await
+    {
+        tracing::warn!(
+            "failed to create default workspace for user {}: {e}",
+            user.id
+        );
+    }
+
     // Create session and tokens.
     match create_session_and_tokens(pool, jwt_config, &user).await {
         Ok(resp) => (StatusCode::CREATED, Json(resp)).into_response(),

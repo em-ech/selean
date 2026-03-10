@@ -85,6 +85,10 @@ export interface SeleanEditor {
     width: number | null,
     height: number | null,
   ): boolean;
+  generate_code(): string;
+  generate_page_code(page_id: string): string;
+  generate_project_json(): string;
+  extract_design_tokens_json(): string;
 }
 
 /** Bounding box of a selected node in world space */

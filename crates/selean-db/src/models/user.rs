@@ -22,6 +22,13 @@ pub struct User {
     pub created_at: DateTime<Utc>,
     /// When the user was last updated.
     pub updated_at: DateTime<Utc>,
+    /// GitHub user ID (unique, for OAuth login lookups).
+    pub github_id: Option<i64>,
+    /// GitHub username.
+    pub github_login: Option<String>,
+    /// GitHub OAuth access token (plain text for v1).
+    #[serde(skip_serializing)]
+    pub github_token: Option<String>,
 }
 
 /// Data required to create a new user.

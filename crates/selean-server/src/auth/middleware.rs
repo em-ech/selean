@@ -34,6 +34,9 @@ const PUBLIC_PATHS: &[&str] = &["/api/health", "/api/health/ready"];
 /// Path prefix for auth routes that must be public.
 const AUTH_PATH_PREFIX: &str = "/api/auth/";
 
+/// GitHub OAuth paths that must be accessible without authentication.
+const GITHUB_PUBLIC_PATHS: &[&str] = &["/api/github/authorize", "/api/github/callback"];
+
 /// Extracts the Bearer token from the Authorization header.
 fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -61,7 +64,10 @@ pub async fn auth_middleware(
 
     // Public paths: pass through.
     let path = request.uri().path();
-    if PUBLIC_PATHS.contains(&path) || path.starts_with(AUTH_PATH_PREFIX) {
+    if PUBLIC_PATHS.contains(&path)
+        || path.starts_with(AUTH_PATH_PREFIX)
+        || GITHUB_PUBLIC_PATHS.contains(&path)
+    {
         return next.run(request).await;
     }
 

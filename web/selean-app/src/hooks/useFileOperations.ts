@@ -2,6 +2,46 @@ import { useCallback } from "react";
 import { authFetch } from "../utils/api";
 import type { SeleanEditor } from "../wasm/types";
 
+export interface AssetResponse {
+  id: string;
+  workspace_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+  url: string;
+}
+
+/**
+ * Uploads an asset file to the server and returns the asset metadata.
+ * Returns null if the upload fails (logs warning, does not throw).
+ */
+export async function uploadAsset(
+  file: File,
+  workspaceId: string,
+): Promise<AssetResponse | null> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("workspace_id", workspaceId);
+  try {
+    const response = await authFetch("/api/assets", {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response
+        .json()
+        .catch(() => ({ error: response.statusText }));
+      console.warn(`asset upload failed: ${err.error || response.status}`);
+      return null;
+    }
+    return await response.json();
+  } catch (e) {
+    console.warn("asset upload failed", e);
+    return null;
+  }
+}
+
 /**
  * Imports a file by uploading it as multipart FormData to the given endpoint.
  * On success, passes the JSON response to `editor.import_document()`.

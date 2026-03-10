@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use axum::http::HeaderValue;
 use selean_server::{
     AppState, AuthConfig, CollabState, create_router_with_options, load_snapshots_into,
     start_snapshot_task,
@@ -50,6 +51,8 @@ async fn main() {
         tracing::info!("DATABASE_URL not set; running without database");
     }
 
+    tracing::info!("asset storage: {}", state.storage.name());
+
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -58,8 +61,15 @@ async fn main() {
     let static_dir =
         std::env::var("STATIC_DIR").unwrap_or_else(|_| "web/selean-app/dist".to_string());
 
+    let allowed_origins =
+        std::env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let origins: Vec<HeaderValue> = allowed_origins
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
     let cors = CorsLayer::new()
-        .allow_origin(["http://localhost:3000".parse().expect("valid origin")])
+        .allow_origin(origins)
         .allow_methods(Any)
         .allow_headers(Any);
 
@@ -118,5 +128,33 @@ async fn main() {
         .await
         .expect("failed to bind");
 
-    axum::serve(listener, app).await.expect("server error");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("server error");
+}
+
+/// Waits for a shutdown signal (Ctrl+C or SIGTERM).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => { tracing::info!("received Ctrl+C, shutting down"); },
+        () = terminate => { tracing::info!("received SIGTERM, shutting down"); },
+    }
 }

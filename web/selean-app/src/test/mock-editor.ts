@@ -106,6 +106,14 @@ export function createMockEditor(
     apply_remote_op_group: vi.fn().mockReturnValue(true),
     apply_remote_page_op: vi.fn().mockReturnValue(true),
     active_page_id: vi.fn().mockReturnValue("page-1"),
+    generate_code: vi.fn().mockReturnValue(""),
+    generate_page_code: vi.fn().mockReturnValue(""),
+    generate_project_json: vi
+      .fn()
+      .mockReturnValue(JSON.stringify({ files: [] })),
+    extract_design_tokens_json: vi
+      .fn()
+      .mockReturnValue(JSON.stringify({ colors: [], fonts: [] })),
   };
 
   return { ...defaults, ...overrides } as SeleanEditor;

@@ -17,6 +17,8 @@ pub struct Workspace {
     pub created_at: DateTime<Utc>,
     /// When the workspace was last updated.
     pub updated_at: DateTime<Utc>,
+    /// Billing tier for quota enforcement.
+    pub billing_tier: String,
 }
 
 /// A user's membership in a workspace.
@@ -76,6 +78,23 @@ impl WorkspaceRole {
     pub fn has_at_least(&self, required: Self) -> bool {
         (*self as u8) >= (required as u8)
     }
+}
+
+/// A workspace member with user profile information.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MemberWithUser {
+    /// The workspace this membership belongs to.
+    pub workspace_id: Uuid,
+    /// The member user.
+    pub user_id: Uuid,
+    /// Role within the workspace.
+    pub role: String,
+    /// When the user joined.
+    pub joined_at: DateTime<Utc>,
+    /// User's email address.
+    pub email: String,
+    /// User's display name.
+    pub display_name: String,
 }
 
 #[cfg(test)]

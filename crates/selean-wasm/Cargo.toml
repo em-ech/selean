@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 selean-engine = { path = "../selean-engine" }
 selean-common = { path = "../selean-common" }
 selean-llm = { path = "../selean-llm" }
+selean-codegen = { path = "../selean-codegen" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

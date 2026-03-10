@@ -919,6 +919,45 @@ impl EditorState {
             meta,
         }
     }
+
+    // --- Code generation bindings ---
+
+    /// Generates React + Tailwind code for the active page.
+    #[must_use]
+    pub fn generate_code(&self) -> String {
+        selean_codegen::generate_page_code(self.document.active_page())
+    }
+
+    /// Generates React + Tailwind code for a specific page by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if the page ID is invalid or the page is not found.
+    pub fn generate_page_code(&self, page_id: &str) -> Result<String, String> {
+        let uuid = uuid::Uuid::parse_str(page_id).map_err(|_| "invalid page ID".to_string())?;
+        let pid = selean_common::types::PageId::from_uuid(uuid);
+        let page = self
+            .document
+            .page(pid)
+            .ok_or_else(|| "page not found".to_string())?;
+        Ok(selean_codegen::generate_page_code(page))
+    }
+
+    /// Generates a full project structure as JSON.
+    ///
+    /// Returns a JSON object with `files: [{ path, content }]`.
+    #[must_use]
+    pub fn generate_project_json(&self) -> String {
+        let output = selean_codegen::generate_project(&self.document);
+        serde_json::to_string(&output).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Extracts design tokens as JSON.
+    #[must_use]
+    pub fn extract_design_tokens_json(&self) -> String {
+        let tokens = selean_codegen::extract_tokens(&self.document);
+        serde_json::to_string(&tokens).unwrap_or_else(|_| "{}".to_string())
+    }
 }
 
 /// Computes the new sibling order after applying a z-order tool.
@@ -1433,6 +1472,38 @@ mod wasm {
                 center_x - vp_w / (2.0 * zoom),
                 center_y - vp_h / (2.0 * zoom),
             );
+        }
+
+        // --- Code generation bindings ---
+
+        /// Generates React + Tailwind code for the active page.
+        #[wasm_bindgen]
+        pub fn generate_code(&self) -> String {
+            self.state.generate_code()
+        }
+
+        /// Generates React + Tailwind code for a specific page by ID.
+        ///
+        /// Returns JSON: `{ "success": true, "code": "..." }` or
+        /// `{ "success": false, "error": "..." }`.
+        #[wasm_bindgen]
+        pub fn generate_page_code(&self, page_id: &str) -> String {
+            match self.state.generate_page_code(page_id) {
+                Ok(code) => serde_json::json!({ "success": true, "code": code }).to_string(),
+                Err(e) => serde_json::json!({ "success": false, "error": e }).to_string(),
+            }
+        }
+
+        /// Generates a full Vite + React + Tailwind project as JSON.
+        #[wasm_bindgen]
+        pub fn generate_project_json(&self) -> String {
+            self.state.generate_project_json()
+        }
+
+        /// Extracts design tokens as JSON.
+        #[wasm_bindgen]
+        pub fn extract_design_tokens_json(&self) -> String {
+            self.state.extract_design_tokens_json()
         }
     }
 }

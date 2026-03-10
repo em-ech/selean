@@ -50,6 +50,9 @@ jsonwebtoken = "9"
 sha2 = "0.10"
 hex = "0.4"
 
+# Object storage (S3, R2, MinIO)
+rust-s3 = "0.35"
+
 # PPTX import/export
 zip = { version = "2", default-features = false, features = ["deflate"] }
 quick-xml = "0.37"

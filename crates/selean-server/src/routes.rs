@@ -64,6 +64,11 @@ pub fn create_router_with_options(
         .route("/api/import/indd", post(import_indd_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES));
 
+    // Asset upload route: 10 MiB limit.
+    let asset_upload_routes = Router::new()
+        .route("/api/assets", post(crate::assets::upload_asset))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
+
     // JSON API routes: 1 MiB limit.
     let json_routes = Router::new()
         .route("/api/health", get(health))
@@ -75,18 +80,35 @@ pub fn create_router_with_options(
         .route("/api/import/figma", post(import_figma_handler))
         .route("/api/export/figma", post(export_figma_handler))
         .route("/api/fonts/{family}", get(serve_font))
+        .route(
+            "/api/assets/{id}",
+            get(crate::assets::serve_asset).delete(crate::assets::delete_asset),
+        )
+        .route(
+            "/api/workspaces/{workspace_id}/assets",
+            get(crate::assets::list_assets),
+        )
         .layer(DefaultBodyLimit::max(MAX_JSON_BYTES));
 
     // Document management routes (database-backed).
     let doc_routes = crate::documents::document_routes();
 
+    // Workspace management routes (database-backed, RBAC).
+    let workspace_routes = crate::workspaces::workspace_routes();
+
     // Auth routes (public, no auth middleware).
     let auth_api_routes = crate::auth::routes::auth_routes();
 
+    // GitHub OAuth + API proxy routes.
+    let github_api_routes = crate::github::github_routes();
+
     upload_routes
+        .merge(asset_upload_routes)
         .merge(json_routes)
         .merge(doc_routes)
+        .merge(workspace_routes)
         .merge(auth_api_routes)
+        .merge(github_api_routes)
         .layer(axum::middleware::from_fn_with_state(
             auth_state,
             auth_middleware,
@@ -126,6 +148,8 @@ async fn health_ready(State(state): State<AppState>) -> impl IntoResponse {
     } else {
         checks["database"] = serde_json::json!("not configured");
     }
+
+    checks["storage"] = serde_json::json!(state.storage.name());
 
     (StatusCode::OK, Json(checks)).into_response()
 }

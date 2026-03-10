@@ -120,3 +120,86 @@ pub async fn update_user_password(
     }
     Ok(())
 }
+
+/// Finds a user by their GitHub ID, returning `None` if not found.
+///
+/// # Errors
+///
+/// Returns an error only on query failure.
+pub async fn find_by_github_id(pool: &PgPool, github_id: i64) -> Result<Option<User>, DbError> {
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE github_id = $1")
+        .bind(github_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(user)
+}
+
+/// Links a GitHub account to an existing user.
+///
+/// # Errors
+///
+/// Returns an error if the user does not exist or the query fails.
+pub async fn link_github(
+    pool: &PgPool,
+    user_id: Uuid,
+    github_id: i64,
+    github_login: &str,
+    github_token: &str,
+) -> Result<(), DbError> {
+    let result = sqlx::query(
+        "UPDATE users SET github_id = $2, github_login = $3, github_token = $4, updated_at = now() WHERE id = $1",
+    )
+    .bind(user_id)
+    .bind(github_id)
+    .bind(github_login)
+    .bind(github_token)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::NotFound("user".to_string()));
+    }
+    Ok(())
+}
+
+/// Updates the stored GitHub token for a user.
+///
+/// # Errors
+///
+/// Returns an error if the user does not exist or the query fails.
+pub async fn update_github_token(
+    pool: &PgPool,
+    user_id: Uuid,
+    github_token: &str,
+) -> Result<(), DbError> {
+    let result =
+        sqlx::query("UPDATE users SET github_token = $2, updated_at = now() WHERE id = $1")
+            .bind(user_id)
+            .bind(github_token)
+            .execute(pool)
+            .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::NotFound("user".to_string()));
+    }
+    Ok(())
+}
+
+/// Clears a user's GitHub token. Keeps `github_id` for re-linking.
+///
+/// # Errors
+///
+/// Returns an error if the user does not exist or the query fails.
+pub async fn disconnect_github(pool: &PgPool, user_id: Uuid) -> Result<(), DbError> {
+    let result =
+        sqlx::query("UPDATE users SET github_token = NULL, updated_at = now() WHERE id = $1")
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::NotFound("user".to_string()));
+    }
+    Ok(())
+}

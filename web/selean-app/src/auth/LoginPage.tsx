@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useAuth } from "./AuthContext";
+import { githubAuthorizeUrl } from "./api";
 import { colors, fontSizes } from "../theme";
 
 type Mode = "login" | "signup";
@@ -36,6 +37,15 @@ export function LoginPage() {
   const toggleMode = useCallback(() => {
     setMode((m) => (m === "login" ? "signup" : "login"));
     setError("");
+  }, []);
+
+  const handleGitHubLogin = useCallback(async () => {
+    try {
+      const url = await githubAuthorizeUrl();
+      window.location.href = url;
+    } catch (e) {
+      console.warn("GitHub login failed", e);
+    }
   }, []);
 
   return (
@@ -86,6 +96,20 @@ export function LoginPage() {
             {loading ? "..." : mode === "login" ? "Sign in" : "Create account"}
           </button>
         </form>
+
+        <div style={dividerStyle}>
+          <span style={dividerLineStyle} />
+          <span style={dividerTextStyle}>or</span>
+          <span style={dividerLineStyle} />
+        </div>
+
+        <button
+          onClick={() => void handleGitHubLogin()}
+          style={githubBtnStyle}
+          type="button"
+        >
+          Sign in with GitHub
+        </button>
 
         <button onClick={toggleMode} style={toggleStyle}>
           {mode === "login"
@@ -163,6 +187,35 @@ const submitStyle: React.CSSProperties = {
   fontSize: fontSizes.base,
   fontWeight: 600,
   cursor: "pointer",
+};
+
+const dividerStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+};
+
+const dividerLineStyle: React.CSSProperties = {
+  flex: 1,
+  height: 1,
+  background: colors.border,
+};
+
+const dividerTextStyle: React.CSSProperties = {
+  color: colors.textDim,
+  fontSize: fontSizes.sm,
+};
+
+const githubBtnStyle: React.CSSProperties = {
+  padding: "10px 16px",
+  background: "#24292e",
+  color: "#fff",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 4,
+  fontSize: fontSizes.base,
+  fontWeight: 600,
+  cursor: "pointer",
+  textAlign: "center",
 };
 
 const toggleStyle: React.CSSProperties = {

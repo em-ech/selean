@@ -5,6 +5,7 @@ use std::sync::Arc;
 use sqlx::PgPool;
 
 use crate::auth::jwt::JwtConfig;
+use crate::storage::StorageBackend;
 
 /// Shared application state for the Axum server.
 #[derive(Clone)]
@@ -25,6 +26,12 @@ pub struct AppState {
     pub db: Option<PgPool>,
     /// JWT configuration for token-based auth. `None` when `JWT_SECRET` is not set.
     pub jwt: Option<JwtConfig>,
+    /// Asset storage backend (local filesystem or S3).
+    pub storage: Arc<dyn StorageBackend>,
+    /// GitHub OAuth client ID. Read from `GITHUB_CLIENT_ID` env var.
+    pub github_client_id: Option<Arc<str>>,
+    /// GitHub OAuth client secret. Read from `GITHUB_CLIENT_SECRET` env var.
+    pub github_client_secret: Option<Arc<str>>,
 }
 
 impl AppState {
@@ -50,6 +57,18 @@ impl AppState {
             .filter(|s| !s.is_empty())
             .map(Arc::from);
 
+        let storage: Arc<dyn StorageBackend> =
+            if let Some(s3_config) = crate::storage::s3::S3Config::from_env() {
+                Arc::new(
+                    crate::storage::s3::S3Storage::new(&s3_config)
+                        .map_err(|e| AppStateError::StorageInit(e.to_string()))?,
+                )
+            } else {
+                let asset_dir =
+                    std::env::var("SELEAN_ASSET_DIR").unwrap_or_else(|_| "data/assets".to_string());
+                Arc::new(crate::storage::local::LocalStorage::new(asset_dir))
+            };
+
         Ok(Self {
             api_key: Arc::from(api_key),
             model: Arc::from(model),
@@ -61,6 +80,15 @@ impl AppState {
             indesign_server_url,
             db: None,
             jwt: JwtConfig::from_env(),
+            storage,
+            github_client_id: std::env::var("GITHUB_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(Arc::from),
+            github_client_secret: std::env::var("GITHUB_CLIENT_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(Arc::from),
         })
     }
 
@@ -91,6 +119,11 @@ impl AppState {
             indesign_server_url: None,
             db: None,
             jwt: None,
+            storage: Arc::new(crate::storage::local::LocalStorage::new(
+                "/tmp/selean-test-assets",
+            )),
+            github_client_id: None,
+            github_client_secret: None,
         }
     }
 }
@@ -104,6 +137,9 @@ pub enum AppStateError {
     /// Database pool was requested but `DATABASE_URL` was not configured.
     #[error("DATABASE_URL not configured; database features are unavailable")]
     NoDatabaseConfigured,
+    /// Storage backend initialization failed.
+    #[error("storage initialization failed: {0}")]
+    StorageInit(String),
 }
 
 #[cfg(test)]
@@ -134,6 +170,13 @@ mod tests {
     fn test_state_indesign_server_url_is_none() {
         let state = AppState::new_test();
         assert!(state.indesign_server_url.is_none());
+    }
+
+    #[test]
+    fn test_state_github_fields_are_none() {
+        let state = AppState::new_test();
+        assert!(state.github_client_id.is_none());
+        assert!(state.github_client_secret.is_none());
     }
 
     #[test]
