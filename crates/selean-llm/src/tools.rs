@@ -42,7 +42,7 @@ pub struct ToolEntry {
     pub category: ToolCategory,
     /// For `Mutation` tools, the function that converts args to `CommandDescriptor` values.
     /// `None` for tools whose execution is handled directly by the WASM bridge
-    /// (ReadOnly, Page, Align, Rotation, Group, ZOrder).
+    /// (`ReadOnly`, `Page`, `Align`, `Rotation`, `Group`, `ZOrder`).
     pub mapper: Option<ToolMapper>,
 }
 
@@ -50,8 +50,16 @@ pub struct ToolEntry {
 /// category, and optional arg-to-command mapper in a single location.
 #[must_use]
 pub fn all_entries() -> Vec<ToolEntry> {
+    let mut entries = Vec::with_capacity(41);
+    entries.extend(readonly_entries());
+    entries.extend(page_entries());
+    entries.extend(special_entries());
+    entries.extend(mutation_entries());
+    entries
+}
+
+fn readonly_entries() -> Vec<ToolEntry> {
     vec![
-        // --- Read-only tools ---
         ToolEntry {
             definition: tool_get_scene_summary(),
             category: ToolCategory::ReadOnly,
@@ -72,7 +80,11 @@ pub fn all_entries() -> Vec<ToolEntry> {
             category: ToolCategory::ReadOnly,
             mapper: None,
         },
-        // --- Page tools ---
+    ]
+}
+
+fn page_entries() -> Vec<ToolEntry> {
+    vec![
         ToolEntry {
             definition: tool_add_page(),
             category: ToolCategory::Page,
@@ -88,7 +100,11 @@ pub fn all_entries() -> Vec<ToolEntry> {
             category: ToolCategory::Page,
             mapper: None,
         },
-        // --- Special-category tools ---
+    ]
+}
+
+fn special_entries() -> Vec<ToolEntry> {
+    vec![
         ToolEntry {
             definition: tool_align_nodes(),
             category: ToolCategory::Align,
@@ -129,137 +145,46 @@ pub fn all_entries() -> Vec<ToolEntry> {
             category: ToolCategory::ZOrder,
             mapper: None,
         },
-        // --- Mutation tools (with mappers) ---
-        ToolEntry {
-            definition: tool_set_fill(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_fill),
-        },
-        ToolEntry {
-            definition: tool_set_bounds(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_bounds),
-        },
-        ToolEntry {
-            definition: tool_set_text(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_text),
-        },
-        ToolEntry {
-            definition: tool_set_opacity(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_opacity),
-        },
-        ToolEntry {
-            definition: tool_set_visible(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_visible),
-        },
-        ToolEntry {
-            definition: tool_set_name(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_name),
-        },
-        ToolEntry {
-            definition: tool_set_stroke(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_stroke),
-        },
-        ToolEntry {
-            definition: tool_set_blend_mode(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_blend_mode),
-        },
-        ToolEntry {
-            definition: tool_create_node(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_create_node),
-        },
-        ToolEntry {
-            definition: tool_delete_node(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_delete_node),
-        },
-        ToolEntry {
-            definition: tool_set_corner_radius(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_corner_radius),
-        },
-        ToolEntry {
-            definition: tool_set_font_family(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_font_family),
-        },
-        ToolEntry {
-            definition: tool_set_font_weight(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_font_weight),
-        },
-        ToolEntry {
-            definition: tool_set_text_align(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_text_align),
-        },
-        ToolEntry {
-            definition: tool_set_line_height(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_line_height),
-        },
-        ToolEntry {
-            definition: tool_set_text_color(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_text_color),
-        },
-        ToolEntry {
-            definition: tool_add_child_node(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_add_child_node),
-        },
-        ToolEntry {
-            definition: tool_reparent_node(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_reparent_node),
-        },
-        ToolEntry {
-            definition: tool_reorder_children(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_reorder_children),
-        },
-        ToolEntry {
-            definition: tool_set_font_style(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_font_style),
-        },
-        ToolEntry {
-            definition: tool_set_clip_mode(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_clip_mode),
-        },
-        ToolEntry {
-            definition: tool_set_linear_gradient(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_linear_gradient),
-        },
-        ToolEntry {
-            definition: tool_set_radial_gradient(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_radial_gradient),
-        },
-        ToolEntry {
-            definition: tool_set_drop_shadow(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_drop_shadow),
-        },
-        ToolEntry {
-            definition: tool_set_blur(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_set_blur),
-        },
-        ToolEntry {
-            definition: tool_remove_effects(),
-            category: ToolCategory::Mutation,
-            mapper: Some(map_remove_effects),
-        },
+    ]
+}
+
+/// Helper: creates a `Mutation` tool entry from a definition + mapper pair.
+fn mutation(definition: ToolDefinition, mapper: ToolMapper) -> ToolEntry {
+    ToolEntry {
+        definition,
+        category: ToolCategory::Mutation,
+        mapper: Some(mapper),
+    }
+}
+
+fn mutation_entries() -> Vec<ToolEntry> {
+    vec![
+        mutation(tool_set_fill(), map_set_fill),
+        mutation(tool_set_bounds(), map_set_bounds),
+        mutation(tool_set_text(), map_set_text),
+        mutation(tool_set_opacity(), map_set_opacity),
+        mutation(tool_set_visible(), map_set_visible),
+        mutation(tool_set_name(), map_set_name),
+        mutation(tool_set_stroke(), map_set_stroke),
+        mutation(tool_set_blend_mode(), map_set_blend_mode),
+        mutation(tool_create_node(), map_create_node),
+        mutation(tool_delete_node(), map_delete_node),
+        mutation(tool_set_corner_radius(), map_set_corner_radius),
+        mutation(tool_set_font_family(), map_set_font_family),
+        mutation(tool_set_font_weight(), map_set_font_weight),
+        mutation(tool_set_text_align(), map_set_text_align),
+        mutation(tool_set_line_height(), map_set_line_height),
+        mutation(tool_set_text_color(), map_set_text_color),
+        mutation(tool_add_child_node(), map_add_child_node),
+        mutation(tool_reparent_node(), map_reparent_node),
+        mutation(tool_reorder_children(), map_reorder_children),
+        mutation(tool_set_font_style(), map_set_font_style),
+        mutation(tool_set_clip_mode(), map_set_clip_mode),
+        mutation(tool_set_linear_gradient(), map_set_linear_gradient),
+        mutation(tool_set_radial_gradient(), map_set_radial_gradient),
+        mutation(tool_set_drop_shadow(), map_set_drop_shadow),
+        mutation(tool_set_blur(), map_set_blur),
+        mutation(tool_remove_effects(), map_remove_effects),
     ]
 }
 
@@ -297,8 +222,7 @@ pub fn tool_category(name: &str) -> ToolCategory {
     all_entries()
         .iter()
         .find(|e| e.definition.name == name)
-        .map(|e| e.category)
-        .unwrap_or(ToolCategory::Mutation)
+        .map_or(ToolCategory::Mutation, |e| e.category)
 }
 
 /// Returns `true` if the given tool name is read-only.
