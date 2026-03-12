@@ -1501,4 +1501,394 @@ mod tests {
         assert!(!empty);
         assert_eq!(room.document().page_count(), 2);
     }
+
+    // ========================================================================
+    // Concurrency scenario tests
+    // ========================================================================
+
+    use std::collections::HashSet;
+    use std::sync::RwLock;
+    use tokio::sync::Barrier;
+
+    /// Helper: wraps a Room in Arc<Mutex<Room>> like production code does.
+    fn make_shared_room() -> (Arc<Mutex<Room>>, PageId) {
+        let room = Room::new(RoomId::new());
+        let page_id = room.document().active_page().id;
+        (Arc::new(Mutex::new(room)), page_id)
+    }
+
+    #[tokio::test]
+    async fn concurrent_op_submission_preserves_seq_monotonicity() {
+        let (room, page_id) = make_shared_room();
+        let barrier = Arc::new(Barrier::new(4));
+
+        // Join one session so ops have a valid session.
+        let (sid, uid, name, tx) = make_session();
+        room.lock().unwrap().join(sid, uid, name, tx).unwrap();
+
+        // First, add a node so property ops have a target.
+        let node = create_frame_node("Target", 0.0, 0.0, 100.0, 100.0, None, [0.0; 4]);
+        let node_id = node.id;
+        let add_op = make_op(0, uid, sid, page_id, CommandDescriptor::AddRoot { node });
+        room.lock().unwrap().submit_op(add_op);
+
+        let mut handles = Vec::new();
+
+        for task_idx in 0u64..4 {
+            let room = Arc::clone(&room);
+            let barrier = Arc::clone(&barrier);
+
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+
+                let mut seqs = Vec::new();
+                for i in 0..10 {
+                    let client_seq = task_idx * 100 + i + 1;
+                    let op = make_op(
+                        client_seq,
+                        uid,
+                        sid,
+                        page_id,
+                        CommandDescriptor::SetOpacity {
+                            node_id,
+                            opacity: 0.5,
+                        },
+                    );
+                    let seq = room.lock().unwrap().submit_op(op);
+                    seqs.push(seq);
+                }
+                seqs
+            }));
+        }
+
+        let mut all_seqs = Vec::new();
+        for handle in handles {
+            all_seqs.extend(handle.await.unwrap());
+        }
+
+        // All seq numbers should be unique.
+        let unique: HashSet<u64> = all_seqs.iter().copied().collect();
+        assert_eq!(unique.len(), 40, "expected 40 unique seq numbers");
+
+        // All seq numbers should be in the range 2..=41 (1 was the AddRoot).
+        let mut sorted = all_seqs.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 40);
+        assert_eq!(*sorted.first().unwrap(), 2);
+        assert_eq!(*sorted.last().unwrap(), 41);
+
+        // Op log length should equal total ops (1 AddRoot + 40 property ops).
+        let room = room.lock().unwrap();
+        assert_eq!(room.latest_seq(), 41);
+    }
+
+    #[tokio::test]
+    async fn concurrent_join_leave_consistent_participants() {
+        let room_id = RoomId::new();
+        let room = Arc::new(Mutex::new(Room::new(room_id)));
+        let barrier = Arc::new(Barrier::new(8));
+
+        // Pre-create 8 sessions.
+        let sessions: Vec<_> = (0..8)
+            .map(|i| {
+                let (tx, _rx) = mpsc::channel(32);
+                (SessionId::new(), UserId::new(), format!("User{i}"), tx)
+            })
+            .collect();
+
+        // 4 tasks join, then 4 tasks leave different sessions.
+        let mut handles = Vec::new();
+
+        // Join tasks.
+        for (sid, uid, name, tx) in sessions.iter().take(4).cloned() {
+            let room = Arc::clone(&room);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                room.lock().unwrap().join(sid, uid, name, tx).unwrap();
+                sid
+            }));
+        }
+
+        // Also join the other 4 concurrently.
+        for (sid, uid, name, tx) in sessions.iter().skip(4).cloned() {
+            let room = Arc::clone(&room);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                room.lock().unwrap().join(sid, uid, name, tx).unwrap();
+                sid
+            }));
+        }
+
+        // Wait for all joins.
+        let joined_sids: Vec<SessionId> = {
+            let mut sids = Vec::new();
+            for h in handles {
+                sids.push(h.await.unwrap());
+            }
+            sids
+        };
+        assert_eq!(joined_sids.len(), 8);
+
+        // Verify all 8 are present with no duplicates.
+        {
+            let r = room.lock().unwrap();
+            let parts = r.participants();
+            assert_eq!(parts.len(), 8);
+            let part_sids: HashSet<SessionId> = parts.iter().map(|p| p.session_id).collect();
+            assert_eq!(part_sids.len(), 8);
+        }
+
+        // Now concurrently leave the first 4 sessions.
+        let leave_barrier = Arc::new(Barrier::new(4));
+        let mut leave_handles = Vec::new();
+        for (sid, _, _, _) in sessions.iter().take(4) {
+            let room = Arc::clone(&room);
+            let barrier = Arc::clone(&leave_barrier);
+            let sid = *sid;
+            leave_handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                room.lock().unwrap().leave(sid);
+            }));
+        }
+        for h in leave_handles {
+            h.await.unwrap();
+        }
+
+        // Verify exactly 4 remain, with no duplicates and no stale entries.
+        let r = room.lock().unwrap();
+        let parts = r.participants();
+        assert_eq!(parts.len(), 4);
+        let remaining_sids: HashSet<SessionId> = parts.iter().map(|p| p.session_id).collect();
+        assert_eq!(remaining_sids.len(), 4);
+
+        // The remaining should be sessions[4..8].
+        for (sid, _, _, _) in sessions.iter().skip(4) {
+            assert!(remaining_sids.contains(sid));
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_undo_by_different_users() {
+        let (room, page_id) = make_shared_room();
+
+        // Create two sessions for two different users.
+        let (sid1, uid1, name1, tx1) = make_session();
+        let (sid2, uid2, name2, tx2) = make_session();
+        {
+            let mut r = room.lock().unwrap();
+            r.join(sid1, uid1, name1, tx1).unwrap();
+            r.join(sid2, uid2, name2, tx2).unwrap();
+        }
+
+        // Each user adds a node.
+        let node1 = create_frame_node("A", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let nid1 = node1.id;
+        let node2 = create_frame_node("B", 60.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let nid2 = node2.id;
+        {
+            let mut r = room.lock().unwrap();
+            r.submit_op(make_op(
+                1,
+                uid1,
+                sid1,
+                page_id,
+                CommandDescriptor::AddRoot { node: node1 },
+            ));
+            r.submit_op(make_op(
+                1,
+                uid2,
+                sid2,
+                page_id,
+                CommandDescriptor::AddRoot { node: node2 },
+            ));
+
+            // Each user sets opacity on their own node.
+            r.submit_op(make_op(
+                2,
+                uid1,
+                sid1,
+                page_id,
+                CommandDescriptor::SetOpacity {
+                    node_id: nid1,
+                    opacity: 0.3,
+                },
+            ));
+            r.submit_op(make_op(
+                2,
+                uid2,
+                sid2,
+                page_id,
+                CommandDescriptor::SetOpacity {
+                    node_id: nid2,
+                    opacity: 0.7,
+                },
+            ));
+        }
+
+        // Both users undo concurrently.
+        let barrier = Arc::new(Barrier::new(2));
+
+        let room1 = Arc::clone(&room);
+        let b1 = Arc::clone(&barrier);
+        let h1 = tokio::spawn(async move {
+            b1.wait().await;
+            room1.lock().unwrap().handle_undo(sid1, uid1, page_id)
+        });
+
+        let room2 = Arc::clone(&room);
+        let b2 = Arc::clone(&barrier);
+        let h2 = tokio::spawn(async move {
+            b2.wait().await;
+            room2.lock().unwrap().handle_undo(sid2, uid2, page_id)
+        });
+
+        let result1 = h1.await.unwrap();
+        let result2 = h2.await.unwrap();
+
+        // Both undos should succeed.
+        assert!(result1.is_some(), "user1 undo should succeed");
+        assert!(result2.is_some(), "user2 undo should succeed");
+
+        // The inverse seq numbers should be distinct.
+        assert_ne!(result1.unwrap(), result2.unwrap());
+
+        // Verify each user's undo was independent: opacity should be back to 1.0.
+        let r = room.lock().unwrap();
+        let scene = &r.document().page(page_id).unwrap().scene;
+        assert!(
+            (scene.get(nid1).unwrap().opacity - 1.0).abs() < f32::EPSILON,
+            "user1 node opacity should be reverted to 1.0"
+        );
+        assert!(
+            (scene.get(nid2).unwrap().opacity - 1.0).abs() < f32::EPSILON,
+            "user2 node opacity should be reverted to 1.0"
+        );
+
+        // Both nodes should still exist.
+        assert!(scene.get(nid1).is_some());
+        assert!(scene.get(nid2).is_some());
+    }
+
+    #[tokio::test]
+    async fn room_manager_concurrent_get_or_create_no_duplicates() {
+        let manager = Arc::new(RwLock::new(RoomManager::new()));
+        let room_id = RoomId::new();
+        let barrier = Arc::new(Barrier::new(8));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let mgr = Arc::clone(&manager);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let arc = mgr.write().unwrap().get_or_create_room(room_id);
+                arc
+            }));
+        }
+
+        let mut arcs = Vec::new();
+        for h in handles {
+            arcs.push(h.await.unwrap());
+        }
+
+        // All 8 tasks should get the same Arc (same underlying Room).
+        // We verify by checking that all Arc ptrs point to the same allocation.
+        let first_ptr = Arc::as_ptr(&arcs[0]);
+        for arc in &arcs[1..] {
+            assert_eq!(
+                Arc::as_ptr(arc),
+                first_ptr,
+                "all tasks should get the same Room Arc"
+            );
+        }
+
+        // Manager should have exactly one room.
+        assert_eq!(manager.read().unwrap().room_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn room_removal_during_operation_no_panic() {
+        let manager = Arc::new(RwLock::new(RoomManager::new()));
+        let room_id = RoomId::new();
+
+        // Create the room and get a handle.
+        let room_arc = manager.write().unwrap().get_or_create_room(room_id);
+
+        // Join a session.
+        let (sid, uid, name, tx) = make_session();
+        room_arc.lock().unwrap().join(sid, uid, name, tx).unwrap();
+
+        let page_id = room_arc.lock().unwrap().document().active_page().id;
+
+        // Add a target node.
+        let node = create_frame_node("X", 0.0, 0.0, 50.0, 50.0, None, [0.0; 4]);
+        let node_id = node.id;
+        room_arc.lock().unwrap().submit_op(make_op(
+            1,
+            uid,
+            sid,
+            page_id,
+            CommandDescriptor::AddRoot { node },
+        ));
+
+        let barrier = Arc::new(Barrier::new(2));
+
+        // Task 1: removes the room from the manager.
+        let mgr1 = Arc::clone(&manager);
+        let b1 = Arc::clone(&barrier);
+        let remove_handle = tokio::spawn(async move {
+            b1.wait().await;
+            mgr1.write().unwrap().remove_room(&room_id)
+        });
+
+        // Task 2: continues operating on the room via the Arc handle.
+        let room_clone = Arc::clone(&room_arc);
+        let b2 = Arc::clone(&barrier);
+        let op_handle = tokio::spawn(async move {
+            b2.wait().await;
+            // Even after removal from manager, the Arc keeps the Room alive.
+            let mut seqs = Vec::new();
+            for i in 2..=12 {
+                let op = make_op(
+                    i,
+                    uid,
+                    sid,
+                    page_id,
+                    CommandDescriptor::SetOpacity {
+                        node_id,
+                        opacity: 0.1 * (i as f32),
+                    },
+                );
+                let seq = room_clone.lock().unwrap().submit_op(op);
+                seqs.push(seq);
+            }
+            seqs
+        });
+
+        let removed = remove_handle.await.unwrap();
+        let seqs = op_handle.await.unwrap();
+
+        // Room was removed from manager.
+        assert!(removed);
+        assert_eq!(manager.read().unwrap().room_count(), 0);
+        assert!(manager.read().unwrap().get_room(&room_id).is_none());
+
+        // But the Arc handle kept the Room alive and ops completed without panic.
+        assert_eq!(seqs.len(), 11);
+
+        // The Room still has consistent state via the original Arc.
+        let r = room_arc.lock().unwrap();
+        assert!(
+            r.document()
+                .page(page_id)
+                .unwrap()
+                .scene
+                .get(node_id)
+                .is_some()
+        );
+        assert_eq!(r.latest_seq(), 12); // 1 AddRoot + 11 SetOpacity
+    }
 }

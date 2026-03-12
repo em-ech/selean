@@ -23,6 +23,11 @@ pub enum FontStyle {
     Italic,
 }
 
+impl FontStyle {
+    /// All variant names in declaration order, for populating UI dropdowns.
+    pub const ALL_VARIANTS: &[&'static str] = &["Normal", "Italic"];
+}
+
 impl std::fmt::Display for FontStyle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -55,6 +60,11 @@ pub enum TextAlign {
     Right,
     /// Justified text.
     Justify,
+}
+
+impl TextAlign {
+    /// All variant names in declaration order, for populating UI dropdowns.
+    pub const ALL_VARIANTS: &[&'static str] = &["Left", "Center", "Right", "Justify"];
 }
 
 impl std::fmt::Display for TextAlign {
@@ -373,6 +383,23 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
+    /// All variant names in declaration order, for populating UI dropdowns.
+    pub const ALL_VARIANTS: &[&'static str] = &[
+        "Normal",
+        "Add",
+        "Multiply",
+        "Screen",
+        "Overlay",
+        "Darken",
+        "Lighten",
+        "ColorDodge",
+        "ColorBurn",
+        "HardLight",
+        "SoftLight",
+        "Difference",
+        "Exclusion",
+    ];
+
     /// Returns the variant name as a static string, avoiding `format!("{:?}", ...)`
     /// allocations on hot paths.
     #[must_use]

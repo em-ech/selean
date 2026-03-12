@@ -16,6 +16,7 @@ pub mod github;
 pub mod indesign_bridge;
 pub mod rbac;
 pub mod routes;
+pub mod services;
 pub mod state;
 pub mod storage;
 pub mod stream;

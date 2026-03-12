@@ -100,6 +100,14 @@ export interface SeleanEditor {
     width: number | null,
     height: number | null,
   ): boolean;
+  /** Returns all BlendMode variant names for UI dropdowns. */
+  blend_mode_variants(): string[];
+  /** Returns all ClipMode variant names for UI dropdowns. */
+  clip_mode_variants(): string[];
+  /** Returns all FontStyle variant names for UI dropdowns. */
+  font_style_variants(): string[];
+  /** Returns all TextAlign variant names for UI dropdowns. */
+  text_align_variants(): string[];
   generate_code(): string;
   generate_page_code(page_id: string): string;
   generate_project_json(): string;

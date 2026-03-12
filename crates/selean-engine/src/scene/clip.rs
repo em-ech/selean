@@ -33,6 +33,9 @@ pub enum ClipMode {
 }
 
 impl ClipMode {
+    /// All variant names in declaration order, for populating UI dropdowns.
+    pub const ALL_VARIANTS: &[&'static str] = &["None", "Scissor", "Stencil", "ShaderRect"];
+
     /// Returns the variant name as a static string, avoiding `format!("{:?}", ...)`
     /// allocations on hot paths.
     #[must_use]

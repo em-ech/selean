@@ -112,6 +112,30 @@ export function createMockEditor(
     apply_remote_op_group: vi.fn().mockReturnValue(true),
     apply_remote_page_op: vi.fn().mockReturnValue(true),
     active_page_id: vi.fn().mockReturnValue("page-1"),
+    blend_mode_variants: vi
+      .fn()
+      .mockReturnValue([
+        "Normal",
+        "Add",
+        "Multiply",
+        "Screen",
+        "Overlay",
+        "Darken",
+        "Lighten",
+        "ColorDodge",
+        "ColorBurn",
+        "HardLight",
+        "SoftLight",
+        "Difference",
+        "Exclusion",
+      ]),
+    clip_mode_variants: vi
+      .fn()
+      .mockReturnValue(["None", "Scissor", "Stencil", "ShaderRect"]),
+    font_style_variants: vi.fn().mockReturnValue(["Normal", "Italic"]),
+    text_align_variants: vi
+      .fn()
+      .mockReturnValue(["Left", "Center", "Right", "Justify"]),
     generate_code: vi.fn().mockReturnValue(""),
     generate_page_code: vi.fn().mockReturnValue(""),
     generate_project_json: vi

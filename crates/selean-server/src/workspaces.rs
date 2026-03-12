@@ -2,6 +2,8 @@
 //!
 //! Provides workspace creation, listing, updating, deletion, and member
 //! management with role-based access control and billing tier enforcement.
+//!
+//! Handlers are thin: extract request, call service, format response.
 
 use axum::{
     Json, Router,
@@ -13,9 +15,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use selean_db::models::workspace::WorkspaceRole;
-
-use crate::rbac::{extract_current_user, require_role, resolve_billing_tier};
+use crate::rbac::extract_current_user;
+use crate::services::errors::require_db;
 use crate::state::AppState;
 
 /// Creates the workspace management router.
@@ -116,22 +117,6 @@ fn error(status: StatusCode, msg: &str) -> axum::response::Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
-fn db_error_response(err: &selean_db::DbError) -> axum::response::Response {
-    match err {
-        selean_db::DbError::NotFound(entity) => {
-            error(StatusCode::NOT_FOUND, &format!("{entity} not found"))
-        }
-        _ => error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-    }
-}
-
-#[allow(clippy::result_large_err)]
-fn require_db(state: &AppState) -> Result<&sqlx::PgPool, axum::response::Response> {
-    state
-        .require_db()
-        .map_err(|e| error(StatusCode::SERVICE_UNAVAILABLE, &e.to_string()))
-}
-
 // --- Handlers ---
 
 /// `POST /api/workspaces`
@@ -144,7 +129,7 @@ async fn create_workspace(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
@@ -160,30 +145,9 @@ async fn create_workspace(
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid request body"),
     };
 
-    if body.name.is_empty() {
-        return error(StatusCode::BAD_REQUEST, "workspace name is required");
-    }
-
-    // Check how many workspaces the user already owns.
-    // Free tier users get a limited number. We use free tier limits as default.
-    let owned =
-        match selean_db::queries::workspaces::count_user_workspaces(pool, current_user.id).await {
-            Ok(c) => c,
-            Err(e) => return db_error_response(&e),
-        };
-
-    // Apply a generous default limit (10 workspaces per user).
-    if owned >= 10 {
-        return error(
-            StatusCode::FORBIDDEN,
-            "workspace limit reached for your account",
-        );
-    }
-
-    match selean_db::queries::workspaces::create_workspace(pool, &body.name, current_user.id).await
-    {
+    match crate::services::workspaces::create_workspace(pool, &body.name, current_user.id).await {
         Ok(w) => (StatusCode::CREATED, Json(WorkspaceResponse::from(w))).into_response(),
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -196,20 +160,20 @@ async fn list_workspaces(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    match selean_db::queries::workspaces::list_user_workspaces(pool, current_user.id).await {
+    match crate::services::workspaces::list_workspaces(pool, current_user.id).await {
         Ok(workspaces) => {
             let responses: Vec<WorkspaceResponse> =
                 workspaces.into_iter().map(Into::into).collect();
             Json(responses).into_response()
         }
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -223,20 +187,16 @@ async fn get_workspace(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    if let Err(resp) = require_role(pool, id, current_user.id, WorkspaceRole::Viewer).await {
-        return resp;
-    }
-
-    match selean_db::queries::workspaces::get_workspace(pool, id).await {
+    match crate::services::workspaces::get_workspace(pool, id, current_user.id).await {
         Ok(w) => Json(WorkspaceResponse::from(w)).into_response(),
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -250,16 +210,12 @@ async fn update_workspace(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
-
-    if let Err(resp) = require_role(pool, id, current_user.id, WorkspaceRole::Owner).await {
-        return resp;
-    }
 
     let body: UpdateWorkspaceRequest = match axum::Json::from_bytes(
         &axum::body::to_bytes(request.into_body(), 1024 * 1024)
@@ -270,13 +226,10 @@ async fn update_workspace(
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid request body"),
     };
 
-    if body.name.is_empty() {
-        return error(StatusCode::BAD_REQUEST, "workspace name is required");
-    }
-
-    match selean_db::queries::workspaces::update_workspace_name(pool, id, &body.name).await {
+    match crate::services::workspaces::update_workspace(pool, id, &body.name, current_user.id).await
+    {
         Ok(w) => Json(WorkspaceResponse::from(w)).into_response(),
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -290,20 +243,16 @@ async fn delete_workspace(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    if let Err(resp) = require_role(pool, id, current_user.id, WorkspaceRole::Owner).await {
-        return resp;
-    }
-
-    match selean_db::queries::workspaces::delete_workspace(pool, id).await {
+    match crate::services::workspaces::delete_workspace(pool, id, current_user.id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -317,23 +266,19 @@ async fn list_members(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    if let Err(resp) = require_role(pool, id, current_user.id, WorkspaceRole::Viewer).await {
-        return resp;
-    }
-
-    match selean_db::queries::workspaces::list_members_with_users(pool, id).await {
+    match crate::services::workspaces::list_members(pool, id, current_user.id).await {
         Ok(members) => {
             let responses: Vec<MemberResponse> = members.into_iter().map(Into::into).collect();
             Json(responses).into_response()
         }
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -348,16 +293,12 @@ async fn add_member(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
-
-    if let Err(resp) = require_role(pool, id, current_user.id, WorkspaceRole::Admin).await {
-        return resp;
-    }
 
     let body: AddMemberRequest = match axum::Json::from_bytes(
         &axum::body::to_bytes(request.into_body(), 1024 * 1024)
@@ -368,30 +309,17 @@ async fn add_member(
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid request body"),
     };
 
-    // Parse the requested role.
-    let Some(role) = WorkspaceRole::from_str_role(&body.role) else {
-        return error(StatusCode::BAD_REQUEST, "invalid role");
-    };
-
-    if role == WorkspaceRole::Owner {
-        return error(StatusCode::BAD_REQUEST, "cannot add a member as owner");
-    }
-
-    // Check billing tier member limit.
-    if let Err(resp) = check_member_limit(pool, id).await {
-        return resp;
-    }
-
-    // Look up user by email.
-    let target_user = match selean_db::queries::users::find_user_by_email(pool, &body.email).await {
-        Ok(Some(u)) => u,
-        Ok(None) => return error(StatusCode::NOT_FOUND, "user not found with that email"),
-        Err(e) => return db_error_response(&e),
-    };
-
-    match selean_db::queries::workspaces::add_member(pool, id, target_user.id, role).await {
-        Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => db_error_response(&e),
+    match crate::services::workspaces::add_member(
+        pool,
+        id,
+        &body.email,
+        &body.role,
+        current_user.id,
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -406,15 +334,10 @@ async fn update_member_role(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
-        Err(resp) => return resp,
-    };
-
-    let caller_role = match require_role(pool, id, current_user.id, WorkspaceRole::Admin).await {
-        Ok(r) => r,
         Err(resp) => return resp,
     };
 
@@ -427,28 +350,17 @@ async fn update_member_role(
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid request body"),
     };
 
-    let Some(new_role) = WorkspaceRole::from_str_role(&body.role) else {
-        return error(StatusCode::BAD_REQUEST, "invalid role");
-    };
-
-    if let Err(resp) = validate_role_change(
+    match crate::services::workspaces::update_member_role(
         pool,
         id,
-        current_user.id,
         target_user_id,
-        caller_role,
-        new_role,
+        &body.role,
+        current_user.id,
     )
     .await
     {
-        return resp;
-    }
-
-    match selean_db::queries::workspaces::update_member_role(pool, id, target_user_id, new_role)
-        .await
-    {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => db_error_response(&e),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -463,120 +375,17 @@ async fn remove_member(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    if let Err(resp) = require_role(pool, id, current_user.id, WorkspaceRole::Admin).await {
-        return resp;
-    }
-
-    if current_user.id == target_user_id {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "cannot remove yourself; transfer ownership or leave",
-        );
-    }
-
-    // Cannot remove the owner.
-    let target_role =
-        match selean_db::queries::workspaces::get_member_role(pool, id, target_user_id).await {
-            Ok(Some(r)) => r,
-            Ok(None) => return error(StatusCode::NOT_FOUND, "member not found"),
-            Err(e) => return db_error_response(&e),
-        };
-
-    if target_role == WorkspaceRole::Owner {
-        return error(StatusCode::FORBIDDEN, "cannot remove the workspace owner");
-    }
-
-    match selean_db::queries::workspaces::remove_member(pool, id, target_user_id).await {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => db_error_response(&e),
-    }
-}
-
-// --- Internal helpers ---
-
-/// Validates that a role change is permitted.
-#[allow(clippy::result_large_err)]
-async fn validate_role_change(
-    pool: &sqlx::PgPool,
-    workspace_id: Uuid,
-    caller_id: Uuid,
-    target_id: Uuid,
-    caller_role: WorkspaceRole,
-    new_role: WorkspaceRole,
-) -> Result<(), axum::response::Response> {
-    // Cannot change own role.
-    if caller_id == target_id {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "cannot change your own role",
-        ));
-    }
-
-    // Check target's current role.
-    let target_role = match selean_db::queries::workspaces::get_member_role(
-        pool,
-        workspace_id,
-        target_id,
-    )
-    .await
-    {
-        Ok(Some(r)) => r,
-        Ok(None) => return Err(error(StatusCode::NOT_FOUND, "member not found")),
-        Err(e) => return Err(db_error_response(&e)),
-    };
-
-    // Cannot change the owner's role.
-    if target_role == WorkspaceRole::Owner {
-        return Err(error(
-            StatusCode::FORBIDDEN,
-            "cannot change the owner's role",
-        ));
-    }
-
-    // Admin cannot promote to Owner.
-    if caller_role == WorkspaceRole::Admin && new_role == WorkspaceRole::Owner {
-        return Err(error(
-            StatusCode::FORBIDDEN,
-            "admins cannot promote to owner",
-        ));
-    }
-
-    Ok(())
-}
-
-/// Checks if the workspace has room for another member under its billing tier.
-#[allow(clippy::result_large_err)]
-async fn check_member_limit(
-    pool: &sqlx::PgPool,
-    workspace_id: Uuid,
-) -> Result<(), axum::response::Response> {
-    let workspace = selean_db::queries::workspaces::get_workspace(pool, workspace_id)
+    match crate::services::workspaces::remove_member(pool, id, target_user_id, current_user.id)
         .await
-        .map_err(|e| db_error_response(&e))?;
-
-    let tier = resolve_billing_tier(&workspace.billing_tier)?;
-
-    if let Some(max) = tier.max_members() {
-        let current = selean_db::queries::workspaces::count_workspace_members(pool, workspace_id)
-            .await
-            .map_err(|e| db_error_response(&e))?;
-        if current >= i64::from(max) {
-            return Err(error(
-                StatusCode::FORBIDDEN,
-                &format!(
-                    "workspace member limit reached ({max}) for {} tier",
-                    tier.as_str()
-                ),
-            ));
-        }
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) => e.into_response(),
     }
-
-    Ok(())
 }

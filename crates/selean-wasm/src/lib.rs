@@ -1533,6 +1533,33 @@ mod wasm {
             );
         }
 
+        // --- Enum variant lists for UI dropdowns ---
+
+        /// Returns all BlendMode variant names as a JSON array of strings.
+        /// Used by PropertyInspector to populate dropdown options.
+        pub fn blend_mode_variants(&self) -> JsValue {
+            serde_wasm_bindgen::to_value(&selean_engine::scene::BlendMode::ALL_VARIANTS)
+                .unwrap_or(JsValue::NULL)
+        }
+
+        /// Returns all ClipMode variant names as a JSON array of strings.
+        pub fn clip_mode_variants(&self) -> JsValue {
+            serde_wasm_bindgen::to_value(&selean_engine::scene::ClipMode::ALL_VARIANTS)
+                .unwrap_or(JsValue::NULL)
+        }
+
+        /// Returns all FontStyle variant names as a JSON array of strings.
+        pub fn font_style_variants(&self) -> JsValue {
+            serde_wasm_bindgen::to_value(&selean_engine::scene::FontStyle::ALL_VARIANTS)
+                .unwrap_or(JsValue::NULL)
+        }
+
+        /// Returns all TextAlign variant names as a JSON array of strings.
+        pub fn text_align_variants(&self) -> JsValue {
+            serde_wasm_bindgen::to_value(&selean_engine::scene::TextAlign::ALL_VARIANTS)
+                .unwrap_or(JsValue::NULL)
+        }
+
         // --- Code generation bindings ---
 
         /// Generates React + Tailwind code for the active page.

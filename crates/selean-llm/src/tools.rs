@@ -27,52 +27,246 @@ pub enum ToolCallError {
     InvalidNodeId(String),
 }
 
+/// Type alias for tool mapper functions that convert JSON args to command descriptors.
+type ToolMapper = fn(&serde_json::Value) -> Result<Vec<CommandDescriptor>, ToolCallError>;
+
+/// A unified tool entry combining definition, category, and optional mapper.
+///
+/// Adding a new tool requires a single entry in [`all_entries`]. The category
+/// and mapper are co-located with the definition, eliminating the need to
+/// update separate match statements.
+pub struct ToolEntry {
+    /// The tool definition sent to the Claude API.
+    pub definition: ToolDefinition,
+    /// Dispatch category for the WASM bridge.
+    pub category: ToolCategory,
+    /// For `Mutation` tools, the function that converts args to `CommandDescriptor` values.
+    /// `None` for tools whose execution is handled directly by the WASM bridge
+    /// (ReadOnly, Page, Align, Rotation, Group, ZOrder).
+    pub mapper: Option<ToolMapper>,
+}
+
+/// Returns the unified tool registry. Each entry defines a tool's schema,
+/// category, and optional arg-to-command mapper in a single location.
+#[must_use]
+pub fn all_entries() -> Vec<ToolEntry> {
+    vec![
+        // --- Read-only tools ---
+        ToolEntry {
+            definition: tool_get_scene_summary(),
+            category: ToolCategory::ReadOnly,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_get_node(),
+            category: ToolCategory::ReadOnly,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_query_nodes(),
+            category: ToolCategory::ReadOnly,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_get_pages(),
+            category: ToolCategory::ReadOnly,
+            mapper: None,
+        },
+        // --- Page tools ---
+        ToolEntry {
+            definition: tool_add_page(),
+            category: ToolCategory::Page,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_remove_page(),
+            category: ToolCategory::Page,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_set_active_page(),
+            category: ToolCategory::Page,
+            mapper: None,
+        },
+        // --- Special-category tools ---
+        ToolEntry {
+            definition: tool_align_nodes(),
+            category: ToolCategory::Align,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_set_rotation(),
+            category: ToolCategory::Rotation,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_group_nodes(),
+            category: ToolCategory::Group,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_ungroup_node(),
+            category: ToolCategory::Group,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_move_to_front(),
+            category: ToolCategory::ZOrder,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_move_to_back(),
+            category: ToolCategory::ZOrder,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_move_forward(),
+            category: ToolCategory::ZOrder,
+            mapper: None,
+        },
+        ToolEntry {
+            definition: tool_move_backward(),
+            category: ToolCategory::ZOrder,
+            mapper: None,
+        },
+        // --- Mutation tools (with mappers) ---
+        ToolEntry {
+            definition: tool_set_fill(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_fill),
+        },
+        ToolEntry {
+            definition: tool_set_bounds(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_bounds),
+        },
+        ToolEntry {
+            definition: tool_set_text(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_text),
+        },
+        ToolEntry {
+            definition: tool_set_opacity(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_opacity),
+        },
+        ToolEntry {
+            definition: tool_set_visible(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_visible),
+        },
+        ToolEntry {
+            definition: tool_set_name(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_name),
+        },
+        ToolEntry {
+            definition: tool_set_stroke(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_stroke),
+        },
+        ToolEntry {
+            definition: tool_set_blend_mode(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_blend_mode),
+        },
+        ToolEntry {
+            definition: tool_create_node(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_create_node),
+        },
+        ToolEntry {
+            definition: tool_delete_node(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_delete_node),
+        },
+        ToolEntry {
+            definition: tool_set_corner_radius(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_corner_radius),
+        },
+        ToolEntry {
+            definition: tool_set_font_family(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_font_family),
+        },
+        ToolEntry {
+            definition: tool_set_font_weight(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_font_weight),
+        },
+        ToolEntry {
+            definition: tool_set_text_align(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_text_align),
+        },
+        ToolEntry {
+            definition: tool_set_line_height(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_line_height),
+        },
+        ToolEntry {
+            definition: tool_set_text_color(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_text_color),
+        },
+        ToolEntry {
+            definition: tool_add_child_node(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_add_child_node),
+        },
+        ToolEntry {
+            definition: tool_reparent_node(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_reparent_node),
+        },
+        ToolEntry {
+            definition: tool_reorder_children(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_reorder_children),
+        },
+        ToolEntry {
+            definition: tool_set_font_style(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_font_style),
+        },
+        ToolEntry {
+            definition: tool_set_clip_mode(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_clip_mode),
+        },
+        ToolEntry {
+            definition: tool_set_linear_gradient(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_linear_gradient),
+        },
+        ToolEntry {
+            definition: tool_set_radial_gradient(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_radial_gradient),
+        },
+        ToolEntry {
+            definition: tool_set_drop_shadow(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_drop_shadow),
+        },
+        ToolEntry {
+            definition: tool_set_blur(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_set_blur),
+        },
+        ToolEntry {
+            definition: tool_remove_effects(),
+            category: ToolCategory::Mutation,
+            mapper: Some(map_remove_effects),
+        },
+    ]
+}
+
 /// Returns all tool definitions for the Claude API.
 #[must_use]
 pub fn all_tools() -> Vec<ToolDefinition> {
-    vec![
-        tool_get_scene_summary(),
-        tool_get_node(),
-        tool_query_nodes(),
-        tool_set_fill(),
-        tool_set_bounds(),
-        tool_set_text(),
-        tool_set_opacity(),
-        tool_set_visible(),
-        tool_set_name(),
-        tool_set_stroke(),
-        tool_set_blend_mode(),
-        tool_create_node(),
-        tool_delete_node(),
-        tool_set_corner_radius(),
-        tool_set_font_family(),
-        tool_set_font_weight(),
-        tool_set_text_align(),
-        tool_set_line_height(),
-        tool_set_text_color(),
-        tool_add_child_node(),
-        tool_reparent_node(),
-        tool_reorder_children(),
-        tool_set_font_style(),
-        tool_set_clip_mode(),
-        tool_set_rotation(),
-        tool_group_nodes(),
-        tool_ungroup_node(),
-        tool_move_to_front(),
-        tool_move_to_back(),
-        tool_move_forward(),
-        tool_move_backward(),
-        tool_align_nodes(),
-        tool_get_pages(),
-        tool_add_page(),
-        tool_remove_page(),
-        tool_set_active_page(),
-        tool_set_linear_gradient(),
-        tool_set_radial_gradient(),
-        tool_set_drop_shadow(),
-        tool_set_blur(),
-        tool_remove_effects(),
-    ]
+    all_entries().into_iter().map(|e| e.definition).collect()
 }
 
 /// Categorizes how a tool call should be dispatched by the caller.
@@ -95,17 +289,16 @@ pub enum ToolCategory {
 }
 
 /// Returns the dispatch category for the given tool name.
+///
+/// Derived from the unified [`all_entries`] registry. Unknown tools default
+/// to `Mutation` for backward compatibility.
 #[must_use]
 pub fn tool_category(name: &str) -> ToolCategory {
-    match name {
-        "get_scene_summary" | "get_node" | "query_nodes" | "get_pages" => ToolCategory::ReadOnly,
-        "add_page" | "remove_page" | "set_active_page" => ToolCategory::Page,
-        "align_nodes" => ToolCategory::Align,
-        "set_rotation" => ToolCategory::Rotation,
-        "group_nodes" | "ungroup_node" => ToolCategory::Group,
-        "move_to_front" | "move_to_back" | "move_forward" | "move_backward" => ToolCategory::ZOrder,
-        _ => ToolCategory::Mutation,
-    }
+    all_entries()
+        .iter()
+        .find(|e| e.definition.name == name)
+        .map(|e| e.category)
+        .unwrap_or(ToolCategory::Mutation)
 }
 
 /// Returns `true` if the given tool name is read-only.
@@ -146,9 +339,9 @@ pub fn is_z_order_tool(name: &str) -> bool {
 
 /// Maps a tool call (name + JSON args) to a list of `CommandDescriptor` values.
 ///
-/// Read-only tools (`get_scene_summary`, `get_node`, `query_nodes`) return an empty
-/// vec because they do not mutate the scene. The caller should handle read
-/// results separately.
+/// Derived from the unified [`all_entries`] registry. Read-only and
+/// special-category tools (whose mapper is `None`) return an empty vec;
+/// the caller handles them directly.
 ///
 /// # Errors
 ///
@@ -157,37 +350,17 @@ pub fn map_tool_call(
     name: &str,
     args: &serde_json::Value,
 ) -> Result<Vec<CommandDescriptor>, ToolCallError> {
-    if is_read_only_tool(name) {
-        return Ok(vec![]);
-    }
-    match name {
-        "set_fill" => map_set_fill(args),
-        "set_bounds" => map_set_bounds(args),
-        "set_text" => map_set_text(args),
-        "set_opacity" => map_set_opacity(args),
-        "set_visible" => map_set_visible(args),
-        "set_name" => map_set_name(args),
-        "set_stroke" => map_set_stroke(args),
-        "set_blend_mode" => map_set_blend_mode(args),
-        "create_node" => map_create_node(args),
-        "delete_node" => map_delete_node(args),
-        "set_corner_radius" => map_set_corner_radius(args),
-        "set_font_family" => map_set_font_family(args),
-        "set_font_weight" => map_set_font_weight(args),
-        "set_text_align" => map_set_text_align(args),
-        "set_line_height" => map_set_line_height(args),
-        "set_text_color" => map_set_text_color(args),
-        "add_child_node" => map_add_child_node(args),
-        "reparent_node" => map_reparent_node(args),
-        "reorder_children" => map_reorder_children(args),
-        "set_font_style" => map_set_font_style(args),
-        "set_clip_mode" => map_set_clip_mode(args),
-        "set_linear_gradient" => map_set_linear_gradient(args),
-        "set_radial_gradient" => map_set_radial_gradient(args),
-        "set_drop_shadow" => map_set_drop_shadow(args),
-        "set_blur" => map_set_blur(args),
-        "remove_effects" => map_remove_effects(args),
-        _ => Err(ToolCallError::UnknownTool(name.to_string())),
+    let entry = all_entries()
+        .into_iter()
+        .find(|e| e.definition.name == name);
+
+    let Some(entry) = entry else {
+        return Err(ToolCallError::UnknownTool(name.to_string()));
+    };
+
+    match entry.mapper {
+        Some(mapper) => mapper(args),
+        None => Ok(vec![]),
     }
 }
 

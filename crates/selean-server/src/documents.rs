@@ -3,6 +3,8 @@
 //! Provides CRUD operations for documents and document versions,
 //! backed by `PostgreSQL` via `selean-db`. All routes enforce RBAC
 //! via workspace membership checks.
+//!
+//! Handlers are thin: extract request, call service, format response.
 
 use axum::{
     Json, Router,
@@ -14,9 +16,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use selean_db::models::workspace::WorkspaceRole;
-
-use crate::rbac::{extract_current_user, require_role, resolve_billing_tier};
+use crate::rbac::extract_current_user;
+use crate::services::errors::require_db;
 use crate::state::AppState;
 
 /// Creates the document management router.
@@ -118,34 +119,8 @@ struct SaveVersionRequest {
     data: serde_json::Value,
 }
 
-fn db_error_response(err: &selean_db::DbError) -> axum::response::Response {
-    match err {
-        selean_db::DbError::NotFound(entity) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("{entity} not found") })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": err.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
 fn error(status: StatusCode, msg: &str) -> axum::response::Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
-}
-
-#[allow(clippy::result_large_err)]
-fn require_db(state: &AppState) -> Result<&sqlx::PgPool, axum::response::Response> {
-    state.require_db().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response()
-    })
 }
 
 /// `POST /api/documents`
@@ -157,7 +132,7 @@ async fn create_document(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
@@ -173,23 +148,7 @@ async fn create_document(
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid request body"),
     };
 
-    if let Err(resp) = require_role(
-        pool,
-        req.workspace_id,
-        current_user.id,
-        WorkspaceRole::Editor,
-    )
-    .await
-    {
-        return resp;
-    }
-
-    // Check billing tier document limit.
-    if let Err(resp) = check_document_limit(pool, req.workspace_id).await {
-        return resp;
-    }
-
-    match selean_db::queries::documents::create_document(
+    match crate::services::documents::create_document(
         pool,
         req.workspace_id,
         &req.name,
@@ -198,7 +157,7 @@ async fn create_document(
     .await
     {
         Ok(doc) => (StatusCode::CREATED, Json(DocumentResponse::from(doc))).into_response(),
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -212,30 +171,17 @@ async fn get_document(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    let doc = match selean_db::queries::documents::get_document(pool, id).await {
-        Ok(d) => d,
-        Err(e) => return db_error_response(&e),
-    };
-
-    if let Err(resp) = require_role(
-        pool,
-        doc.workspace_id,
-        current_user.id,
-        WorkspaceRole::Viewer,
-    )
-    .await
-    {
-        return resp;
+    match crate::services::documents::get_document(pool, id, current_user.id).await {
+        Ok(doc) => Json(DocumentResponse::from(doc)).into_response(),
+        Err(e) => e.into_response(),
     }
-
-    Json(DocumentResponse::from(doc)).into_response()
 }
 
 /// `GET /api/workspaces/{workspace_id}/documents`
@@ -249,28 +195,27 @@ async fn list_documents(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    if let Err(resp) =
-        require_role(pool, workspace_id, current_user.id, WorkspaceRole::Viewer).await
+    match crate::services::documents::list_documents(
+        pool,
+        workspace_id,
+        current_user.id,
+        params.limit,
+        params.offset,
+    )
+    .await
     {
-        return resp;
-    }
-
-    let limit = params.limit.clamp(1, 100);
-    let offset = params.offset.max(0);
-
-    match selean_db::queries::documents::list_documents(pool, workspace_id, limit, offset).await {
         Ok(docs) => {
             let responses: Vec<DocumentResponse> = docs.into_iter().map(Into::into).collect();
             Json(responses).into_response()
         }
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -284,28 +229,12 @@ async fn save_version(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
-
-    let doc = match selean_db::queries::documents::get_document(pool, document_id).await {
-        Ok(d) => d,
-        Err(e) => return db_error_response(&e),
-    };
-
-    if let Err(resp) = require_role(
-        pool,
-        doc.workspace_id,
-        current_user.id,
-        WorkspaceRole::Editor,
-    )
-    .await
-    {
-        return resp;
-    }
 
     let req: SaveVersionRequest = match axum::Json::from_bytes(
         &axum::body::to_bytes(request.into_body(), 1024 * 1024)
@@ -316,7 +245,7 @@ async fn save_version(
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid request body"),
     };
 
-    match selean_db::queries::documents::save_version(pool, document_id, &req.data, current_user.id)
+    match crate::services::documents::save_version(pool, document_id, &req.data, current_user.id)
         .await
     {
         Ok(v) => (
@@ -324,7 +253,7 @@ async fn save_version(
             Json(VersionResponse::from_version(v, false)),
         )
             .into_response(),
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -338,32 +267,16 @@ async fn get_latest_version(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    let doc = match selean_db::queries::documents::get_document(pool, document_id).await {
-        Ok(d) => d,
-        Err(e) => return db_error_response(&e),
-    };
-
-    if let Err(resp) = require_role(
-        pool,
-        doc.workspace_id,
-        current_user.id,
-        WorkspaceRole::Viewer,
-    )
-    .await
-    {
-        return resp;
-    }
-
-    match selean_db::queries::documents::get_latest_version(pool, document_id).await {
+    match crate::services::documents::get_latest_version(pool, document_id, current_user.id).await {
         Ok(v) => Json(VersionResponse::from_version(v, true)).into_response(),
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -378,32 +291,21 @@ async fn list_versions(
 ) -> axum::response::Response {
     let pool = match require_db(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(e) => return e.into_response(),
     };
     let current_user = match extract_current_user(request.extensions()) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    let doc = match selean_db::queries::documents::get_document(pool, document_id).await {
-        Ok(d) => d,
-        Err(e) => return db_error_response(&e),
-    };
-
-    if let Err(resp) = require_role(
+    match crate::services::documents::list_versions(
         pool,
-        doc.workspace_id,
+        document_id,
         current_user.id,
-        WorkspaceRole::Viewer,
+        params.limit,
     )
     .await
     {
-        return resp;
-    }
-
-    let limit = params.limit.clamp(1, 100);
-
-    match selean_db::queries::documents::list_versions(pool, document_id, limit).await {
         Ok(versions) => {
             let responses: Vec<VersionResponse> = versions
                 .into_iter()
@@ -411,33 +313,6 @@ async fn list_versions(
                 .collect();
             Json(responses).into_response()
         }
-        Err(e) => db_error_response(&e),
+        Err(e) => e.into_response(),
     }
-}
-
-/// Checks if the workspace has room for another document under its billing tier.
-#[allow(clippy::result_large_err)]
-async fn check_document_limit(
-    pool: &sqlx::PgPool,
-    workspace_id: Uuid,
-) -> Result<(), axum::response::Response> {
-    let workspace = selean_db::queries::workspaces::get_workspace(pool, workspace_id)
-        .await
-        .map_err(|e| db_error_response(&e))?;
-
-    let tier = resolve_billing_tier(&workspace.billing_tier)?;
-
-    if let Some(max) = tier.max_documents() {
-        let current = selean_db::queries::workspaces::count_workspace_documents(pool, workspace_id)
-            .await
-            .map_err(|e| db_error_response(&e))?;
-        if current >= i64::from(max) {
-            return Err(error(
-                StatusCode::FORBIDDEN,
-                &format!("document limit reached ({max}) for {} tier", tier.as_str()),
-            ));
-        }
-    }
-
-    Ok(())
 }
