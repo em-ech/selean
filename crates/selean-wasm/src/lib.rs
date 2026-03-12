@@ -322,8 +322,7 @@ impl EditorState {
                     .iter()
                     .position(|p| p.id == new_id)
                     .unwrap_or(self.histories.len());
-                self.histories
-                    .insert(new_index, CommandHistory::new());
+                self.histories.insert(new_index, CommandHistory::new());
                 new_id.to_string()
             }
             None => String::new(),
