@@ -1,12 +1,6 @@
-import {
-  render,
-  screen,
-  fireEvent,
-  waitFor,
-  act,
-} from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AuthProvider, useAuth } from "./AuthContext";
+import { AuthProvider, useAuth, type AuthState } from "./AuthContext";
 import * as authApi from "./api";
 import * as apiUtils from "../utils/api";
 
@@ -18,14 +12,15 @@ vi.mock("./api", () => ({
   logout: vi.fn(),
 }));
 
+// Mutable ref container so TypeScript control-flow analysis doesn't narrow to `null`.
+interface AuthStateRef {
+  current: AuthState | null;
+}
+
 // Helper component to expose auth state in tests.
-function AuthConsumer({
-  onAuth,
-}: {
-  onAuth: (auth: ReturnType<typeof useAuth>) => void;
-}) {
+function AuthConsumer({ stateRef }: { stateRef: AuthStateRef }) {
   const auth = useAuth();
-  onAuth(auth);
+  stateRef.current = auth;
   return (
     <div>
       {auth.isLoading && <span>loading</span>}
@@ -34,6 +29,14 @@ function AuthConsumer({
         <span data-testid="user-name">{auth.user.display_name}</span>
       )}
     </div>
+  );
+}
+
+function renderWithAuth(ref: AuthStateRef) {
+  return render(
+    <AuthProvider>
+      <AuthConsumer stateRef={ref} />
+    </AuthProvider>,
   );
 }
 
@@ -63,22 +66,14 @@ describe("AuthContext", () => {
   });
 
   it("starts unauthenticated with no stored token", async () => {
-    let authState: ReturnType<typeof useAuth> | null = null;
-    render(
-      <AuthProvider>
-        <AuthConsumer
-          onAuth={(a) => {
-            authState = a;
-          }}
-        />
-      </AuthProvider>,
-    );
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
 
     await waitFor(() => {
-      expect(authState?.isLoading).toBe(false);
+      expect(ref.current?.isLoading).toBe(false);
     });
-    expect(authState?.isAuthenticated).toBe(false);
-    expect(authState?.user).toBeNull();
+    expect(ref.current?.isAuthenticated).toBe(false);
+    expect(ref.current?.user).toBeNull();
   });
 
   it("logs in and stores tokens", async () => {
@@ -95,25 +90,17 @@ describe("AuthContext", () => {
     };
     vi.mocked(authApi.login).mockResolvedValue(mockResponse);
 
-    let authState: ReturnType<typeof useAuth> | null = null;
-    render(
-      <AuthProvider>
-        <AuthConsumer
-          onAuth={(a) => {
-            authState = a;
-          }}
-        />
-      </AuthProvider>,
-    );
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
 
-    await waitFor(() => expect(authState?.isLoading).toBe(false));
+    await waitFor(() => expect(ref.current?.isLoading).toBe(false));
 
     await act(async () => {
-      await authState?.login("a@b.com", "password123");
+      await ref.current?.login("a@b.com", "password123");
     });
 
-    expect(authState?.isAuthenticated).toBe(true);
-    expect(authState?.user?.display_name).toBe("Alice");
+    expect(ref.current?.isAuthenticated).toBe(true);
+    expect(ref.current?.user?.display_name).toBe("Alice");
     expect(storedItems["selean_refresh_token"]).toBe("refresh-456");
   });
 
@@ -131,25 +118,17 @@ describe("AuthContext", () => {
     };
     vi.mocked(authApi.signup).mockResolvedValue(mockResponse);
 
-    let authState: ReturnType<typeof useAuth> | null = null;
-    render(
-      <AuthProvider>
-        <AuthConsumer
-          onAuth={(a) => {
-            authState = a;
-          }}
-        />
-      </AuthProvider>,
-    );
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
 
-    await waitFor(() => expect(authState?.isLoading).toBe(false));
+    await waitFor(() => expect(ref.current?.isLoading).toBe(false));
 
     await act(async () => {
-      await authState?.signup("b@c.com", "password123", "Bob");
+      await ref.current?.signup("b@c.com", "password123", "Bob");
     });
 
-    expect(authState?.isAuthenticated).toBe(true);
-    expect(authState?.user?.display_name).toBe("Bob");
+    expect(ref.current?.isAuthenticated).toBe(true);
+    expect(ref.current?.user?.display_name).toBe("Bob");
   });
 
   it("logs out and clears state", async () => {
@@ -167,29 +146,21 @@ describe("AuthContext", () => {
     vi.mocked(authApi.login).mockResolvedValue(mockResponse);
     vi.mocked(authApi.logout).mockResolvedValue(undefined);
 
-    let authState: ReturnType<typeof useAuth> | null = null;
-    render(
-      <AuthProvider>
-        <AuthConsumer
-          onAuth={(a) => {
-            authState = a;
-          }}
-        />
-      </AuthProvider>,
-    );
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
 
-    await waitFor(() => expect(authState?.isLoading).toBe(false));
+    await waitFor(() => expect(ref.current?.isLoading).toBe(false));
 
     await act(async () => {
-      await authState?.login("a@b.com", "pass");
+      await ref.current?.login("a@b.com", "pass");
     });
-    expect(authState?.isAuthenticated).toBe(true);
+    expect(ref.current?.isAuthenticated).toBe(true);
 
     await act(async () => {
-      await authState?.logout();
+      await ref.current?.logout();
     });
-    expect(authState?.isAuthenticated).toBe(false);
-    expect(authState?.user).toBeNull();
+    expect(ref.current?.isAuthenticated).toBe(false);
+    expect(ref.current?.user).toBeNull();
     expect(storedItems["selean_refresh_token"]).toBeUndefined();
   });
 
@@ -207,22 +178,14 @@ describe("AuthContext", () => {
       },
     });
 
-    let authState: ReturnType<typeof useAuth> | null = null;
-    render(
-      <AuthProvider>
-        <AuthConsumer
-          onAuth={(a) => {
-            authState = a;
-          }}
-        />
-      </AuthProvider>,
-    );
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
 
     await waitFor(() => {
-      expect(authState?.isLoading).toBe(false);
-      expect(authState?.isAuthenticated).toBe(true);
+      expect(ref.current?.isLoading).toBe(false);
+      expect(ref.current?.isAuthenticated).toBe(true);
     });
-    expect(authState?.user?.display_name).toBe("Alice");
+    expect(ref.current?.user?.display_name).toBe("Alice");
     expect(authApi.refreshTokens).toHaveBeenCalledWith("stored-refresh");
   });
 
@@ -230,22 +193,14 @@ describe("AuthContext", () => {
     storedItems["selean_refresh_token"] = "expired-refresh";
     vi.mocked(authApi.refreshTokens).mockRejectedValue(new Error("expired"));
 
-    let authState: ReturnType<typeof useAuth> | null = null;
-    render(
-      <AuthProvider>
-        <AuthConsumer
-          onAuth={(a) => {
-            authState = a;
-          }}
-        />
-      </AuthProvider>,
-    );
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
 
     await waitFor(() => {
-      expect(authState?.isLoading).toBe(false);
+      expect(ref.current?.isLoading).toBe(false);
     });
-    expect(authState?.isAuthenticated).toBe(false);
-    expect(authState?.user).toBeNull();
+    expect(ref.current?.isAuthenticated).toBe(false);
+    expect(ref.current?.user).toBeNull();
   });
 
   it("sets access token via setAccessToken utility", async () => {
@@ -263,20 +218,12 @@ describe("AuthContext", () => {
     };
     vi.mocked(authApi.login).mockResolvedValue(mockResponse);
 
-    let authState: ReturnType<typeof useAuth> | null = null;
-    render(
-      <AuthProvider>
-        <AuthConsumer
-          onAuth={(a) => {
-            authState = a;
-          }}
-        />
-      </AuthProvider>,
-    );
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
 
-    await waitFor(() => expect(authState?.isLoading).toBe(false));
+    await waitFor(() => expect(ref.current?.isLoading).toBe(false));
     await act(async () => {
-      await authState?.login("a@b.com", "pass");
+      await ref.current?.login("a@b.com", "pass");
     });
 
     expect(spy).toHaveBeenCalledWith("access-xyz");

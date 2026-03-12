@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { WorkspaceSelector } from "./WorkspaceSelector";
+import type { WorkspaceState } from "../hooks/useWorkspace";
 
 const mockSwitchWorkspace = vi.fn().mockResolvedValue(undefined);
 const mockCreateWorkspace = vi
   .fn()
   .mockResolvedValue({ id: "ws-new", name: "New" });
 
-const mockWorkspaceState = {
+const mockWorkspaceState: WorkspaceState = {
   workspaces: [
     {
       id: "ws-1",

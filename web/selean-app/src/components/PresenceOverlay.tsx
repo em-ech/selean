@@ -5,7 +5,7 @@
  * using the current camera state.
  */
 
-import type { SeleanEditor } from "../wasm/types";
+import type { CameraInfo, SeleanEditor } from "../wasm/types";
 import type { CursorPosition, Participant } from "../collab/types";
 import { colors } from "../theme";
 import { worldToScreen } from "../utils/camera";

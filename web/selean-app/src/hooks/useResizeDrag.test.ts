@@ -20,7 +20,7 @@ function makeOptions(overrides: Record<string, unknown> = {}) {
   return {
     editorRef: { current: editor },
     bounds: [makeBounds()],
-    camera: { ...DEFAULT_CAMERA } as CameraInfo,
+    camera: { ...DEFAULT_CAMERA } as CameraInfo | null,
     onSceneChanged: vi.fn(),
   };
 }

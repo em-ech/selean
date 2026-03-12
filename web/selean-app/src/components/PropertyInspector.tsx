@@ -804,7 +804,7 @@ function EffectsSection({
   const updateEffect = useCallback(
     (index: number, patch: Partial<Effect>) => {
       const updated = effects.map((e, i) =>
-        i === index ? { ...e, ...patch } : e,
+        i === index ? ({ ...e, ...patch } as Effect) : e,
       );
       emitEffects(updated);
     },

@@ -40,7 +40,7 @@ export interface WorkspaceState {
   inviteMember: (email: string, role: string) => Promise<void>;
   updateMemberRole: (userId: string, role: string) => Promise<void>;
   removeMember: (userId: string) => Promise<void>;
-  refreshWorkspaces: () => Promise<void>;
+  refreshWorkspaces: () => Promise<Workspace[]>;
 }
 
 const STORAGE_KEY = "selean_active_workspace";

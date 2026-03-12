@@ -11,6 +11,7 @@ export const colors = {
   textMuted: "#aaa",
   textDim: "#888",
   textFaint: "#666",
+  bgLight: "#2a2a3e",
 } as const;
 
 export const fontSizes = {

@@ -11,7 +11,7 @@ import type { AuthUser } from "./api";
 import * as authApi from "./api";
 import { setAccessToken, setRefreshFunction } from "../utils/api";
 
-interface AuthState {
+export interface AuthState {
   user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;

@@ -136,6 +136,7 @@ export function createMockEditor(
     text_align_variants: vi
       .fn()
       .mockReturnValue(["Left", "Center", "Right", "Justify"]),
+    register_font: vi.fn().mockReturnValue(true),
     generate_code: vi.fn().mockReturnValue(""),
     generate_page_code: vi.fn().mockReturnValue(""),
     generate_project_json: vi

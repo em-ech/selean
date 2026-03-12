@@ -5,7 +5,7 @@ import {
   colorForUser,
   type RemotePresence,
 } from "./PresenceOverlay";
-import { createMockEditorRef, DEFAULT_CAMERA } from "../test/mock-editor";
+import { createMockEditorRef } from "../test/mock-editor";
 
 describe("PresenceOverlay", () => {
   it("renders nothing when editor is null", () => {
