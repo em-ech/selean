@@ -252,7 +252,7 @@ pub fn query_nodes_json(
                     return false;
                 }
             }
-            if let Some(ref k) = kind {
+            if let Some(k) = &kind {
                 if !node.kind.kind_tag().eq_ignore_ascii_case(k) {
                     return false;
                 }
@@ -403,7 +403,7 @@ pub struct NodeBoundsInfo {
 }
 
 /// Returns world-space bounds for all nodes except those in `excluded_ids`.
-/// Used by SnapGuides to get alignment targets without full-scene serialization.
+/// Used by `SnapGuides` to get alignment targets without full-scene serialization.
 pub fn get_all_node_bounds(scene: &SceneGraph, excluded_ids: &[NodeId]) -> Vec<NodeBoundsInfo> {
     scene
         .nodes()

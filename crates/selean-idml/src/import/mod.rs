@@ -318,10 +318,10 @@ mod tests {
 
     #[test]
     fn parse_designmap_elements_without_src_ignored() {
-        let xml = r#"<Document>
+        let xml = r"<Document>
             <idPkg:Spread/>
             <idPkg:Story/>
-        </Document>"#;
+        </Document>";
         let (spreads, stories) = parse_designmap_xml(xml);
         assert!(spreads.is_empty());
         assert!(stories.is_empty());

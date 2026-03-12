@@ -45,6 +45,7 @@ fn tool_error(msg: &str) -> String {
 }
 
 /// Returns a JSON success response: `{ "success": true, "result": result }`.
+#[allow(clippy::needless_pass_by_value)]
 fn tool_ok(result: serde_json::Value) -> String {
     serde_json::json!({ "success": true, "result": result }).to_string()
 }
@@ -104,6 +105,11 @@ impl EditorState {
     }
 
     /// Returns a reference to the active page's command history.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no history exists for the active page (invariant violation).
+    #[allow(clippy::expect_used)]
     fn history(&self) -> &CommandHistory {
         let page_id = self.document.active_page().id;
         self.histories
@@ -112,9 +118,28 @@ impl EditorState {
     }
 
     /// Returns a mutable reference to the active page's command history.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no history exists for the active page (invariant violation).
+    #[allow(clippy::expect_used)]
     fn history_mut(&mut self) -> &mut CommandHistory {
         let page_id = self.document.active_page().id;
         self.histories
+            .get_mut(&page_id)
+            .expect("history missing for active page")
+    }
+
+    /// Returns the active page's history mutably, split-borrowing from `self`.
+    ///
+    /// This avoids the double-mutable-borrow issue when callers also need
+    /// `&mut self.document` in the same expression.
+    #[allow(clippy::expect_used)]
+    fn history_for_page(
+        histories: &mut std::collections::HashMap<selean_common::types::PageId, CommandHistory>,
+        page_id: selean_common::types::PageId,
+    ) -> &mut CommandHistory {
+        histories
             .get_mut(&page_id)
             .expect("history missing for active page")
     }
@@ -127,27 +152,14 @@ impl EditorState {
             Ok(d) => d,
             Err(_) => return false,
         };
-        let cmd = desc.into_command();
-        let page_id = self.document.active_page().id;
-        let history = self
-            .histories
-            .get_mut(&page_id)
-            .expect("history missing for active page");
-        let ok = history.execute(cmd, &mut self.document.active_page_mut().scene);
-        if ok {
-            self.version += 1;
-        }
-        ok
+        self.execute_descriptor(desc)
     }
 
     /// Executes a [`CommandDescriptor`] directly.
     pub fn execute_descriptor(&mut self, desc: CommandDescriptor) -> bool {
         let cmd = desc.into_command();
         let page_id = self.document.active_page().id;
-        let history = self
-            .histories
-            .get_mut(&page_id)
-            .expect("history missing for active page");
+        let history = Self::history_for_page(&mut self.histories, page_id);
         let ok = history.execute(cmd, &mut self.document.active_page_mut().scene);
         if ok {
             self.version += 1;
@@ -158,10 +170,7 @@ impl EditorState {
     /// Undoes the last command on the active page.
     pub fn undo(&mut self) -> bool {
         let page_id = self.document.active_page().id;
-        let history = self
-            .histories
-            .get_mut(&page_id)
-            .expect("history missing for active page");
+        let history = Self::history_for_page(&mut self.histories, page_id);
         let ok = history.undo(&mut self.document.active_page_mut().scene);
         if ok {
             self.version += 1;
@@ -172,10 +181,7 @@ impl EditorState {
     /// Redoes the last undone command on the active page.
     pub fn redo(&mut self) -> bool {
         let page_id = self.document.active_page().id;
-        let history = self
-            .histories
-            .get_mut(&page_id)
-            .expect("history missing for active page");
+        let history = Self::history_for_page(&mut self.histories, page_id);
         let ok = history.redo(&mut self.document.active_page_mut().scene);
         if ok {
             self.version += 1;
@@ -196,10 +202,7 @@ impl EditorState {
     /// Cancels the active command group, undoing all commands in it.
     pub fn cancel_group(&mut self) {
         let page_id = self.document.active_page().id;
-        let history = self
-            .histories
-            .get_mut(&page_id)
-            .expect("history missing for active page");
+        let history = Self::history_for_page(&mut self.histories, page_id);
         history.cancel_group(&mut self.document.active_page_mut().scene);
     }
 
@@ -417,7 +420,7 @@ impl EditorState {
     }
 
     /// Returns lightweight bounds for all nodes except the currently selected ones.
-    /// Used by SnapGuides to find alignment targets without full-scene serialization.
+    /// Used by `SnapGuides` to find alignment targets without full-scene serialization.
     #[must_use]
     pub fn get_snap_targets(&self) -> Vec<queries::NodeBoundsInfo> {
         get_all_node_bounds(self.scene(), self.input.state().selection.ids())
@@ -1169,9 +1172,10 @@ mod wasm {
                 y,
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
+            let scene = &mut self.state.document.active_page_mut().scene;
             let events = self.state.input.handle_event(
                 &event,
-                self.state.scene_mut(),
+                scene,
                 self.renderer.camera_mut(),
             );
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
@@ -1195,9 +1199,10 @@ mod wasm {
                 button: EditorState::pointer_button(button),
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
+            let scene = &mut self.state.document.active_page_mut().scene;
             let events = self.state.input.handle_event(
                 &event,
-                self.state.scene_mut(),
+                scene,
                 self.renderer.camera_mut(),
             );
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
@@ -1221,9 +1226,10 @@ mod wasm {
                 button: EditorState::pointer_button(button),
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
+            let scene = &mut self.state.document.active_page_mut().scene;
             let events = self.state.input.handle_event(
                 &event,
-                self.state.scene_mut(),
+                scene,
                 self.renderer.camera_mut(),
             );
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
@@ -1249,9 +1255,10 @@ mod wasm {
                 dy,
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
+            let scene = &mut self.state.document.active_page_mut().scene;
             let events = self.state.input.handle_event(
                 &event,
-                self.state.scene_mut(),
+                scene,
                 self.renderer.camera_mut(),
             );
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)

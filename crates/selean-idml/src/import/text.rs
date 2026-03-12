@@ -380,13 +380,13 @@ mod tests {
 
     #[test]
     fn parse_story_missing_self_id_returns_empty_id() {
-        let xml = r#"<Story>
+        let xml = r"<Story>
             <ParagraphStyleRange>
                 <CharacterStyleRange>
                     <Content>Text</Content>
                 </CharacterStyleRange>
             </ParagraphStyleRange>
-        </Story>"#;
+        </Story>";
         let (id, story) = parse_story(xml);
         assert!(id.is_empty());
         assert_eq!(story.content, "Text");

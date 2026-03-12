@@ -1572,7 +1572,7 @@ mod tests {
 
         // All seq numbers should be in the range 2..=41 (1 was the AddRoot).
         let mut sorted = all_seqs.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), 40);
         assert_eq!(*sorted.first().unwrap(), 2);
@@ -1784,8 +1784,7 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
-                let arc = mgr.write().unwrap().get_or_create_room(room_id);
-                arc
+                mgr.write().unwrap().get_or_create_room(room_id)
             }));
         }
 
@@ -1851,16 +1850,15 @@ mod tests {
             b2.wait().await;
             // Even after removal from manager, the Arc keeps the Room alive.
             let mut seqs = Vec::new();
-            for i in 2..=12 {
+            for i in 2..=12_u64 {
+                #[allow(clippy::cast_precision_loss)]
+                let opacity = 0.1 * (i as f32);
                 let op = make_op(
                     i,
                     uid,
                     sid,
                     page_id,
-                    CommandDescriptor::SetOpacity {
-                        node_id,
-                        opacity: 0.1 * (i as f32),
-                    },
+                    CommandDescriptor::SetOpacity { node_id, opacity },
                 );
                 let seq = room_clone.lock().unwrap().submit_op(op);
                 seqs.push(seq);

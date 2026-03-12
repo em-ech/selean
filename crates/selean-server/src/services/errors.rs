@@ -46,13 +46,11 @@ impl ServiceError {
 impl IntoResponse for ServiceError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match &self {
-            ServiceError::Database(selean_db::DbError::NotFound(entity)) => {
+            ServiceError::Database(selean_db::DbError::NotFound(entity))
+            | ServiceError::NotFound(entity) => {
                 (StatusCode::NOT_FOUND, format!("{entity} not found"))
             }
             ServiceError::Database(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            ServiceError::NotFound(entity) => {
-                (StatusCode::NOT_FOUND, format!("{entity} not found"))
-            }
             ServiceError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             ServiceError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             ServiceError::NoDatabaseConfigured => (
@@ -66,6 +64,10 @@ impl IntoResponse for ServiceError {
 
 /// Extracts the database pool from app state, returning a `ServiceError`
 /// if the database is not configured.
+///
+/// # Errors
+///
+/// Returns [`ServiceError::NoDatabaseConfigured`] when `DATABASE_URL` is unset.
 pub fn require_db(state: &AppState) -> Result<&sqlx::PgPool, ServiceError> {
     state
         .require_db()

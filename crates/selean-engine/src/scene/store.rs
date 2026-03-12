@@ -1012,8 +1012,7 @@ impl std::fmt::Debug for SceneGraph {
 mod tests {
     use super::*;
     use crate::scene::{
-        BlendMode, ClipMode, Color, Effect, FontStyle, Gradient, GradientStop, SceneNodeKind,
-        TextAlign,
+        ClipMode, Color, Effect, FontStyle, Gradient, GradientStop, SceneNodeKind, TextAlign,
     };
 
     /// Helper: creates a simple frame node with the given name and bounds.

@@ -2,7 +2,7 @@
 //!
 //! Tests are split into two categories:
 //! 1. Pure logic tests that do not require a database.
-//! 2. Database-dependent tests that run against a live PostgreSQL instance
+//! 2. Database-dependent tests that run against a live `PostgreSQL` instance
 //!    (gated behind the `DATABASE_URL` env var via `setup_pool`).
 //!
 //! Run with `cargo test -p selean-server` for unit tests.
@@ -255,9 +255,8 @@ async fn create_test_user(pool: &sqlx::PgPool) -> uuid::Uuid {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn document_service_create_and_get() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let user_id = create_test_user(&pool).await;
@@ -291,9 +290,8 @@ async fn document_service_create_and_get() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn document_service_list_documents() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let user_id = create_test_user(&pool).await;
@@ -325,9 +323,8 @@ async fn document_service_list_documents() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn document_service_save_and_list_versions() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let user_id = create_test_user(&pool).await;
@@ -372,9 +369,8 @@ async fn document_service_save_and_list_versions() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn workspace_service_crud() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let user_id = create_test_user(&pool).await;
@@ -414,9 +410,8 @@ async fn workspace_service_crud() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn workspace_service_empty_name_returns_error() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let user_id = create_test_user(&pool).await;
@@ -431,9 +426,8 @@ async fn workspace_service_empty_name_returns_error() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn workspace_service_member_management() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let owner_id = create_test_user(&pool).await;
@@ -494,9 +488,8 @@ async fn workspace_service_member_management() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn workspace_service_billing_limit_document() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let user_id = create_test_user(&pool).await;
@@ -544,9 +537,8 @@ async fn workspace_service_billing_limit_document() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn workspace_service_billing_limit_members() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let owner_id = create_test_user(&pool).await;
@@ -604,9 +596,8 @@ async fn workspace_service_billing_limit_members() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn workspace_service_permission_denied_for_non_member() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let owner_id = create_test_user(&pool).await;
@@ -630,9 +621,8 @@ async fn workspace_service_permission_denied_for_non_member() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn document_service_permission_denied_for_non_member() {
-    let pool = match setup_pool().await {
-        Some(p) => p,
-        None => return,
+    let Some(pool) = setup_pool().await else {
+        return;
     };
 
     let owner_id = create_test_user(&pool).await;

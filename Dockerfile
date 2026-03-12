@@ -1,11 +1,14 @@
-# Stage 1: Build Rust backend
+# Stage 1: Build Rust backend + WASM
 FROM rust:1.88-bookworm AS rust-builder
 WORKDIR /app
+RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 # Copy workspace files first for dependency caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 # Build release binary
 RUN cargo build --release --bin selean-server
+# Build WASM package
+RUN wasm-pack build crates/selean-wasm --target web --out-dir /app/wasm-pkg
 
 # Stage 2: Build frontend
 FROM node:20-bookworm AS frontend-builder
@@ -13,6 +16,8 @@ WORKDIR /app/web/selean-app
 COPY web/selean-app/package.json web/selean-app/package-lock.json ./
 RUN npm ci
 COPY web/selean-app/ ./
+# Copy WASM build output into the frontend source tree
+COPY --from=rust-builder /app/wasm-pkg/ ./src/wasm/pkg/
 RUN npm run build
 
 # Stage 3: Final runtime image
