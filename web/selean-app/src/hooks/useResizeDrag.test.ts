@@ -285,4 +285,41 @@ describe("computeResizedBounds", () => {
     expect(r.height).toBe(10);
     expect(r.y).toBe(200);
   });
+
+  // --- Shift (aspect-ratio lock) tests ---
+
+  it("shift + corner handle 4 (bottom-right): maintains aspect ratio", () => {
+    // Aspect ratio = 300/150 = 2:1
+    const r = computeResizedBounds(4, origX, origY, origW, origH, 60, 10, true);
+    // Both dimensions should change proportionally
+    const newRatio = r.width / r.height;
+    const origRatio = origW / origH;
+    expect(newRatio).toBeCloseTo(origRatio, 1);
+  });
+
+  it("shift + corner handle 0 (top-left): maintains aspect ratio", () => {
+    const r = computeResizedBounds(0, origX, origY, origW, origH, -40, -10, true);
+    const newRatio = r.width / r.height;
+    const origRatio = origW / origH;
+    expect(newRatio).toBeCloseTo(origRatio, 1);
+  });
+
+  it("shift + edge handle 3 (middle-right): scales both dimensions", () => {
+    const r = computeResizedBounds(3, origX, origY, origW, origH, 60, 0, true);
+    // Width should grow, and height should grow proportionally
+    expect(r.width).toBeGreaterThan(origW);
+    expect(r.height).toBeGreaterThan(origH);
+  });
+
+  it("shift + edge handle 5 (bottom-center): scales both dimensions", () => {
+    const r = computeResizedBounds(5, origX, origY, origW, origH, 0, 30, true);
+    expect(r.height).toBeGreaterThan(origH);
+    expect(r.width).toBeGreaterThan(origW);
+  });
+
+  it("shift resize still enforces MIN_SIZE", () => {
+    const r = computeResizedBounds(0, origX, origY, origW, origH, 500, 500, true);
+    expect(r.width).toBeGreaterThanOrEqual(10);
+    expect(r.height).toBeGreaterThanOrEqual(10);
+  });
 });

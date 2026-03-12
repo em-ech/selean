@@ -51,7 +51,7 @@ describe("Canvas", () => {
 describe("Canvas pointer events", () => {
   it("calls on_pointer_down with correct arguments on pointerdown", () => {
     const ref = createMockEditorRef();
-    (ref.current.on_pointer_down as Mock).mockReturnValue("[]");
+    (ref.current.on_pointer_down as Mock).mockReturnValue([]);
     render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
     const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
 
@@ -76,7 +76,7 @@ describe("Canvas pointer events", () => {
 
   it("calls on_pointer_move on pointermove", () => {
     const ref = createMockEditorRef();
-    (ref.current.on_pointer_move as Mock).mockReturnValue("[]");
+    (ref.current.on_pointer_move as Mock).mockReturnValue([]);
     render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
     const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
 
@@ -87,7 +87,7 @@ describe("Canvas pointer events", () => {
 
   it("calls on_pointer_up on pointerup", () => {
     const ref = createMockEditorRef();
-    (ref.current.on_pointer_up as Mock).mockReturnValue("[]");
+    (ref.current.on_pointer_up as Mock).mockReturnValue([]);
     render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
     const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
 
@@ -103,7 +103,7 @@ describe("Canvas pointer events", () => {
 
   it("calls on_scroll on wheel event", () => {
     const ref = createMockEditorRef();
-    (ref.current.on_scroll as Mock).mockReturnValue("[]");
+    (ref.current.on_scroll as Mock).mockReturnValue([]);
     render(<Canvas canvasId="test-canvas" editorRef={ref} status="ready" />);
     const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
 
@@ -123,9 +123,7 @@ describe("Canvas pointer events", () => {
   it("propagates interaction events to onInteractionEvents callback", () => {
     const ref = createMockEditorRef();
     const mockEvents = [{ type: "Clicked", node_id: "n1" }];
-    (ref.current.on_pointer_down as Mock).mockReturnValue(
-      JSON.stringify(mockEvents),
-    );
+    (ref.current.on_pointer_down as Mock).mockReturnValue(mockEvents);
     const onEvents = vi.fn();
 
     render(
@@ -144,7 +142,7 @@ describe("Canvas pointer events", () => {
 
   it("does not call onInteractionEvents for empty event arrays", () => {
     const ref = createMockEditorRef();
-    (ref.current.on_pointer_move as Mock).mockReturnValue("[]");
+    (ref.current.on_pointer_move as Mock).mockReturnValue([]);
     const onEvents = vi.fn();
 
     render(
@@ -188,11 +186,10 @@ describe("Canvas pointer events", () => {
     expect(onCtx).toHaveBeenCalledWith(200, 300);
   });
 
-  it("handles malformed JSON from WASM gracefully", () => {
+  it("does not call onInteractionEvents when WASM returns null", () => {
     const ref = createMockEditorRef();
-    (ref.current.on_pointer_move as Mock).mockReturnValue("not json");
+    (ref.current.on_pointer_move as Mock).mockReturnValue(null);
     const onEvents = vi.fn();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     render(
       <Canvas
@@ -206,7 +203,5 @@ describe("Canvas pointer events", () => {
     fireEvent.pointerMove(canvas, { clientX: 10, clientY: 20 });
 
     expect(onEvents).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
   });
 });

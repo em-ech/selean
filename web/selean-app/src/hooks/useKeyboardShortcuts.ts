@@ -21,7 +21,7 @@ function executeToolOnSelection(
   maxSelection = Infinity,
 ): void {
   try {
-    const ids: string[] = JSON.parse(editor.get_selected_ids());
+    const ids: string[] = editor.get_selected_ids();
     if (ids.length < minSelection || ids.length > maxSelection) return;
     const args = buildArgs(ids);
     if (args === null) return;
@@ -129,7 +129,7 @@ export function useKeyboardShortcuts({
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          const ids: string[] = editor.get_selected_ids();
           for (const id of ids) {
             editor.execute_tool_call(
               "delete_node",
@@ -147,7 +147,7 @@ export function useKeyboardShortcuts({
       if (isCtrlOrMeta && e.key === "c") {
         e.preventDefault();
         try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          const ids: string[] = editor.get_selected_ids();
           if (ids.length > 0) {
             const nodeJson = editor.get_node_json(ids[0]);
             if (nodeJson !== "null") {
@@ -189,7 +189,7 @@ export function useKeyboardShortcuts({
       if (isCtrlOrMeta && e.key === "g" && e.shiftKey) {
         e.preventDefault();
         try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          const ids: string[] = editor.get_selected_ids();
           if (ids.length === 1) {
             const nodeJson = editor.get_node_json(ids[0]);
             if (nodeJson !== "null") {
@@ -273,7 +273,7 @@ export function useKeyboardShortcuts({
       if (isCtrlOrMeta && e.key === "d") {
         e.preventDefault();
         try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          const ids: string[] = editor.get_selected_ids();
           if (ids.length > 0) {
             const nodeJson = editor.get_node_json(ids[0]);
             if (nodeJson !== "null") {
@@ -292,7 +292,7 @@ export function useKeyboardShortcuts({
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
         e.preventDefault();
         try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          const ids: string[] = editor.get_selected_ids();
           const step = e.shiftKey ? 10 : 1;
           let dx = 0;
           let dy = 0;

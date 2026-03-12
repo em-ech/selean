@@ -23,8 +23,7 @@ export function useSelection(
     if (!editor) return;
 
     try {
-      const idsJson = editor.get_selected_ids();
-      const ids: string[] = JSON.parse(idsJson);
+      const ids: string[] = editor.get_selected_ids();
 
       setSelectedIds(ids);
 

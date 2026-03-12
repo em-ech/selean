@@ -219,8 +219,12 @@ describe("PropertyInspector", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox");
-    fireEvent.click(checkbox);
+    const checkboxes = screen.getAllByRole("checkbox");
+    // The "Visible" checkbox is the checked one (visible: true)
+    const visibleCheckbox = checkboxes.find(
+      (cb) => (cb as HTMLInputElement).checked,
+    )!;
+    fireEvent.click(visibleCheckbox);
 
     const call = (ref.current.execute_command as ReturnType<typeof vi.fn>).mock
       .calls[0][0];

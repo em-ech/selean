@@ -205,9 +205,7 @@ describe("useKeyboardShortcuts", () => {
   describe("delete", () => {
     it("Delete key deletes selected nodes", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi
-          .fn()
-          .mockReturnValue(JSON.stringify(["node-1", "node-2"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1", "node-2"]),
       });
 
       press("Delete");
@@ -226,7 +224,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Backspace key deletes selected nodes", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       });
 
       press("Backspace");
@@ -240,7 +238,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("does not call onSceneChanged when no nodes selected", () => {
       const { onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue("[]"),
+        get_selected_ids: vi.fn().mockReturnValue([]),
       });
 
       press("Delete");
@@ -252,7 +250,7 @@ describe("useKeyboardShortcuts", () => {
   describe("copy/paste", () => {
     it("Cmd+C copies first selected node to clipboard", () => {
       const { clipboardRef } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -263,7 +261,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+C does nothing when no selection", () => {
       const { clipboardRef } = setup({
-        get_selected_ids: vi.fn().mockReturnValue("[]"),
+        get_selected_ids: vi.fn().mockReturnValue([]),
       });
 
       press("c", { metaKey: true });
@@ -297,9 +295,7 @@ describe("useKeyboardShortcuts", () => {
   describe("grouping", () => {
     it("Cmd+G groups when >= 2 nodes selected", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi
-          .fn()
-          .mockReturnValue(JSON.stringify(["node-1", "node-2"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1", "node-2"]),
       });
 
       press("g", { metaKey: true });
@@ -313,7 +309,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+G does nothing with fewer than 2 nodes", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       });
 
       press("g", { metaKey: true });
@@ -324,7 +320,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+Shift+G ungroups a Group node", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["group-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["group-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(groupNode)),
       });
 
@@ -339,7 +335,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+Shift+G does nothing for non-Group node", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -351,9 +347,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+Shift+G does nothing with multiple selections", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi
-          .fn()
-          .mockReturnValue(JSON.stringify(["node-1", "node-2"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1", "node-2"]),
       });
 
       press("g", { metaKey: true, shiftKey: true });
@@ -366,7 +360,7 @@ describe("useKeyboardShortcuts", () => {
   describe("z-order", () => {
     it("Cmd+] calls move_forward", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       });
 
       press("]", { metaKey: true });
@@ -380,7 +374,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+[ calls move_backward", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       });
 
       press("[", { metaKey: true });
@@ -394,7 +388,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+Shift+] calls move_to_front", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       });
 
       press("}", { metaKey: true, shiftKey: true });
@@ -408,7 +402,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+Shift+[ calls move_to_back", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       });
 
       press("{", { metaKey: true, shiftKey: true });
@@ -422,9 +416,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("z-order shortcuts do nothing with multiple selections", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi
-          .fn()
-          .mockReturnValue(JSON.stringify(["node-1", "node-2"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1", "node-2"]),
       });
 
       press("]", { metaKey: true });
@@ -437,7 +429,7 @@ describe("useKeyboardShortcuts", () => {
   describe("duplicate", () => {
     it("Cmd+D duplicates the selected node", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -458,7 +450,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+D does nothing with no selection", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue("[]"),
+        get_selected_ids: vi.fn().mockReturnValue([]),
       });
 
       press("d", { metaKey: true });
@@ -469,7 +461,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Cmd+D does nothing when node JSON is null", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue("null"),
       });
 
@@ -483,7 +475,7 @@ describe("useKeyboardShortcuts", () => {
   describe("arrow key nudge", () => {
     it("ArrowRight nudges by 1px", () => {
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -504,7 +496,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("ArrowLeft nudges by -1px", () => {
       const { editor } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -519,7 +511,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("ArrowUp nudges by -1px on y", () => {
       const { editor } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -534,7 +526,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("ArrowDown nudges by +1px on y", () => {
       const { editor } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -549,7 +541,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Shift+Arrow nudges by 10px", () => {
       const { editor } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -564,7 +556,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("Shift+ArrowUp nudges by -10px on y", () => {
       const { editor } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
         get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
       });
 
@@ -587,9 +579,7 @@ describe("useKeyboardShortcuts", () => {
       });
 
       const { editor, onSceneChanged } = setup({
-        get_selected_ids: vi
-          .fn()
-          .mockReturnValue(JSON.stringify(["node-1", "node-2"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1", "node-2"]),
         get_node_json: vi.fn().mockImplementation((id: string) => {
           if (id === "node-1") return JSON.stringify(node1);
           if (id === "node-2") return JSON.stringify(node2);
@@ -605,7 +595,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("does not call onSceneChanged when no nodes selected", () => {
       const { onSceneChanged } = setup({
-        get_selected_ids: vi.fn().mockReturnValue("[]"),
+        get_selected_ids: vi.fn().mockReturnValue([]),
       });
 
       press("ArrowRight");
@@ -741,7 +731,7 @@ describe("useKeyboardShortcuts", () => {
 
     it("suppresses Delete when TEXTAREA focused", () => {
       const { editor } = setup({
-        get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+        get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       });
 
       const textarea = document.createElement("textarea");

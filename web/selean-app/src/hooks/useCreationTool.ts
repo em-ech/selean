@@ -70,7 +70,7 @@ export function useCreationTool({
       // Get camera to convert screen coords to world coords
       let camera;
       try {
-        camera = JSON.parse(editor.get_camera_json());
+        camera = editor.get_camera();
       } catch (e) {
         console.warn("creation-tool:get-camera failed", e);
         return;

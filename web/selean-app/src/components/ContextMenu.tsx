@@ -198,7 +198,7 @@ export function ContextMenu({
 function getSelectedIds(editor: SeleanEditor | null): string[] {
   if (!editor) return [];
   try {
-    return JSON.parse(editor.get_selected_ids());
+    return editor.get_selected_ids();
   } catch (e) {
     console.warn("context-menu:get-selected-ids failed", e);
     return [];

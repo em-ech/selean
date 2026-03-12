@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { colors, fontSizes } from "../theme";
 import type { PageInfo, SeleanEditor } from "../wasm/types";
 
@@ -10,7 +10,8 @@ interface PageBarProps {
 
 /**
  * Horizontal page tabs below the header.
- * Click a tab to switch pages, "+" to add a new page.
+ * Click a tab to switch pages, double-click to rename,
+ * right-click for context menu (duplicate), "+" to add a new page.
  */
 export function PageBar({
   editorRef,
@@ -19,6 +20,16 @@ export function PageBar({
 }: PageBarProps) {
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [activePageId, setActivePageId] = useState<string | null>(null);
+  const [editingPageId, setEditingPageId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [contextMenu, setContextMenu] = useState<{
+    pageId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const editInputRef = useRef<HTMLInputElement>(null);
+  const [dragPageId, setDragPageId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -34,6 +45,22 @@ export function PageBar({
     }
   }, [editorRef, refreshTick, activePageId]);
 
+  // Auto-focus rename input.
+  useEffect(() => {
+    if (editingPageId && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingPageId]);
+
+  // Close context menu on outside click.
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = () => setContextMenu(null);
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [contextMenu]);
+
   const handlePageClick = useCallback(
     (pageId: string) => {
       const editor = editorRef.current;
@@ -43,6 +70,36 @@ export function PageBar({
       onSceneChanged();
     },
     [editorRef, onSceneChanged],
+  );
+
+  const handleDoubleClick = useCallback(
+    (pageId: string, currentName: string) => {
+      setEditingPageId(pageId);
+      setEditingName(currentName);
+    },
+    [],
+  );
+
+  const commitRename = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || !editingPageId) return;
+    const trimmed = editingName.trim();
+    if (trimmed) {
+      editor.rename_page(editingPageId, trimmed);
+      onSceneChanged();
+    }
+    setEditingPageId(null);
+  }, [editorRef, editingPageId, editingName, onSceneChanged]);
+
+  const handleRenameKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        commitRename();
+      } else if (e.key === "Escape") {
+        setEditingPageId(null);
+      }
+    },
+    [commitRename],
   );
 
   const handleAddPage = useCallback(() => {
@@ -63,7 +120,6 @@ export function PageBar({
       if (pages.length <= 1) return;
       const ok = editor.remove_page(pageId);
       if (ok) {
-        // Switch to first remaining page
         const remaining = pages.filter((p) => p.id !== pageId);
         if (remaining.length > 0) {
           editor.set_active_page(remaining[0].id);
@@ -75,6 +131,69 @@ export function PageBar({
     [editorRef, pages, onSceneChanged],
   );
 
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent, pageId: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({ pageId, x: e.clientX, y: e.clientY });
+    },
+    [],
+  );
+
+  const handleDuplicate = useCallback(
+    (pageId: string) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const newId = editor.duplicate_page(pageId);
+      if (newId) {
+        editor.set_active_page(newId);
+        setActivePageId(newId);
+        onSceneChanged();
+      }
+      setContextMenu(null);
+    },
+    [editorRef, onSceneChanged],
+  );
+
+  // Drag-to-reorder handlers.
+  const handleDragStart = useCallback((e: React.DragEvent, pageId: string) => {
+    setDragPageId(pageId);
+    e.dataTransfer.effectAllowed = "move";
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, pageId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDropTargetId(pageId);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDropTargetId(null);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent, targetPageId: string) => {
+      e.preventDefault();
+      setDropTargetId(null);
+      setDragPageId(null);
+      const editor = editorRef.current;
+      if (!editor || !dragPageId || dragPageId === targetPageId) return;
+
+      // Build new order: move dragPageId before targetPageId.
+      const ids = pages.map((p) => p.id).filter((id) => id !== dragPageId);
+      const targetIdx = ids.indexOf(targetPageId);
+      ids.splice(targetIdx, 0, dragPageId);
+      editor.reorder_pages(JSON.stringify(ids));
+      onSceneChanged();
+    },
+    [editorRef, dragPageId, pages, onSceneChanged],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    setDragPageId(null);
+    setDropTargetId(null);
+  }, []);
+
   if (pages.length === 0) return null;
 
   return (
@@ -82,7 +201,15 @@ export function PageBar({
       {pages.map((page) => (
         <div
           key={page.id}
+          draggable
+          onDragStart={(e) => handleDragStart(e, page.id)}
+          onDragOver={(e) => handleDragOver(e, page.id)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, page.id)}
+          onDragEnd={handleDragEnd}
           onClick={() => handlePageClick(page.id)}
+          onDoubleClick={() => handleDoubleClick(page.id, page.name)}
+          onContextMenu={(e) => handleContextMenu(e, page.id)}
           style={{
             ...tabStyle,
             borderBottom:
@@ -90,10 +217,27 @@ export function PageBar({
                 ? `2px solid ${colors.accent}`
                 : "2px solid transparent",
             color: page.id === activePageId ? colors.text : colors.textDim,
+            opacity: dragPageId === page.id ? 0.4 : 1,
+            borderLeft:
+              dropTargetId === page.id && dragPageId !== page.id
+                ? `2px solid ${colors.accent}`
+                : "2px solid transparent",
           }}
         >
-          <span>{page.name}</span>
-          {pages.length > 1 && (
+          {editingPageId === page.id ? (
+            <input
+              ref={editInputRef}
+              value={editingName}
+              onChange={(e) => setEditingName(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={handleRenameKeyDown}
+              onClick={(e) => e.stopPropagation()}
+              style={renameInputStyle}
+            />
+          ) : (
+            <span>{page.name}</span>
+          )}
+          {pages.length > 1 && editingPageId !== page.id && (
             <button
               style={closeButtonStyle}
               onClick={(e) => handleRemovePage(e, page.id)}
@@ -107,6 +251,32 @@ export function PageBar({
       <button style={addButtonStyle} onClick={handleAddPage} title="Add page">
         +
       </button>
+      {contextMenu && (
+        <div
+          style={{
+            ...contextMenuStyle,
+            left: contextMenu.x,
+            top: contextMenu.y,
+          }}
+        >
+          <button
+            style={menuItemStyle}
+            onClick={() => handleDuplicate(contextMenu.pageId)}
+          >
+            Duplicate
+          </button>
+          <button
+            style={menuItemStyle}
+            onClick={() => {
+              const page = pages.find((p) => p.id === contextMenu.pageId);
+              if (page) handleDoubleClick(page.id, page.name);
+              setContextMenu(null);
+            }}
+          >
+            Rename
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -120,6 +290,7 @@ const barStyle: React.CSSProperties = {
   gap: 2,
   flexShrink: 0,
   overflow: "auto",
+  position: "relative",
 };
 
 const tabStyle: React.CSSProperties = {
@@ -156,4 +327,36 @@ const addButtonStyle: React.CSSProperties = {
   justifyContent: "center",
   borderRadius: 4,
   flexShrink: 0,
+};
+
+const renameInputStyle: React.CSSProperties = {
+  background: colors.bgLight,
+  border: `1px solid ${colors.accent}`,
+  color: colors.text,
+  fontSize: fontSizes.sm,
+  padding: "1px 4px",
+  outline: "none",
+  width: 100,
+};
+
+const contextMenuStyle: React.CSSProperties = {
+  position: "fixed",
+  background: colors.bgLight,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 4,
+  padding: "4px 0",
+  zIndex: 1000,
+  minWidth: 100,
+};
+
+const menuItemStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  background: "none",
+  border: "none",
+  color: colors.text,
+  fontSize: fontSizes.sm,
+  padding: "4px 12px",
+  cursor: "pointer",
+  textAlign: "left",
 };

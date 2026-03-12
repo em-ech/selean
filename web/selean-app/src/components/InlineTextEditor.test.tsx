@@ -8,7 +8,7 @@ const defaultBounds = { x: 100, y: 50, width: 200, height: 40 };
 describe("InlineTextEditor", () => {
   it("renders a textarea with initial content", () => {
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+      get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     });
     render(
       <InlineTextEditor
@@ -28,7 +28,7 @@ describe("InlineTextEditor", () => {
 
   it("auto-focuses on mount", async () => {
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+      get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     });
     render(
       <InlineTextEditor
@@ -50,7 +50,7 @@ describe("InlineTextEditor", () => {
   it("calls onCancel when Escape is pressed", () => {
     const onCancel = vi.fn();
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+      get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     });
     render(
       <InlineTextEditor
@@ -71,7 +71,7 @@ describe("InlineTextEditor", () => {
   it("calls onCommit with current value on blur", () => {
     const onCommit = vi.fn();
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+      get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     });
     render(
       <InlineTextEditor
@@ -94,7 +94,7 @@ describe("InlineTextEditor", () => {
     const onCommit = vi.fn();
     const onCancel = vi.fn();
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+      get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     });
     render(
       <InlineTextEditor
@@ -117,7 +117,7 @@ describe("InlineTextEditor", () => {
 
   it("stops propagation on keydown events", () => {
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+      get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     });
     render(
       <InlineTextEditor
@@ -142,7 +142,7 @@ describe("InlineTextEditor", () => {
 
   it("updates value on change", () => {
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+      get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     });
     render(
       <InlineTextEditor
@@ -169,7 +169,7 @@ describe("InlineTextEditor", () => {
       viewport_height: 1080,
     };
     const ref = createMockEditorRef({
-      get_camera_json: vi.fn().mockReturnValue(JSON.stringify(camera)),
+      get_camera: vi.fn().mockReturnValue(camera),
     });
     render(
       <InlineTextEditor

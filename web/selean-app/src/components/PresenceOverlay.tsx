@@ -53,7 +53,7 @@ export function PresenceOverlay({
 
   let camera: CameraInfo;
   try {
-    camera = JSON.parse(editor.get_camera_json());
+    camera = editor.get_camera();
   } catch (e) {
     console.warn("presence-overlay:get-camera failed", e);
     return null;

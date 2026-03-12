@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { CollabSession } from "./useCollabSession";
 import type { InteractionEvent } from "../components/Canvas";
 import type { NodeInfo, SeleanEditor } from "../wasm/types";
@@ -17,6 +17,8 @@ interface UseMoveDragOptions {
   onSceneChanged: () => void;
   collab?: CollabSession | null;
   activePageId?: string;
+  /** When true, constrains movement to the dominant axis (horizontal or vertical). */
+  shiftKeyRef?: React.RefObject<boolean>;
 }
 
 /**
@@ -48,8 +50,10 @@ export function useMoveDrag({
   onSceneChanged,
   collab,
   activePageId,
+  shiftKeyRef,
 }: UseMoveDragOptions) {
   const dragRef = useRef<DragState | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleDragEvent = useCallback(
     (event: InteractionEvent) => {
@@ -58,7 +62,7 @@ export function useMoveDrag({
 
       if (event.type === "DragStarted") {
         try {
-          const ids: string[] = JSON.parse(editor.get_selected_ids());
+          const ids: string[] = editor.get_selected_ids();
           if (ids.length === 0) return;
           editor.begin_group("Move");
           dragRef.current = {
@@ -67,6 +71,7 @@ export function useMoveDrag({
             accDy: 0,
             descriptors: [],
           };
+          setIsDragging(true);
         } catch (e) {
           console.warn("move-drag:begin failed", e);
         }
@@ -77,12 +82,21 @@ export function useMoveDrag({
         const drag = dragRef.current;
         if (!drag) return;
 
-        const dx = (event.delta_x as number) ?? 0;
-        const dy = (event.delta_y as number) ?? 0;
+        let dx = (event.delta_x as number) ?? 0;
+        let dy = (event.delta_y as number) ?? 0;
         if (dx === 0 && dy === 0) return;
 
         drag.accDx += dx;
         drag.accDy += dy;
+
+        // Shift axis-lock: constrain to dominant axis
+        if (shiftKeyRef?.current) {
+          if (Math.abs(drag.accDx) >= Math.abs(drag.accDy)) {
+            dy = 0;
+          } else {
+            dx = 0;
+          }
+        }
 
         for (const id of drag.nodeIds) {
           try {
@@ -114,6 +128,7 @@ export function useMoveDrag({
         const drag = dragRef.current;
         if (!drag) return;
         dragRef.current = null;
+        setIsDragging(false);
         editor.end_group();
         if (
           collab?.status === "connected" &&
@@ -125,8 +140,8 @@ export function useMoveDrag({
         onSceneChanged();
       }
     },
-    [editorRef, onSceneChanged, collab, activePageId],
+    [editorRef, onSceneChanged, collab, activePageId, shiftKeyRef],
   );
 
-  return { handleDragEvent };
+  return { handleDragEvent, isDragging };
 }

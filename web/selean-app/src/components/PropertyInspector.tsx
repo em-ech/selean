@@ -278,23 +278,11 @@ export function PropertyInspector({
         </Section>
 
         {node.kind === "Frame" && (
-          <Section label="Frame">
-            <Field label="Radius">
-              <NumberInput
-                value={node.corner_radius[0]}
-                min={0}
-                step={1}
-                onCommit={(r) =>
-                  executeCommand({
-                    type: "SetCornerRadius",
-                    node_id: node.id,
-                    corner_radius: [r, r, r, r],
-                  })
-                }
-                suffix="px"
-              />
-            </Field>
-          </Section>
+          <CornerRadiusSection
+            nodeId={node.id}
+            cornerRadius={node.corner_radius}
+            executeCommand={executeCommand}
+          />
         )}
 
         {node.kind === "Image" && (
@@ -696,6 +684,99 @@ function makeDefaultEffect(effectType: EffectType): Effect {
     };
   }
   return { type: "Blur", radius: 10 };
+}
+
+const CORNER_LABELS = ["TL", "TR", "BR", "BL"] as const;
+
+function CornerRadiusSection({
+  nodeId,
+  cornerRadius,
+  executeCommand,
+}: {
+  nodeId: string;
+  cornerRadius: [number, number, number, number];
+  executeCommand: (command: Record<string, unknown>) => void;
+}) {
+  const [perCorner, setPerCorner] = useState(
+    () => !cornerRadius.every((r) => r === cornerRadius[0]),
+  );
+
+  const allSame = cornerRadius.every((r) => r === cornerRadius[0]);
+
+  return (
+    <Section label="Frame">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 6,
+        }}
+      >
+        <span style={fieldLabelStyle}>Radius</span>
+        <label
+          style={{
+            fontSize: fontSizes.xs,
+            color: colors.textDim,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={perCorner}
+            onChange={(e) => setPerCorner(e.target.checked)}
+          />
+          Per corner
+        </label>
+      </div>
+      {perCorner ? (
+        <div
+          style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}
+        >
+          {CORNER_LABELS.map((label, i) => (
+            <Field key={label} label={label}>
+              <NumberInput
+                value={cornerRadius[i]}
+                min={0}
+                step={1}
+                onCommit={(r) => {
+                  const updated: [number, number, number, number] = [
+                    ...cornerRadius,
+                  ];
+                  updated[i] = r;
+                  executeCommand({
+                    type: "SetCornerRadius",
+                    node_id: nodeId,
+                    corner_radius: updated,
+                  });
+                }}
+                suffix="px"
+              />
+            </Field>
+          ))}
+        </div>
+      ) : (
+        <Field label="All">
+          <NumberInput
+            value={allSame ? cornerRadius[0] : 0}
+            min={0}
+            step={1}
+            onCommit={(r) =>
+              executeCommand({
+                type: "SetCornerRadius",
+                node_id: nodeId,
+                corner_radius: [r, r, r, r],
+              })
+            }
+            suffix="px"
+          />
+        </Field>
+      )}
+    </Section>
+  );
 }
 
 function EffectsSection({

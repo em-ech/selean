@@ -8,6 +8,7 @@
 export interface SeleanEditor {
   resize(width: number, height: number): void;
   render(): void;
+  /** Returns InteractionEvent[] directly (typed, not JSON string). */
   on_pointer_move(
     x: number,
     y: number,
@@ -15,7 +16,8 @@ export interface SeleanEditor {
     ctrl: boolean,
     alt: boolean,
     meta: boolean,
-  ): string;
+  ): InteractionEvent[];
+  /** Returns InteractionEvent[] directly (typed, not JSON string). */
   on_pointer_down(
     x: number,
     y: number,
@@ -24,7 +26,8 @@ export interface SeleanEditor {
     ctrl: boolean,
     alt: boolean,
     meta: boolean,
-  ): string;
+  ): InteractionEvent[];
+  /** Returns InteractionEvent[] directly (typed, not JSON string). */
   on_pointer_up(
     x: number,
     y: number,
@@ -33,7 +36,8 @@ export interface SeleanEditor {
     ctrl: boolean,
     alt: boolean,
     meta: boolean,
-  ): string;
+  ): InteractionEvent[];
+  /** Returns InteractionEvent[] directly (typed, not JSON string). */
   on_scroll(
     x: number,
     y: number,
@@ -43,12 +47,13 @@ export interface SeleanEditor {
     ctrl: boolean,
     alt: boolean,
     meta: boolean,
-  ): string;
+  ): InteractionEvent[];
   execute_command(json: string): boolean;
   undo(): boolean;
   redo(): boolean;
   get_node_json(nodeId: string): string;
-  get_selected_ids(): string;
+  /** Returns string[] directly (typed, not JSON string). */
+  get_selected_ids(): string[];
   get_scene_json(): string;
   execute_tool_call(tool_name: string, args_json: string): string;
   active_page_id(): string;
@@ -58,11 +63,17 @@ export interface SeleanEditor {
   set_active_page(pageId: string): boolean;
   add_page(name: string, width: number, height: number): string;
   remove_page(pageId: string): boolean;
+  rename_page(pageId: string, name: string): boolean;
+  duplicate_page(pageId: string): string;
+  reorder_pages(pageIdsJson: string): boolean;
+  resize_page(pageId: string, width: number, height: number): boolean;
   get_scene_tree_json(): string;
   import_document(json: string): boolean;
   export_document_json(): string;
-  get_selected_bounds_json(): string;
-  get_camera_json(): string;
+  /** Returns SelectionBounds[] directly (typed, not JSON string). */
+  get_selected_bounds(): SelectionBounds[];
+  /** Returns CameraInfo directly (typed, not JSON string). */
+  get_camera(): CameraInfo;
   clear_selection(): void;
   select_node_by_id(node_id: string): boolean;
   register_image_asset(asset_ref: string, data: Uint8Array): boolean;
@@ -90,6 +101,9 @@ export interface SeleanEditor {
   generate_project_json(): string;
   extract_design_tokens_json(): string;
 }
+
+/** InteractionEvent from the WASM input handler (internally tagged via serde `tag = "type"`) */
+export type InteractionEvent = { type: string; [key: string]: unknown };
 
 /** Bounding box of a selected node in world space */
 export interface SelectionBounds {

@@ -77,15 +77,10 @@ export function Canvas({
   }, [canvasId, editorRef, status]);
 
   const emitEvents = useCallback(
-    (json: string) => {
+    (events: InteractionEvent[]) => {
       if (!onInteractionEvents) return;
-      try {
-        const events: InteractionEvent[] = JSON.parse(json);
-        if (events.length > 0) {
-          onInteractionEvents(events);
-        }
-      } catch (e) {
-        console.warn("canvas:interaction-event-parse failed", e);
+      if (events && events.length > 0) {
+        onInteractionEvents(events);
       }
     },
     [onInteractionEvents],
@@ -98,7 +93,7 @@ export function Canvas({
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      const json = editor.on_pointer_move(
+      const events = editor.on_pointer_move(
         x,
         y,
         e.shiftKey,
@@ -106,7 +101,7 @@ export function Canvas({
         e.altKey,
         e.metaKey,
       );
-      emitEvents(json);
+      emitEvents(events);
     },
     [editorRef, emitEvents],
   );
@@ -118,7 +113,7 @@ export function Canvas({
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      const json = editor.on_pointer_down(
+      const events = editor.on_pointer_down(
         x,
         y,
         e.button,
@@ -127,7 +122,7 @@ export function Canvas({
         e.altKey,
         e.metaKey,
       );
-      emitEvents(json);
+      emitEvents(events);
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     },
     [editorRef, emitEvents],
@@ -140,7 +135,7 @@ export function Canvas({
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      const json = editor.on_pointer_up(
+      const events = editor.on_pointer_up(
         x,
         y,
         e.button,
@@ -149,7 +144,7 @@ export function Canvas({
         e.altKey,
         e.metaKey,
       );
-      emitEvents(json);
+      emitEvents(events);
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     },
     [editorRef, emitEvents],
@@ -163,7 +158,7 @@ export function Canvas({
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const x = (e.clientX - rect.left) * devicePixelRatio;
       const y = (e.clientY - rect.top) * devicePixelRatio;
-      const json = editor.on_scroll(
+      const events = editor.on_scroll(
         x,
         y,
         e.deltaX,
@@ -173,7 +168,7 @@ export function Canvas({
         e.altKey,
         e.metaKey,
       );
-      emitEvents(json);
+      emitEvents(events);
     },
     [editorRef, emitEvents],
   );

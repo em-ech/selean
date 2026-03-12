@@ -39,7 +39,7 @@ export function InlineTextEditor({
     if (!editor) return;
 
     try {
-      const camera: CameraInfo = JSON.parse(editor.get_camera_json());
+      const camera: CameraInfo = editor.get_camera();
       const dpr = window.devicePixelRatio || 1;
       const zoom = camera.zoom;
 

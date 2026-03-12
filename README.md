@@ -97,13 +97,13 @@ The `SceneGraph` owns all `SceneNode` instances in a `HashMap<NodeId, SceneNode>
 
 ### Import/Export
 
-| Format | Import | Export |
-|--------|--------|--------|
-| PowerPoint (.pptx) | Yes | Yes |
-| InDesign (.idml) | Yes | Yes |
-| InDesign (.indd) | Yes (via InDesign Server) | -- |
-| Figma (REST API) | Yes | Yes (interchange format) |
-| Native Selean | Yes | Yes |
+| Format             | Import                    | Export                   |
+| ------------------ | ------------------------- | ------------------------ |
+| PowerPoint (.pptx) | Yes                       | Yes                      |
+| InDesign (.idml)   | Yes                       | Yes                      |
+| InDesign (.indd)   | Yes (via InDesign Server) | --                       |
+| Figma (REST API)   | Yes                       | Yes (interchange format) |
+| Native Selean      | Yes                       | Yes                      |
 
 ### Design-to-Code
 
@@ -213,17 +213,17 @@ docker compose up
 
 ### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | For SaaS features | PostgreSQL connection string |
-| `JWT_SECRET` | For auth | Secret for JWT signing |
-| `ANTHROPIC_API_KEY` | For AI chat | Anthropic API key |
-| `GITHUB_CLIENT_ID` | For GitHub integration | GitHub OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | For GitHub integration | GitHub OAuth App client secret |
-| `S3_BUCKET` | For cloud storage | S3/R2/MinIO bucket name |
-| `FIGMA_ACCESS_TOKEN` | For Figma import | Figma personal access token |
-| `INDESIGN_SERVER_URL` | For .indd import | InDesign Server URL |
-| `ALLOWED_ORIGINS` | For CORS | Comma-separated allowed origins |
+| Variable               | Required               | Description                     |
+| ---------------------- | ---------------------- | ------------------------------- |
+| `DATABASE_URL`         | For SaaS features      | PostgreSQL connection string    |
+| `JWT_SECRET`           | For auth               | Secret for JWT signing          |
+| `ANTHROPIC_API_KEY`    | For AI chat            | Anthropic API key               |
+| `GITHUB_CLIENT_ID`     | For GitHub integration | GitHub OAuth App client ID      |
+| `GITHUB_CLIENT_SECRET` | For GitHub integration | GitHub OAuth App client secret  |
+| `S3_BUCKET`            | For cloud storage      | S3/R2/MinIO bucket name         |
+| `FIGMA_ACCESS_TOKEN`   | For Figma import       | Figma personal access token     |
+| `INDESIGN_SERVER_URL`  | For .indd import       | InDesign Server URL             |
+| `ALLOWED_ORIGINS`      | For CORS               | Comma-separated allowed origins |
 
 See [.env.example](.env.example) for the full list.
 

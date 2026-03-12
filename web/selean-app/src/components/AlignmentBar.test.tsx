@@ -13,9 +13,9 @@ describe("AlignmentBar", () => {
         onSceneChanged={() => {}}
       />,
     );
-    expect(screen.getByTitle("Left")).toBeInTheDocument();
-    expect(screen.getByTitle("Right")).toBeInTheDocument();
-    expect(screen.getByTitle("DistributeH")).toBeInTheDocument();
+    expect(screen.getByTitle("Align left edges")).toBeInTheDocument();
+    expect(screen.getByTitle("Align right edges")).toBeInTheDocument();
+    expect(screen.getByTitle("Distribute horizontally")).toBeInTheDocument();
   });
 
   it("hidden when fewer than 2 nodes selected", () => {
@@ -41,7 +41,7 @@ describe("AlignmentBar", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("Left"));
+    fireEvent.click(screen.getByTitle("Align left edges"));
 
     expect(ref.current.align_nodes).toHaveBeenCalledWith(
       JSON.stringify(["id-1", "id-2"]),
@@ -71,17 +71,17 @@ describe("AlignmentBar", () => {
         onSceneChanged={() => {}}
       />,
     );
-    for (const kind of [
-      "Left",
-      "CenterH",
-      "Right",
-      "Top",
-      "CenterV",
-      "Bottom",
-      "DistributeH",
-      "DistributeV",
+    for (const title of [
+      "Align left edges",
+      "Align horizontal centers",
+      "Align right edges",
+      "Align top edges",
+      "Align vertical centers",
+      "Align bottom edges",
+      "Distribute horizontally",
+      "Distribute vertically",
     ]) {
-      expect(screen.getByTitle(kind)).toBeInTheDocument();
+      expect(screen.getByTitle(title)).toBeInTheDocument();
     }
   });
 
@@ -95,7 +95,7 @@ describe("AlignmentBar", () => {
       />,
     );
     // Should not throw on click
-    fireEvent.click(screen.getByTitle("Left"));
+    fireEvent.click(screen.getByTitle("Align left edges"));
   });
 
   it("passes correct kind for each alignment button", () => {
@@ -109,7 +109,7 @@ describe("AlignmentBar", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("DistributeV"));
+    fireEvent.click(screen.getByTitle("Distribute vertically"));
     expect(ref.current.align_nodes).toHaveBeenCalledWith(
       JSON.stringify(["a", "b"]),
       "DistributeV",

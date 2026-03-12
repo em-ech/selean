@@ -86,6 +86,7 @@ pub enum InputEvent {
 
 /// Semantic interaction produced by [`super::InputHandler`] after processing raw events.
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
 pub enum InteractionEvent {
     /// Hover target changed. `old` is `None` if nothing was hovered before.
     HoverChanged {

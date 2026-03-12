@@ -143,6 +143,76 @@ impl Document {
     pub fn page_count(&self) -> usize {
         self.pages.len()
     }
+
+    /// Renames a page by ID.
+    ///
+    /// Returns `false` if the page was not found.
+    pub fn rename_page(&mut self, id: PageId, name: impl Into<String>) -> bool {
+        if let Some(page) = self.page_mut(id) {
+            page.name = name.into();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Duplicates a page by ID, appending the clone immediately after the original.
+    ///
+    /// The cloned page gets a new `PageId` and " Copy" appended to its name.
+    /// Returns the new page's ID, or `None` if the source page was not found.
+    pub fn duplicate_page(&mut self, id: PageId) -> Option<PageId> {
+        let index = self.pages.iter().position(|p| p.id == id)?;
+        let mut cloned = self.pages[index].clone();
+        let new_id = PageId::new();
+        cloned.id = new_id;
+        cloned.name = format!("{} Copy", cloned.name);
+        self.pages.insert(index + 1, cloned);
+        // If the active page was after the insertion point, bump it.
+        if self.active_page_index > index {
+            self.active_page_index += 1;
+        }
+        Some(new_id)
+    }
+
+    /// Reorders pages to match the given ID sequence.
+    ///
+    /// `new_order` must be a permutation of the current page IDs.
+    /// Returns `false` if the order is invalid.
+    pub fn reorder_pages(&mut self, new_order: &[PageId]) -> bool {
+        if new_order.len() != self.pages.len() {
+            return false;
+        }
+        // Build reordered vec, preserving the active page.
+        let active_id = self.pages[self.active_page_index].id;
+        let mut reordered = Vec::with_capacity(self.pages.len());
+        for &id in new_order {
+            let Some(pos) = self.pages.iter().position(|p| p.id == id) else {
+                return false;
+            };
+            reordered.push(self.pages[pos].clone());
+        }
+        self.pages = reordered;
+        // Restore active page index.
+        self.active_page_index = self
+            .pages
+            .iter()
+            .position(|p| p.id == active_id)
+            .unwrap_or(0);
+        true
+    }
+
+    /// Resizes a page's dimensions by ID.
+    ///
+    /// Returns `false` if the page was not found.
+    pub fn resize_page(&mut self, id: PageId, width: f32, height: f32) -> bool {
+        if let Some(page) = self.page_mut(id) {
+            page.width = width;
+            page.height = height;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl std::fmt::Debug for Document {
@@ -287,5 +357,127 @@ mod tests {
         let id = doc.active_page().id;
         assert!(!doc.add_page_with_id(id, "Dup", 100.0, 100.0));
         assert_eq!(doc.page_count(), 1);
+    }
+
+    // --- rename_page ---
+
+    #[test]
+    fn rename_page_success() {
+        let mut doc = Document::new();
+        let id = doc.active_page().id;
+        assert!(doc.rename_page(id, "New Name"));
+        assert_eq!(doc.active_page().name, "New Name");
+    }
+
+    #[test]
+    fn rename_page_not_found() {
+        let mut doc = Document::new();
+        assert!(!doc.rename_page(PageId::new(), "Nope"));
+    }
+
+    // --- duplicate_page ---
+
+    #[test]
+    fn duplicate_page_copies_scene() {
+        let mut doc = Document::new();
+        let id = doc.active_page().id;
+        doc.active_page_mut()
+            .scene
+            .add_root(crate::scene::SceneNode::new(
+                selean_common::types::NodeId::new(),
+                "A".to_string(),
+                crate::scene::SceneNodeKind::Frame {
+                    corner_radius: [0.0; 4],
+                },
+                crate::scene::BoundingBox::new(0.0, 0.0, 50.0, 50.0),
+            ));
+        let new_id = doc.duplicate_page(id).unwrap();
+        assert_ne!(new_id, id);
+        assert_eq!(doc.page_count(), 2);
+        let cloned = doc.page(new_id).unwrap();
+        assert_eq!(cloned.name, "Page 1 Copy");
+        assert_eq!(cloned.scene.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_page_independent() {
+        let mut doc = Document::new();
+        let id = doc.active_page().id;
+        let new_id = doc.duplicate_page(id).unwrap();
+        // Mutate clone, verify original is unchanged.
+        doc.page_mut(new_id).unwrap().name = "Changed".to_string();
+        assert_eq!(doc.page(id).unwrap().name, "Page 1");
+    }
+
+    #[test]
+    fn duplicate_page_not_found() {
+        let mut doc = Document::new();
+        assert!(doc.duplicate_page(PageId::new()).is_none());
+    }
+
+    #[test]
+    fn duplicate_page_inserts_after_original() {
+        let mut doc = Document::new();
+        let id1 = doc.active_page().id;
+        let _id2 = doc.add_page("Page 2", 800.0, 600.0);
+        let new_id = doc.duplicate_page(id1).unwrap();
+        // Should be at index 1 (after original at 0, before Page 2).
+        assert_eq!(doc.pages()[0].id, id1);
+        assert_eq!(doc.pages()[1].id, new_id);
+    }
+
+    // --- reorder_pages ---
+
+    #[test]
+    fn reorder_pages_valid() {
+        let mut doc = Document::new();
+        let id1 = doc.active_page().id;
+        let id2 = doc.add_page("Page 2", 800.0, 600.0);
+        let id3 = doc.add_page("Page 3", 800.0, 600.0);
+        assert!(doc.reorder_pages(&[id3, id1, id2]));
+        assert_eq!(doc.pages()[0].id, id3);
+        assert_eq!(doc.pages()[1].id, id1);
+        assert_eq!(doc.pages()[2].id, id2);
+    }
+
+    #[test]
+    fn reorder_pages_preserves_active() {
+        let mut doc = Document::new();
+        let id1 = doc.active_page().id;
+        let id2 = doc.add_page("Page 2", 800.0, 600.0);
+        doc.set_active_page(id2);
+        assert!(doc.reorder_pages(&[id2, id1]));
+        assert_eq!(doc.active_page().id, id2);
+        assert_eq!(doc.active_page_index(), 0);
+    }
+
+    #[test]
+    fn reorder_pages_invalid_length() {
+        let mut doc = Document::new();
+        assert!(!doc.reorder_pages(&[]));
+    }
+
+    #[test]
+    fn reorder_pages_invalid_ids() {
+        let mut doc = Document::new();
+        let _id1 = doc.active_page().id;
+        assert!(!doc.reorder_pages(&[PageId::new()]));
+    }
+
+    // --- resize_page ---
+
+    #[test]
+    fn resize_page_success() {
+        let mut doc = Document::new();
+        let id = doc.active_page().id;
+        assert!(doc.resize_page(id, 800.0, 600.0));
+        assert_eq!(doc.active_page().width, 800.0);
+        assert_eq!(doc.active_page().height, 600.0);
+    }
+
+    #[test]
+    fn resize_page_not_found() {
+        let mut doc = Document::new();
+        assert!(!doc.resize_page(PageId::new(), 800.0, 600.0));
     }
 }

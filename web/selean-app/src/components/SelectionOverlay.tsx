@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CameraInfo, SelectionBounds, SeleanEditor } from "../wasm/types";
 import { useResizeDrag } from "../hooks/useResizeDrag";
+import { useRotationDrag } from "../hooks/useRotationDrag";
 import { worldToScreen, worldDimsToScreen } from "../utils/camera";
 
 interface SelectionOverlayProps {
@@ -12,6 +13,10 @@ interface SelectionOverlayProps {
 const HANDLE_SIZE = 8;
 /** Selection box border color. */
 const SELECTION_COLOR = "#4a90d9";
+/** Rotation handle offset above the top edge (CSS px). */
+const ROTATION_HANDLE_OFFSET = 24;
+/** Rotation handle size in CSS pixels. */
+const ROTATION_HANDLE_SIZE = 10;
 
 /** Cursor style per handle index. */
 const HANDLE_CURSORS: string[] = [
@@ -26,8 +31,9 @@ const HANDLE_CURSORS: string[] = [
 ];
 
 /**
- * HTML overlay that renders selection bounding boxes and resize handles
- * on top of the WebGPU canvas. Updates on every animation frame.
+ * HTML overlay that renders selection bounding boxes, resize handles,
+ * and a rotation handle on top of the WebGPU canvas.
+ * Updates on every animation frame.
  */
 export function SelectionOverlay({
   editorRef,
@@ -44,15 +50,20 @@ export function SelectionOverlay({
     onSceneChanged,
   });
 
+  const { rotationHandleProps, isRotating } = useRotationDrag({
+    editorRef,
+    bounds,
+    camera,
+    onSceneChanged,
+  });
+
   useEffect(() => {
     function poll() {
       const editor = editorRef.current;
       if (editor) {
         try {
-          const boundsJson = editor.get_selected_bounds_json();
-          const cameraJson = editor.get_camera_json();
-          setBounds(JSON.parse(boundsJson));
-          setCamera(JSON.parse(cameraJson));
+          setBounds(editor.get_selected_bounds());
+          setCamera(editor.get_camera());
         } catch (e) {
           console.warn("selection-overlay:get-bounds failed", e);
         }
@@ -65,6 +76,9 @@ export function SelectionOverlay({
 
   if (!camera || bounds.length === 0) return null;
 
+  // For multi-select, compute union bounding box.
+  const unionBox = bounds.length > 1 ? computeUnionBounds(bounds) : null;
+
   return (
     <div style={overlayStyle}>
       {bounds.map((b, i) => (
@@ -73,9 +87,13 @@ export function SelectionOverlay({
           bounds={b}
           camera={camera}
           getHandleProps={getHandleProps}
+          rotationHandleProps={rotationHandleProps}
           isDragging={isDragging}
+          isRotating={isRotating}
+          showRotationHandle={bounds.length === 1}
         />
       ))}
+      {unionBox && <UnionBox bounds={unionBox} camera={camera} />}
     </div>
   );
 }
@@ -86,14 +104,24 @@ interface SelectionBoxProps {
   getHandleProps: (index: number) => {
     onPointerDown: (e: React.PointerEvent) => void;
   };
+  rotationHandleProps: {
+    onPointerDown: (e: React.PointerEvent) => void;
+    onPointerMove: (e: React.PointerEvent) => void;
+    onPointerUp: (e: React.PointerEvent) => void;
+  };
   isDragging: boolean;
+  isRotating: boolean;
+  showRotationHandle: boolean;
 }
 
 function SelectionBox({
   bounds,
   camera,
   getHandleProps,
+  rotationHandleProps,
   isDragging,
+  isRotating,
+  showRotationHandle,
 }: SelectionBoxProps) {
   const { x: screenX, y: screenY } = worldToScreen(bounds.x, bounds.y, camera);
   const { w: screenW, h: screenH } = worldDimsToScreen(
@@ -103,6 +131,7 @@ function SelectionBox({
   );
 
   const half = HANDLE_SIZE / 2;
+  const interacting = isDragging || isRotating;
 
   const handles = [
     { x: -half, y: -half }, // top-left
@@ -139,14 +168,96 @@ function SelectionBox({
             height: HANDLE_SIZE,
             background: "#fff",
             border: `1px solid ${SELECTION_COLOR}`,
-            pointerEvents: isDragging ? "none" : "auto",
+            pointerEvents: interacting ? "none" : "auto",
             cursor: HANDLE_CURSORS[i],
           }}
           {...getHandleProps(i)}
         />
       ))}
+      {showRotationHandle && (
+        <>
+          {/* Stem line from top-center to rotation handle */}
+          <div
+            style={{
+              position: "absolute",
+              left: screenW / 2,
+              top: -ROTATION_HANDLE_OFFSET,
+              width: 1,
+              height: ROTATION_HANDLE_OFFSET,
+              background: SELECTION_COLOR,
+              pointerEvents: "none",
+            }}
+          />
+          {/* Rotation handle circle */}
+          <div
+            data-testid="rotation-handle"
+            style={{
+              position: "absolute",
+              left: screenW / 2 - ROTATION_HANDLE_SIZE / 2,
+              top: -ROTATION_HANDLE_OFFSET - ROTATION_HANDLE_SIZE / 2,
+              width: ROTATION_HANDLE_SIZE,
+              height: ROTATION_HANDLE_SIZE,
+              borderRadius: "50%",
+              background: "#fff",
+              border: `1.5px solid ${SELECTION_COLOR}`,
+              pointerEvents: interacting ? "none" : "auto",
+              cursor: "grab",
+            }}
+            {...rotationHandleProps}
+          />
+        </>
+      )}
     </div>
   );
+}
+
+function UnionBox({
+  bounds,
+  camera,
+}: {
+  bounds: { x: number; y: number; width: number; height: number };
+  camera: CameraInfo;
+}) {
+  const { x: screenX, y: screenY } = worldToScreen(bounds.x, bounds.y, camera);
+  const { w: screenW, h: screenH } = worldDimsToScreen(
+    bounds.width,
+    bounds.height,
+    camera.zoom,
+  );
+
+  return (
+    <div
+      data-testid="union-box"
+      style={{
+        position: "absolute",
+        left: screenX,
+        top: screenY,
+        width: screenW,
+        height: screenH,
+        border: `1px dashed ${SELECTION_COLOR}`,
+        pointerEvents: "none",
+      }}
+    />
+  );
+}
+
+function computeUnionBounds(bounds: SelectionBounds[]): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  for (const b of bounds) {
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.width);
+    maxY = Math.max(maxY, b.y + b.height);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 const overlayStyle: React.CSSProperties = {

@@ -298,6 +298,76 @@ impl EditorState {
         get_scene_tree_json(self.scene())
     }
 
+    /// Renames a page by ID string. Returns `true` on success.
+    pub fn rename_page(&mut self, page_id: &str, name: &str) -> bool {
+        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+            return false;
+        };
+        let id = selean_common::types::PageId::from_uuid(uuid);
+        self.document.rename_page(id, name)
+    }
+
+    /// Duplicates a page by ID string. Returns the new page's ID, or empty string on failure.
+    pub fn duplicate_page(&mut self, page_id: &str) -> String {
+        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+            return String::new();
+        };
+        let id = selean_common::types::PageId::from_uuid(uuid);
+        match self.document.duplicate_page(id) {
+            Some(new_id) => {
+                // Insert a new CommandHistory at the same position as the cloned page.
+                let new_index = self
+                    .document
+                    .pages()
+                    .iter()
+                    .position(|p| p.id == new_id)
+                    .unwrap_or(self.histories.len());
+                self.histories
+                    .insert(new_index, CommandHistory::new());
+                new_id.to_string()
+            }
+            None => String::new(),
+        }
+    }
+
+    /// Reorders pages by a JSON array of page ID strings. Returns `true` on success.
+    pub fn reorder_pages(&mut self, page_ids_json: &str) -> bool {
+        let Ok(ids_str) = serde_json::from_str::<Vec<String>>(page_ids_json) else {
+            return false;
+        };
+        let ids: Vec<selean_common::types::PageId> = ids_str
+            .iter()
+            .filter_map(|s| uuid::Uuid::parse_str(s).ok())
+            .map(selean_common::types::PageId::from_uuid)
+            .collect();
+        if ids.len() != ids_str.len() {
+            return false;
+        }
+        // Build old-to-new index mapping for histories.
+        let old_pages: Vec<selean_common::types::PageId> =
+            self.document.pages().iter().map(|p| p.id).collect();
+        if !self.document.reorder_pages(&ids) {
+            return false;
+        }
+        // Reorder histories to match.
+        let mut new_histories = Vec::with_capacity(self.histories.len());
+        for &new_id in &ids {
+            let old_idx = old_pages.iter().position(|&id| id == new_id).unwrap();
+            new_histories.push(std::mem::take(&mut self.histories[old_idx]));
+        }
+        self.histories = new_histories;
+        true
+    }
+
+    /// Resizes a page by ID string. Returns `true` on success.
+    pub fn resize_page(&mut self, page_id: &str, width: f32, height: f32) -> bool {
+        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+            return false;
+        };
+        let id = selean_common::types::PageId::from_uuid(uuid);
+        self.document.resize_page(id, width, height)
+    }
+
     /// Returns JSON array of world-space bounds for selected nodes.
     #[must_use]
     pub fn get_selected_bounds_json(&self) -> String {
@@ -1146,6 +1216,7 @@ mod wasm {
         }
 
         /// Handles pointer move events from JavaScript.
+        /// Returns a JS array of `InteractionEvent` objects directly (no JSON string).
         pub fn on_pointer_move(
             &mut self,
             x: f32,
@@ -1154,7 +1225,7 @@ mod wasm {
             ctrl: bool,
             alt: bool,
             meta: bool,
-        ) -> String {
+        ) -> JsValue {
             let event = InputEvent::PointerMove {
                 x,
                 y,
@@ -1165,10 +1236,11 @@ mod wasm {
                 self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
-            serde_json::to_string(&events).unwrap_or_default()
+            serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
         /// Handles pointer down events from JavaScript.
+        /// Returns a JS array of `InteractionEvent` objects directly (no JSON string).
         pub fn on_pointer_down(
             &mut self,
             x: f32,
@@ -1178,7 +1250,7 @@ mod wasm {
             ctrl: bool,
             alt: bool,
             meta: bool,
-        ) -> String {
+        ) -> JsValue {
             let event = InputEvent::PointerDown {
                 x,
                 y,
@@ -1190,10 +1262,11 @@ mod wasm {
                 self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
-            serde_json::to_string(&events).unwrap_or_default()
+            serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
         /// Handles pointer up events from JavaScript.
+        /// Returns a JS array of `InteractionEvent` objects directly (no JSON string).
         pub fn on_pointer_up(
             &mut self,
             x: f32,
@@ -1203,7 +1276,7 @@ mod wasm {
             ctrl: bool,
             alt: bool,
             meta: bool,
-        ) -> String {
+        ) -> JsValue {
             let event = InputEvent::PointerUp {
                 x,
                 y,
@@ -1215,10 +1288,11 @@ mod wasm {
                 self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
-            serde_json::to_string(&events).unwrap_or_default()
+            serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
         /// Handles scroll events from JavaScript.
+        /// Returns a JS array of `InteractionEvent` objects directly (no JSON string).
         pub fn on_scroll(
             &mut self,
             x: f32,
@@ -1229,7 +1303,7 @@ mod wasm {
             ctrl: bool,
             alt: bool,
             meta: bool,
-        ) -> String {
+        ) -> JsValue {
             let event = InputEvent::ScrollDelta {
                 x,
                 y,
@@ -1242,7 +1316,7 @@ mod wasm {
                 self.state.scene_mut(),
                 self.renderer.camera_mut(),
             );
-            serde_json::to_string(&events).unwrap_or_default()
+            serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
         /// Executes a command from a JSON descriptor string.
@@ -1265,9 +1339,18 @@ mod wasm {
             self.state.get_node_json(node_id)
         }
 
-        /// Returns JSON array of selected node IDs.
-        pub fn get_selected_ids(&self) -> String {
-            self.state.get_selected_ids()
+        /// Returns a JS array of selected node ID strings directly.
+        pub fn get_selected_ids(&self) -> JsValue {
+            let ids: Vec<String> = self
+                .state
+                .input
+                .state()
+                .selection
+                .ids()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            serde_wasm_bindgen::to_value(&ids).unwrap_or(JsValue::NULL)
         }
 
         /// Returns JSON representation of the full scene.
@@ -1316,6 +1399,26 @@ mod wasm {
             self.state.remove_page(page_id)
         }
 
+        /// Renames a page by ID.
+        pub fn rename_page(&mut self, page_id: &str, name: &str) -> bool {
+            self.state.rename_page(page_id, name)
+        }
+
+        /// Duplicates a page by ID. Returns the new page's ID, or empty string on failure.
+        pub fn duplicate_page(&mut self, page_id: &str) -> String {
+            self.state.duplicate_page(page_id)
+        }
+
+        /// Reorders pages by a JSON array of page ID strings.
+        pub fn reorder_pages(&mut self, page_ids_json: &str) -> bool {
+            self.state.reorder_pages(page_ids_json)
+        }
+
+        /// Resizes a page by ID.
+        pub fn resize_page(&mut self, page_id: &str, width: f32, height: f32) -> bool {
+            self.state.resize_page(page_id, width, height)
+        }
+
         /// Returns the scene tree as JSON.
         pub fn get_scene_tree_json(&self) -> String {
             self.state.get_scene_tree_json()
@@ -1331,14 +1434,19 @@ mod wasm {
             self.state.export_document_json()
         }
 
-        /// Returns JSON array of world-space bounds for selected nodes.
-        pub fn get_selected_bounds_json(&self) -> String {
-            self.state.get_selected_bounds_json()
+        /// Returns a JS array of world-space bounds for selected nodes directly.
+        pub fn get_selected_bounds(&self) -> JsValue {
+            let bounds = crate::queries::get_selected_bounds(
+                self.state.scene(),
+                self.state.input.state().selection.ids(),
+            );
+            serde_wasm_bindgen::to_value(&bounds).unwrap_or(JsValue::NULL)
         }
 
-        /// Returns JSON camera state (pan, zoom, viewport).
-        pub fn get_camera_json(&self) -> String {
-            crate::queries::get_camera_json(self.renderer.camera())
+        /// Returns camera state as a JS object (pan, zoom, viewport).
+        pub fn get_camera(&self) -> JsValue {
+            let info = crate::queries::get_camera_info(self.renderer.camera());
+            serde_wasm_bindgen::to_value(&info).unwrap_or(JsValue::NULL)
         }
 
         /// Clears the current selection.

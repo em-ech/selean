@@ -54,7 +54,7 @@ describe("useMoveDrag", () => {
 
   it("begins a group on DragStarted with selected nodes", () => {
     const { editor, result } = setup({
-      get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
     });
 
@@ -67,7 +67,7 @@ describe("useMoveDrag", () => {
 
   it("does not begin group when no nodes selected", () => {
     const { editor, result } = setup({
-      get_selected_ids: vi.fn().mockReturnValue("[]"),
+      get_selected_ids: vi.fn().mockReturnValue([]),
     });
 
     act(() => {
@@ -79,7 +79,7 @@ describe("useMoveDrag", () => {
 
   it("moves a single node on DragMoved", () => {
     const { editor, result, onSceneChanged } = setup({
-      get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
     });
 
@@ -103,9 +103,7 @@ describe("useMoveDrag", () => {
 
   it("moves multiple selected nodes on DragMoved", () => {
     const { editor, result } = setup({
-      get_selected_ids: vi
-        .fn()
-        .mockReturnValue(JSON.stringify(["node-1", "node-2"])),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1", "node-2"]),
       get_node_json: vi.fn().mockImplementation((id: string) => {
         if (id === "node-1") return JSON.stringify(node1);
         if (id === "node-2") return JSON.stringify(node2);
@@ -130,7 +128,7 @@ describe("useMoveDrag", () => {
 
   it("skips zero-delta DragMoved", () => {
     const { editor, result, onSceneChanged } = setup({
-      get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
     });
 
@@ -152,7 +150,7 @@ describe("useMoveDrag", () => {
 
   it("ends group on DragEnded", () => {
     const { editor, result, onSceneChanged } = setup({
-      get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
     });
 
@@ -196,7 +194,7 @@ describe("useMoveDrag", () => {
 
   it("handles missing node gracefully during DragMoved", () => {
     const { editor, result } = setup({
-      get_selected_ids: vi.fn().mockReturnValue(JSON.stringify(["node-1"])),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue("null"),
     });
 
@@ -239,5 +237,64 @@ describe("useMoveDrag", () => {
     });
 
     expect(onSceneChanged).not.toHaveBeenCalled();
+  });
+
+  it("isDragging is true during drag and false after", () => {
+    const editor = createMockEditor({
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
+      get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
+    });
+    const editorRef = { current: editor };
+    const onSceneChanged = vi.fn();
+    const { result } = renderHook(() =>
+      useMoveDrag({ editorRef, onSceneChanged }),
+    );
+
+    expect(result.current.isDragging).toBe(false);
+
+    act(() => {
+      result.current.handleDragEvent({ type: "DragStarted" });
+    });
+    expect(result.current.isDragging).toBe(true);
+
+    act(() => {
+      result.current.handleDragEvent({ type: "DragEnded" });
+    });
+    expect(result.current.isDragging).toBe(false);
+  });
+
+  it("shift axis-lock constrains to dominant axis", () => {
+    const editor = createMockEditor({
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
+      get_node_json: vi.fn().mockReturnValue(JSON.stringify(node1)),
+    });
+    const editorRef = { current: editor };
+    const onSceneChanged = vi.fn();
+    const shiftKeyRef = { current: true };
+    const { result } = renderHook(() =>
+      useMoveDrag({ editorRef, onSceneChanged, shiftKeyRef }),
+    );
+
+    act(() => {
+      result.current.handleDragEvent({ type: "DragStarted" });
+    });
+
+    // Move mostly horizontal (dx=20, dy=5) with shift held
+    act(() => {
+      result.current.handleDragEvent({
+        type: "DragMoved",
+        delta_x: 20,
+        delta_y: 5,
+      });
+    });
+
+    // With shift held and accDx > accDy, dy should be zeroed.
+    // So x should change by 20, y should stay at 200 (original).
+    const calls = (editor.execute_command as ReturnType<typeof vi.fn>).mock
+      .calls;
+    expect(calls.length).toBe(1);
+    const cmd = JSON.parse(calls[0][0]);
+    expect(cmd.bounds.x).toBe(120); // 100 + 20
+    expect(cmd.bounds.y).toBe(200); // unchanged (dy zeroed)
   });
 });

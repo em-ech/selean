@@ -15,7 +15,7 @@ describe("useSelection", () => {
 
   it("returns null when no node is selected after refresh", () => {
     const editor = createMockEditor({
-      get_selected_ids: vi.fn().mockReturnValue("[]"),
+      get_selected_ids: vi.fn().mockReturnValue([]),
     });
     const ref = { current: editor };
     const { result } = renderHook(() => useSelection(ref, true));
@@ -31,7 +31,7 @@ describe("useSelection", () => {
   it("returns NodeInfo when a node is selected", () => {
     const node = makeNodeInfo({ id: "abc", name: "Selected" });
     const editor = createMockEditor({
-      get_selected_ids: vi.fn().mockReturnValue('["abc"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["abc"]),
       get_node_json: vi.fn().mockReturnValue(JSON.stringify(node)),
     });
     const ref = { current: editor };
@@ -51,7 +51,7 @@ describe("useSelection", () => {
     let callCount = 0;
     const getSelectedIds = vi.fn().mockImplementation(() => {
       callCount++;
-      return callCount <= 1 ? '["abc"]' : "[]";
+      return callCount <= 1 ? ["abc"] : [];
     });
     const editor = createMockEditor({
       get_selected_ids: getSelectedIds,
@@ -81,7 +81,7 @@ describe("useSelection", () => {
       .mockReturnValueOnce(JSON.stringify(node1))
       .mockReturnValue(JSON.stringify(node2));
     const editor = createMockEditor({
-      get_selected_ids: vi.fn().mockReturnValue('["abc"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["abc"]),
       get_node_json: getNodeJson,
     });
     const ref = { current: editor };
@@ -140,7 +140,7 @@ describe("useSelection", () => {
 
   it("returns selectedIds array", () => {
     const editor = createMockEditor({
-      get_selected_ids: vi.fn().mockReturnValue('["a","b","c"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["a", "b", "c"]),
       get_node_json: vi
         .fn()
         .mockReturnValue(JSON.stringify(makeNodeInfo({ id: "a" }))),
@@ -157,7 +157,7 @@ describe("useSelection", () => {
 
   it("handles get_node_json returning 'null'", () => {
     const editor = createMockEditor({
-      get_selected_ids: vi.fn().mockReturnValue('["deleted-node"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["deleted-node"]),
       get_node_json: vi.fn().mockReturnValue("null"),
     });
     const ref = { current: editor };

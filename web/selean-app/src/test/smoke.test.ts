@@ -4,7 +4,7 @@ import { createMockEditor, makeNodeInfo } from "./mock-editor";
 describe("test infrastructure", () => {
   it("creates a mock editor with all methods", () => {
     const editor = createMockEditor();
-    expect(editor.get_selected_ids()).toBe("[]");
+    expect(editor.get_selected_ids()).toEqual([]);
     expect(editor.can_undo()).toBe(false);
     expect(editor.can_redo()).toBe(false);
   });

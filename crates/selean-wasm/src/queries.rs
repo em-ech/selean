@@ -370,6 +370,24 @@ pub struct SelectionBounds {
     pub height: f32,
 }
 
+/// Returns world-space bounds for each selected node as a `Vec`.
+pub fn get_selected_bounds(scene: &SceneGraph, selected_ids: &[NodeId]) -> Vec<SelectionBounds> {
+    selected_ids
+        .iter()
+        .filter_map(|&id| scene.get(id))
+        .map(|node| {
+            let world_bb = node.world_transform.transform_aabb(&node.bounds);
+            SelectionBounds {
+                node_id: node.id.to_string(),
+                x: world_bb.x,
+                y: world_bb.y,
+                width: world_bb.width,
+                height: world_bb.height,
+            }
+        })
+        .collect()
+}
+
 /// Returns JSON array of world-space bounds for each selected node.
 pub fn get_selected_bounds_json(scene: &SceneGraph, selected_ids: &[NodeId]) -> String {
     let bounds: Vec<SelectionBounds> = selected_ids
@@ -402,6 +420,19 @@ pub struct CameraInfo {
     pub viewport_width: f32,
     /// Viewport height.
     pub viewport_height: f32,
+}
+
+/// Returns camera info as a struct (for typed WASM returns).
+pub fn get_camera_info(camera: &Camera) -> CameraInfo {
+    let (pan_x, pan_y) = camera.pan();
+    let (viewport_width, viewport_height) = camera.viewport_size();
+    CameraInfo {
+        pan_x,
+        pan_y,
+        zoom: camera.zoom(),
+        viewport_width,
+        viewport_height,
+    }
 }
 
 /// Returns JSON representation of the camera state.

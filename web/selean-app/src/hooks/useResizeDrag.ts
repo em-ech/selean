@@ -11,6 +11,8 @@ interface DragState {
   originalBounds: { x: number; y: number; width: number; height: number };
   startClientX: number;
   startClientY: number;
+  /** Original aspect ratio (width / height) for shift-constrained resize. */
+  aspectRatio: number;
   /** Descriptors applied during this resize, for collab group submission. */
   descriptors: Record<string, unknown>[];
 }
@@ -62,6 +64,7 @@ export function useResizeDrag({
         originalBounds: { x: b.x, y: b.y, width: b.width, height: b.height },
         startClientX: e.clientX,
         startClientY: e.clientY,
+        aspectRatio: b.width / b.height,
         descriptors: [],
       };
       setIsDragging(true);
@@ -103,6 +106,7 @@ export function useResizeDrag({
         height,
         worldDx,
         worldDy,
+        e.shiftKey,
       );
 
       const descriptor = {
@@ -172,11 +176,9 @@ export function computeResizedBounds(
   origH: number,
   dx: number,
   dy: number,
+  shiftKey: boolean = false,
 ): { x: number; y: number; width: number; height: number } {
-  let x = origX;
-  let y = origY;
-  let w = origW;
-  let h = origH;
+  const aspectRatio = origW / origH;
 
   // Which edges this handle moves.
   const movesLeft = handleIndex === 0 || handleIndex === 6 || handleIndex === 7;
@@ -186,22 +188,100 @@ export function computeResizedBounds(
   const movesBottom =
     handleIndex === 4 || handleIndex === 5 || handleIndex === 6;
 
+  const isCorner =
+    handleIndex === 0 ||
+    handleIndex === 2 ||
+    handleIndex === 4 ||
+    handleIndex === 6;
+  const isEdge =
+    handleIndex === 1 ||
+    handleIndex === 3 ||
+    handleIndex === 5 ||
+    handleIndex === 7;
+
+  let adjDx = dx;
+  let adjDy = dy;
+
+  if (shiftKey) {
+    if (isCorner) {
+      // Use the larger delta (scaled by aspect ratio) to drive both dimensions.
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy) * aspectRatio;
+      if (absDx >= absDy) {
+        // dx dominates: derive dy from dx.
+        // For top-left (0) and bottom-right (4), both deltas share the same
+        // sign. For top-right (2) and bottom-left (6), they are inverted.
+        adjDy = dx / aspectRatio;
+        if ((movesTop && movesRight) || (movesBottom && movesLeft)) {
+          adjDy = -adjDy;
+        }
+      } else {
+        // dy dominates: derive dx from dy.
+        adjDx = dy * aspectRatio;
+        if ((movesTop && movesRight) || (movesBottom && movesLeft)) {
+          adjDx = -adjDx;
+        }
+      }
+    } else if (isEdge) {
+      // Edge handles: scale the other dimension proportionally.
+      if (handleIndex === 1 || handleIndex === 5) {
+        // Top or bottom edge: dy is primary, derive dx.
+        adjDx = dy * aspectRatio;
+        // Center the horizontal change: split evenly on both sides.
+        // We handle this after computing w/h below.
+      } else {
+        // Left or right edge: dx is primary, derive dy.
+        adjDy = dx / aspectRatio;
+      }
+    }
+  }
+
+  let x = origX;
+  let y = origY;
+  let w = origW;
+  let h = origH;
+
   if (movesLeft) {
     const maxShift = w - MIN_SIZE;
-    const shift = Math.min(dx, maxShift);
+    const shift = Math.min(adjDx, maxShift);
     x = origX + shift;
     w = origW - shift;
   } else if (movesRight) {
-    w = Math.max(origW + dx, MIN_SIZE);
+    w = Math.max(origW + adjDx, MIN_SIZE);
   }
 
   if (movesTop) {
     const maxShift = h - MIN_SIZE;
-    const shift = Math.min(dy, maxShift);
+    const shift = Math.min(adjDy, maxShift);
     y = origY + shift;
     h = origH - shift;
   } else if (movesBottom) {
-    h = Math.max(origH + dy, MIN_SIZE);
+    h = Math.max(origH + adjDy, MIN_SIZE);
+  }
+
+  // For shift-constrained edge handles, apply the proportional other dimension.
+  if (shiftKey && isEdge) {
+    if (handleIndex === 1 || handleIndex === 5) {
+      // Top/bottom edge: width changes symmetrically around center.
+      const newW = Math.max(h * aspectRatio, MIN_SIZE);
+      x = origX + (origW - newW) / 2;
+      w = newW;
+    } else {
+      // Left/right edge: height changes symmetrically around center.
+      const newH = Math.max(w / aspectRatio, MIN_SIZE);
+      y = origY + (origH - newH) / 2;
+      h = newH;
+    }
+  }
+
+  // Enforce MIN_SIZE after all aspect ratio adjustments.
+  if (w < MIN_SIZE) {
+    w = MIN_SIZE;
+    if (movesLeft) x = origX + origW - MIN_SIZE;
+  }
+  if (h < MIN_SIZE) {
+    h = MIN_SIZE;
+    if (movesTop) y = origY + origH - MIN_SIZE;
   }
 
   return { x, y, width: w, height: h };

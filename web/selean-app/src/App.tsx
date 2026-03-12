@@ -16,6 +16,7 @@ import { CodePanel } from "./components/CodePanel";
 import { ContextMenu } from "./components/ContextMenu";
 import { InlineTextEditor } from "./components/InlineTextEditor";
 import { MemberManager } from "./components/MemberManager";
+import { SnapGuides } from "./components/SnapGuides";
 import { WorkspaceSelector } from "./components/WorkspaceSelector";
 import { CollabContext } from "./collab/CollabContext";
 import { useAutoSave } from "./hooks/useAutoSave";
@@ -227,12 +228,30 @@ function AppContent() {
     [collab.remotePresences],
   );
 
+  // Track shift key state for axis-lock during drag.
+  const shiftKeyRef = useRef(false);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftKeyRef.current = true;
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftKeyRef.current = false;
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
+
   // Move drag hook
-  const { handleDragEvent } = useMoveDrag({
+  const { handleDragEvent, isDragging: isMoveDragging } = useMoveDrag({
     editorRef,
     onSceneChanged,
     collab,
     activePageId,
+    shiftKeyRef,
   });
 
   // Creation tool hook
@@ -475,6 +494,9 @@ function AppContent() {
                   editorRef={editorRef}
                   onSceneChanged={onSceneChanged}
                 />
+              )}
+              {status === "ready" && (
+                <SnapGuides editorRef={editorRef} isDragging={isMoveDragging} />
               )}
               {status === "ready" && collab.status === "connected" && (
                 <PresenceOverlay

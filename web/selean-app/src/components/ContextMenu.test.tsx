@@ -89,7 +89,7 @@ describe("ContextMenu", () => {
 
   it("disables Copy/Delete/Duplicate when nothing is selected", () => {
     const ref = createMockEditorRef({
-      get_selected_ids: vi.fn().mockReturnValue("[]"),
+      get_selected_ids: vi.fn().mockReturnValue([]),
     });
     render(
       <ContextMenu
@@ -108,7 +108,7 @@ describe("ContextMenu", () => {
 
   it("enables Delete when a node is selected", () => {
     const ref = createMockEditorRef({
-      get_selected_ids: vi.fn().mockReturnValue('["node-1"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue(
         JSON.stringify({
           id: "node-1",
@@ -138,7 +138,7 @@ describe("ContextMenu", () => {
     const onClose = vi.fn();
     const onChanged = vi.fn();
     const ref = createMockEditorRef({
-      get_selected_ids: vi.fn().mockReturnValue('["node-1"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue(
         JSON.stringify({
           id: "node-1",
@@ -172,7 +172,7 @@ describe("ContextMenu", () => {
 
   it("enables Group when 2+ nodes are selected", () => {
     const ref = createMockEditorRef({
-      get_selected_ids: vi.fn().mockReturnValue('["a","b"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["a", "b"]),
       get_node_json: vi.fn().mockReturnValue(
         JSON.stringify({
           id: "a",
@@ -201,7 +201,7 @@ describe("ContextMenu", () => {
 
   it("enables Ungroup when a Group is selected", () => {
     const ref = createMockEditorRef({
-      get_selected_ids: vi.fn().mockReturnValue('["g"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["g"]),
       get_node_json: vi.fn().mockReturnValue(
         JSON.stringify({
           id: "g",
@@ -231,7 +231,7 @@ describe("ContextMenu", () => {
     const onClose = vi.fn();
     const onChanged = vi.fn();
     const ref = createMockEditorRef({
-      get_selected_ids: vi.fn().mockReturnValue('["node-1"]'),
+      get_selected_ids: vi.fn().mockReturnValue(["node-1"]),
       get_node_json: vi.fn().mockReturnValue(
         JSON.stringify({
           id: "node-1",

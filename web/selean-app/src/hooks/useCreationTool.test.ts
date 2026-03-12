@@ -6,7 +6,7 @@ import { createMockEditor, DEFAULT_CAMERA } from "../test/mock-editor";
 
 function makeOptions(overrides: Record<string, unknown> = {}) {
   const editor = createMockEditor({
-    get_camera_json: vi.fn().mockReturnValue(JSON.stringify(DEFAULT_CAMERA)),
+    get_camera: vi.fn().mockReturnValue(DEFAULT_CAMERA),
     ...overrides,
   });
   return {
