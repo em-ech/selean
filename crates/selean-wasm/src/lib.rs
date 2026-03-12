@@ -14,21 +14,39 @@ use selean_engine::scene::{Color, SceneGraph};
 
 use command_descriptor::{CommandDescriptor, create_frame_node};
 use queries::{
-    get_node_json, get_pages_json, get_scene_json, get_scene_tree_json, get_selected_bounds_json,
-    get_selected_ids_json, query_nodes_json,
+    get_all_node_bounds, get_node_json, get_pages_json, get_scene_json, get_scene_tree_json,
+    get_selected_bounds_json, get_selected_ids_json, query_nodes_json,
 };
 
-/// Parses a string as a `NodeId`, returning a JSON error string on failure.
-fn parse_node_id_or_error(s: &str) -> Result<selean_common::types::NodeId, String> {
+/// Parses a string as a `NodeId`, returning `None` on invalid UUID.
+fn parse_node_id(s: &str) -> Option<selean_common::types::NodeId> {
     uuid::Uuid::parse_str(s)
+        .ok()
         .map(selean_common::types::NodeId::from_uuid)
-        .map_err(|_| {
-            serde_json::json!({
-                "success": false,
-                "error": "invalid node ID"
-            })
-            .to_string()
-        })
+}
+
+/// Parses a string as a `PageId`, returning `None` on invalid UUID.
+fn parse_page_id(s: &str) -> Option<selean_common::types::PageId> {
+    uuid::Uuid::parse_str(s)
+        .ok()
+        .map(selean_common::types::PageId::from_uuid)
+}
+
+/// Parses a JSON array of node ID strings into a `Vec<NodeId>`.
+/// Returns `None` if any ID is invalid.
+fn parse_node_ids(json: &str) -> Option<Vec<selean_common::types::NodeId>> {
+    let strings: Vec<String> = serde_json::from_str(json).ok()?;
+    strings.iter().map(|s| parse_node_id(s)).collect()
+}
+
+/// Returns a JSON error response: `{ "success": false, "error": msg }`.
+fn tool_error(msg: &str) -> String {
+    serde_json::json!({ "success": false, "error": msg }).to_string()
+}
+
+/// Returns a JSON success response: `{ "success": true, "result": result }`.
+fn tool_ok(result: serde_json::Value) -> String {
+    serde_json::json!({ "success": true, "result": result }).to_string()
 }
 
 /// Core editor state, independent of the WASM runtime.
@@ -39,21 +57,38 @@ fn parse_node_id_or_error(s: &str) -> Result<selean_common::types::NodeId, Strin
 pub struct EditorState {
     /// The multi-page document model.
     pub document: Document,
-    /// Per-page undo/redo histories, parallel to `document.pages()`.
-    histories: Vec<CommandHistory>,
+    /// Per-page undo/redo histories, keyed by `PageId`.
+    histories: std::collections::HashMap<selean_common::types::PageId, CommandHistory>,
     /// Input handler (hover, selection, drag, camera).
     pub input: InputHandler,
+    /// Monotonically increasing version counter. Incremented on any mutation,
+    /// selection change, or camera change. Frontend components can compare
+    /// this against a cached value to skip redundant WASM FFI polls.
+    version: u64,
 }
 
 impl EditorState {
     /// Creates a new editor with a default single-page document.
     #[must_use]
     pub fn new() -> Self {
+        let doc = Document::new();
+        let page_id = doc.active_page().id;
+        let mut histories = std::collections::HashMap::new();
+        histories.insert(page_id, CommandHistory::new());
         Self {
-            document: Document::new(),
-            histories: vec![CommandHistory::new()],
+            document: doc,
+            histories,
             input: InputHandler::new(),
+            version: 0,
         }
+    }
+
+    /// Returns the current version counter. Incremented on every state change.
+    /// Frontend components can compare this against a cached value to skip
+    /// redundant WASM FFI polls when nothing has changed.
+    #[must_use]
+    pub fn scene_version(&self) -> u64 {
+        self.version
     }
 
     /// Returns a reference to the active page's scene graph.
@@ -70,12 +105,18 @@ impl EditorState {
 
     /// Returns a reference to the active page's command history.
     fn history(&self) -> &CommandHistory {
-        &self.histories[self.document.active_page_index()]
+        let page_id = self.document.active_page().id;
+        self.histories
+            .get(&page_id)
+            .expect("history missing for active page")
     }
 
     /// Returns a mutable reference to the active page's command history.
     fn history_mut(&mut self) -> &mut CommandHistory {
-        &mut self.histories[self.document.active_page_index()]
+        let page_id = self.document.active_page().id;
+        self.histories
+            .get_mut(&page_id)
+            .expect("history missing for active page")
     }
 
     /// Executes a command described by a JSON string.
@@ -87,27 +128,59 @@ impl EditorState {
             Err(_) => return false,
         };
         let cmd = desc.into_command();
-        let idx = self.document.active_page_index();
-        self.histories[idx].execute(cmd, &mut self.document.active_page_mut().scene)
+        let page_id = self.document.active_page().id;
+        let history = self
+            .histories
+            .get_mut(&page_id)
+            .expect("history missing for active page");
+        let ok = history.execute(cmd, &mut self.document.active_page_mut().scene);
+        if ok {
+            self.version += 1;
+        }
+        ok
     }
 
     /// Executes a [`CommandDescriptor`] directly.
     pub fn execute_descriptor(&mut self, desc: CommandDescriptor) -> bool {
         let cmd = desc.into_command();
-        let idx = self.document.active_page_index();
-        self.histories[idx].execute(cmd, &mut self.document.active_page_mut().scene)
+        let page_id = self.document.active_page().id;
+        let history = self
+            .histories
+            .get_mut(&page_id)
+            .expect("history missing for active page");
+        let ok = history.execute(cmd, &mut self.document.active_page_mut().scene);
+        if ok {
+            self.version += 1;
+        }
+        ok
     }
 
     /// Undoes the last command on the active page.
     pub fn undo(&mut self) -> bool {
-        let idx = self.document.active_page_index();
-        self.histories[idx].undo(&mut self.document.active_page_mut().scene)
+        let page_id = self.document.active_page().id;
+        let history = self
+            .histories
+            .get_mut(&page_id)
+            .expect("history missing for active page");
+        let ok = history.undo(&mut self.document.active_page_mut().scene);
+        if ok {
+            self.version += 1;
+        }
+        ok
     }
 
     /// Redoes the last undone command on the active page.
     pub fn redo(&mut self) -> bool {
-        let idx = self.document.active_page_index();
-        self.histories[idx].redo(&mut self.document.active_page_mut().scene)
+        let page_id = self.document.active_page().id;
+        let history = self
+            .histories
+            .get_mut(&page_id)
+            .expect("history missing for active page");
+        let ok = history.redo(&mut self.document.active_page_mut().scene);
+        if ok {
+            self.version += 1;
+        }
+        ok
     }
 
     /// Begins a command group (for drag operations or LLM batches).
@@ -122,8 +195,12 @@ impl EditorState {
 
     /// Cancels the active command group, undoing all commands in it.
     pub fn cancel_group(&mut self) {
-        let idx = self.document.active_page_index();
-        self.histories[idx].cancel_group(&mut self.document.active_page_mut().scene);
+        let page_id = self.document.active_page().id;
+        let history = self
+            .histories
+            .get_mut(&page_id)
+            .expect("history missing for active page");
+        history.cancel_group(&mut self.document.active_page_mut().scene);
     }
 
     /// Applies a remote operation to a specific page, bypassing the local
@@ -132,10 +209,9 @@ impl EditorState {
     ///
     /// Returns `true` if the command was applied successfully.
     pub fn apply_remote_op(&mut self, page_id: &str, descriptor_json: &str) -> bool {
-        let Ok(pid) = page_id.parse::<uuid::Uuid>() else {
+        let Some(target) = parse_page_id(page_id) else {
             return false;
         };
-        let target = selean_common::types::PageId::from_uuid(pid);
         let Some(page) = self.document.page_mut(target) else {
             return false;
         };
@@ -151,10 +227,9 @@ impl EditorState {
     ///
     /// Returns `true` if all commands were applied successfully.
     pub fn apply_remote_op_group(&mut self, page_id: &str, descriptors_json: &str) -> bool {
-        let Ok(pid) = page_id.parse::<uuid::Uuid>() else {
+        let Some(target) = parse_page_id(page_id) else {
             return false;
         };
-        let target = selean_common::types::PageId::from_uuid(pid);
         let Some(page) = self.document.page_mut(target) else {
             return false;
         };
@@ -185,10 +260,9 @@ impl EditorState {
         width: Option<f32>,
         height: Option<f32>,
     ) -> bool {
-        let Ok(pid) = page_id.parse::<uuid::Uuid>() else {
+        let Some(target) = parse_page_id(page_id) else {
             return false;
         };
-        let target = selean_common::types::PageId::from_uuid(pid);
 
         match op_type {
             "add" => {
@@ -196,8 +270,7 @@ impl EditorState {
                 let w = width.unwrap_or(1920.0);
                 let h = height.unwrap_or(1080.0);
                 if self.document.add_page_with_id(target, page_name, w, h) {
-                    self.histories
-                        .push(selean_engine::command::CommandHistory::new());
+                    self.histories.insert(target, CommandHistory::new());
                     true
                 } else {
                     false
@@ -261,34 +334,29 @@ impl EditorState {
 
     /// Switches the active page by ID string. Returns `true` on success.
     pub fn set_active_page(&mut self, page_id: &str) -> bool {
-        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+        let Some(id) = parse_page_id(page_id) else {
             return false;
         };
-        let id = selean_common::types::PageId::from_uuid(uuid);
         self.document.set_active_page(id)
     }
 
     /// Adds a new page and returns its ID as a string.
     pub fn add_page(&mut self, name: &str, width: f32, height: f32) -> String {
         let id = self.document.add_page(name, width, height);
-        self.histories.push(CommandHistory::new());
+        self.histories.insert(id, CommandHistory::new());
         id.to_string()
     }
 
     /// Removes a page by ID string. Returns `true` on success.
     pub fn remove_page(&mut self, page_id: &str) -> bool {
-        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
-            return false;
-        };
-        let id = selean_common::types::PageId::from_uuid(uuid);
-        // Find the page index before removing so we can remove the matching history.
-        let Some(index) = self.document.pages().iter().position(|p| p.id == id) else {
+        let Some(id) = parse_page_id(page_id) else {
             return false;
         };
         if !self.document.remove_page(id) {
             return false;
         }
-        self.histories.remove(index);
+        // History is keyed by PageId (HashMap), no index sync needed.
+        self.histories.remove(&id);
         true
     }
 
@@ -300,29 +368,20 @@ impl EditorState {
 
     /// Renames a page by ID string. Returns `true` on success.
     pub fn rename_page(&mut self, page_id: &str, name: &str) -> bool {
-        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+        let Some(id) = parse_page_id(page_id) else {
             return false;
         };
-        let id = selean_common::types::PageId::from_uuid(uuid);
         self.document.rename_page(id, name)
     }
 
     /// Duplicates a page by ID string. Returns the new page's ID, or empty string on failure.
     pub fn duplicate_page(&mut self, page_id: &str) -> String {
-        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+        let Some(id) = parse_page_id(page_id) else {
             return String::new();
         };
-        let id = selean_common::types::PageId::from_uuid(uuid);
         match self.document.duplicate_page(id) {
             Some(new_id) => {
-                // Insert a new CommandHistory at the same position as the cloned page.
-                let new_index = self
-                    .document
-                    .pages()
-                    .iter()
-                    .position(|p| p.id == new_id)
-                    .unwrap_or(self.histories.len());
-                self.histories.insert(new_index, CommandHistory::new());
+                self.histories.insert(new_id, CommandHistory::new());
                 new_id.to_string()
             }
             None => String::new(),
@@ -334,36 +393,20 @@ impl EditorState {
         let Ok(ids_str) = serde_json::from_str::<Vec<String>>(page_ids_json) else {
             return false;
         };
-        let ids: Vec<selean_common::types::PageId> = ids_str
-            .iter()
-            .filter_map(|s| uuid::Uuid::parse_str(s).ok())
-            .map(selean_common::types::PageId::from_uuid)
-            .collect();
+        let ids: Vec<selean_common::types::PageId> =
+            ids_str.iter().filter_map(|s| parse_page_id(s)).collect();
         if ids.len() != ids_str.len() {
             return false;
         }
-        // Build old-to-new index mapping for histories.
-        let old_pages: Vec<selean_common::types::PageId> =
-            self.document.pages().iter().map(|p| p.id).collect();
-        if !self.document.reorder_pages(&ids) {
-            return false;
-        }
-        // Reorder histories to match.
-        let mut new_histories = Vec::with_capacity(self.histories.len());
-        for &new_id in &ids {
-            let old_idx = old_pages.iter().position(|&id| id == new_id).unwrap();
-            new_histories.push(std::mem::take(&mut self.histories[old_idx]));
-        }
-        self.histories = new_histories;
-        true
+        // Histories are keyed by PageId, so reordering pages doesn't affect them.
+        self.document.reorder_pages(&ids)
     }
 
     /// Resizes a page by ID string. Returns `true` on success.
     pub fn resize_page(&mut self, page_id: &str, width: f32, height: f32) -> bool {
-        let Ok(uuid) = uuid::Uuid::parse_str(page_id) else {
+        let Some(id) = parse_page_id(page_id) else {
             return false;
         };
-        let id = selean_common::types::PageId::from_uuid(uuid);
         self.document.resize_page(id, width, height)
     }
 
@@ -373,9 +416,17 @@ impl EditorState {
         get_selected_bounds_json(self.scene(), self.input.state().selection.ids())
     }
 
+    /// Returns lightweight bounds for all nodes except the currently selected ones.
+    /// Used by SnapGuides to find alignment targets without full-scene serialization.
+    #[must_use]
+    pub fn get_snap_targets(&self) -> Vec<queries::NodeBoundsInfo> {
+        get_all_node_bounds(self.scene(), self.input.state().selection.ids())
+    }
+
     /// Clears the current selection.
     pub fn clear_selection(&mut self) {
         self.input.state_mut().selection.clear();
+        self.version += 1;
     }
 
     /// Aligns the given nodes according to the specified alignment kind.
@@ -391,17 +442,9 @@ impl EditorState {
             return false;
         };
 
-        let Ok(ids_raw) = serde_json::from_str::<Vec<String>>(node_ids_json) else {
+        let Some(node_ids) = parse_node_ids(node_ids_json) else {
             return false;
         };
-
-        let mut node_ids = Vec::with_capacity(ids_raw.len());
-        for s in &ids_raw {
-            let Ok(uuid) = uuid::Uuid::parse_str(s) else {
-                return false;
-            };
-            node_ids.push(selean_common::types::NodeId::from_uuid(uuid));
-        }
 
         let results = compute_alignment(self.scene(), &node_ids, kind);
         if results.is_empty() {
@@ -433,17 +476,12 @@ impl EditorState {
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0) as f32;
 
-        let node_id = match parse_node_id_or_error(node_id_str) {
-            Ok(id) => id,
-            Err(e) => return e,
+        let Some(node_id) = parse_node_id(node_id_str) else {
+            return tool_error("invalid node ID");
         };
 
         let Some(node) = self.scene().get(node_id) else {
-            return serde_json::json!({
-                "success": false,
-                "error": "node not found"
-            })
-            .to_string();
+            return tool_error("node not found");
         };
 
         let cx = node.bounds.x + node.bounds.width / 2.0;
@@ -457,11 +495,7 @@ impl EditorState {
         };
         let ok = self.execute_descriptor(desc);
 
-        serde_json::json!({
-            "success": ok,
-            "result": { "executed": i32::from(ok) }
-        })
-        .to_string()
+        tool_ok(serde_json::json!({ "executed": i32::from(ok) }))
     }
 
     /// Executes a grouping tool (`group_nodes` or `ungroup_node`).
@@ -470,11 +504,7 @@ impl EditorState {
         match tool_name {
             "group_nodes" => self.execute_group_nodes(args),
             "ungroup_node" => self.execute_ungroup_node(args),
-            _ => serde_json::json!({
-                "success": false,
-                "error": format!("unknown group tool: {tool_name}")
-            })
-            .to_string(),
+            _ => tool_error(&format!("unknown group tool: {tool_name}")),
         }
     }
 
@@ -485,33 +515,19 @@ impl EditorState {
 
         let ids_raw: Vec<String> = match args.get("node_ids") {
             Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
-            None => {
-                return serde_json::json!({
-                    "success": false,
-                    "error": "missing node_ids"
-                })
-                .to_string();
-            }
+            None => return tool_error("missing node_ids"),
         };
 
         if ids_raw.len() < 2 {
-            return serde_json::json!({
-                "success": false,
-                "error": "need at least 2 nodes to group"
-            })
-            .to_string();
+            return tool_error("need at least 2 nodes to group");
         }
 
         let mut node_ids = Vec::with_capacity(ids_raw.len());
         for s in &ids_raw {
-            let Ok(uuid) = uuid::Uuid::parse_str(s) else {
-                return serde_json::json!({
-                    "success": false,
-                    "error": format!("invalid node ID: {s}")
-                })
-                .to_string();
+            let Some(id) = parse_node_id(s) else {
+                return tool_error(&format!("invalid node ID: {s}"));
             };
-            node_ids.push(selean_common::types::NodeId::from_uuid(uuid));
+            node_ids.push(id);
         }
 
         // Compute union bounds.
@@ -521,11 +537,7 @@ impl EditorState {
         let mut max_y = f32::MIN;
         for &nid in &node_ids {
             let Some(node) = self.scene().get(nid) else {
-                return serde_json::json!({
-                    "success": false,
-                    "error": format!("node not found: {nid}")
-                })
-                .to_string();
+                return tool_error(&format!("node not found: {nid}"));
             };
             let b = &node.bounds;
             min_x = min_x.min(b.x);
@@ -533,13 +545,6 @@ impl EditorState {
             max_x = max_x.max(b.x + b.width);
             max_y = max_y.max(b.y + b.height);
         }
-
-        // Find the earliest root index among selected nodes (for insertion position).
-        let roots = self.scene().roots().to_vec();
-        let _first_root_index = roots
-            .iter()
-            .position(|r| node_ids.contains(r))
-            .unwrap_or(roots.len());
 
         // Create Group node.
         let group_id = selean_common::types::NodeId::new();
@@ -567,11 +572,7 @@ impl EditorState {
 
         self.history_mut().end_group();
 
-        serde_json::json!({
-            "success": true,
-            "result": { "group_id": group_id.to_string() }
-        })
-        .to_string()
+        tool_ok(serde_json::json!({ "group_id": group_id.to_string() }))
     }
 
     /// Dissolves a Group node, reparenting its children to the group's parent.
@@ -581,25 +582,16 @@ impl EditorState {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
 
-        let group_id = match parse_node_id_or_error(node_id_str) {
-            Ok(id) => id,
-            Err(e) => return e,
+        let Some(group_id) = parse_node_id(node_id_str) else {
+            return tool_error("invalid node ID");
         };
 
         let Some(node) = self.scene().get(group_id) else {
-            return serde_json::json!({
-                "success": false,
-                "error": "node not found"
-            })
-            .to_string();
+            return tool_error("node not found");
         };
 
         if !matches!(node.kind, selean_engine::scene::SceneNodeKind::Group) {
-            return serde_json::json!({
-                "success": false,
-                "error": "node is not a Group"
-            })
-            .to_string();
+            return tool_error("node is not a Group");
         }
 
         let children = node.children.clone();
@@ -608,11 +600,7 @@ impl EditorState {
         if children.is_empty() {
             // Empty group: just remove it.
             self.execute_descriptor(CommandDescriptor::RemoveNode { node_id: group_id });
-            return serde_json::json!({
-                "success": true,
-                "result": { "ungrouped": 0 }
-            })
-            .to_string();
+            return tool_ok(serde_json::json!({ "ungrouped": 0 }));
         }
 
         self.history_mut().begin_group("Ungroup");
@@ -639,11 +627,7 @@ impl EditorState {
         self.history_mut().end_group();
 
         let count = children.len();
-        serde_json::json!({
-            "success": true,
-            "result": { "ungrouped": count }
-        })
-        .to_string()
+        tool_ok(serde_json::json!({ "ungrouped": count }))
     }
 
     /// Executes a z-order tool (`move_to_front`, `move_to_back`, `move_forward`, `move_backward`).
@@ -653,18 +637,18 @@ impl EditorState {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
 
-        let Ok(node_id) = parse_node_id_or_error(node_id_str) else {
-            return z_error("invalid node ID");
+        let Some(node_id) = parse_node_id(node_id_str) else {
+            return tool_error("invalid node ID");
         };
 
         let Some(node) = self.scene().get(node_id) else {
-            return z_error("node not found");
+            return tool_error("node not found");
         };
         let parent_id = node.parent;
 
         let (siblings, is_root) = if let Some(pid) = parent_id {
             let Some(children) = self.scene().children(pid) else {
-                return z_error("parent not found");
+                return tool_error("parent not found");
             };
             (children.to_vec(), false)
         } else {
@@ -672,14 +656,14 @@ impl EditorState {
         };
 
         let Some(new_order) = compute_z_reorder(&siblings, node_id, tool_name) else {
-            return z_noop();
+            return tool_ok(serde_json::json!({ "moved": false }));
         };
 
         let desc = if is_root {
             CommandDescriptor::ReorderRoots { new_order }
         } else {
             let Some(pid) = parent_id else {
-                return z_error("parent_id missing for non-root node");
+                return tool_error("parent_id missing for non-root node");
             };
             CommandDescriptor::ReorderChildren {
                 parent_id: pid,
@@ -688,11 +672,7 @@ impl EditorState {
         };
 
         let ok = self.execute_descriptor(desc);
-        serde_json::json!({
-            "success": ok,
-            "result": { "moved": ok }
-        })
-        .to_string()
+        tool_ok(serde_json::json!({ "moved": ok }))
     }
 
     /// Returns the current zoom level.
@@ -706,14 +686,14 @@ impl EditorState {
 
     /// Selects a single node by ID string. Returns `true` if the node exists.
     pub fn select_node_by_id(&mut self, node_id: &str) -> bool {
-        let Ok(uuid) = uuid::Uuid::parse_str(node_id) else {
+        let Some(id) = parse_node_id(node_id) else {
             return false;
         };
-        let id = selean_common::types::NodeId::from_uuid(uuid);
         if self.scene().get(id).is_none() {
             return false;
         }
         self.input.state_mut().selection.select_one(id);
+        self.version += 1;
         true
     }
 
@@ -735,11 +715,7 @@ impl EditorState {
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(1080.0) as f32;
                 let id = self.add_page(name, width, height);
-                serde_json::json!({
-                    "success": true,
-                    "result": { "page_id": id }
-                })
-                .to_string()
+                tool_ok(serde_json::json!({ "page_id": id }))
             }
             "remove_page" => {
                 let page_id = args
@@ -747,11 +723,7 @@ impl EditorState {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("");
                 let ok = self.remove_page(page_id);
-                serde_json::json!({
-                    "success": ok,
-                    "result": { "removed": ok }
-                })
-                .to_string()
+                tool_ok(serde_json::json!({ "removed": ok }))
             }
             "set_active_page" => {
                 let page_id = args
@@ -759,17 +731,9 @@ impl EditorState {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("");
                 let ok = self.set_active_page(page_id);
-                serde_json::json!({
-                    "success": ok,
-                    "result": { "switched": ok }
-                })
-                .to_string()
+                tool_ok(serde_json::json!({ "switched": ok }))
             }
-            _ => serde_json::json!({
-                "success": false,
-                "error": format!("unknown page tool: {tool_name}")
-            })
-            .to_string(),
+            _ => tool_error(&format!("unknown page tool: {tool_name}")),
         }
     }
 
@@ -778,10 +742,15 @@ impl EditorState {
     pub fn import_document(&mut self, json: &str) -> bool {
         match selean_engine::persistence::load_document(json) {
             Ok(doc) => {
-                let page_count = doc.page_count();
+                let histories = doc
+                    .pages()
+                    .iter()
+                    .map(|p| (p.id, CommandHistory::new()))
+                    .collect();
                 self.document = doc;
-                self.histories = (0..page_count).map(|_| CommandHistory::new()).collect();
+                self.histories = histories;
                 self.input = InputHandler::new();
+                self.version += 1;
                 true
             }
             Err(_) => false,
@@ -803,13 +772,7 @@ impl EditorState {
     pub fn execute_tool_call(&mut self, tool_name: &str, args_json: &str) -> String {
         let args: serde_json::Value = match serde_json::from_str(args_json) {
             Ok(v) => v,
-            Err(e) => {
-                return serde_json::json!({
-                    "success": false,
-                    "error": format!("invalid JSON args: {e}")
-                })
-                .to_string();
-            }
+            Err(e) => return tool_error(&format!("invalid JSON args: {e}")),
         };
 
         // Dispatch by tool category.
@@ -833,11 +796,9 @@ impl EditorState {
                     "get_pages" => get_pages_json(&self.document),
                     _ => "null".to_string(),
                 };
-                return serde_json::json!({
-                    "success": true,
-                    "result": serde_json::from_str::<serde_json::Value>(&result).unwrap_or(serde_json::Value::Null)
-                })
-                .to_string();
+                let parsed = serde_json::from_str::<serde_json::Value>(&result)
+                    .unwrap_or(serde_json::Value::Null);
+                return tool_ok(parsed);
             }
             selean_llm::ToolCategory::Page => {
                 return self.execute_page_tool(tool_name, &args);
@@ -852,11 +813,7 @@ impl EditorState {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("");
                 let ok = self.align_nodes(&node_ids_json, alignment);
-                return serde_json::json!({
-                    "success": ok,
-                    "result": { "aligned": ok }
-                })
-                .to_string();
+                return tool_ok(serde_json::json!({ "aligned": ok }));
             }
             selean_llm::ToolCategory::Rotation => {
                 return self.execute_rotation_tool(&args);
@@ -877,13 +834,7 @@ impl EditorState {
     fn execute_mutation_tool(&mut self, tool_name: &str, args: &serde_json::Value) -> String {
         let descriptors = match selean_llm::map_tool_call(tool_name, args) {
             Ok(descs) => descs,
-            Err(e) => {
-                return serde_json::json!({
-                    "success": false,
-                    "error": e.to_string()
-                })
-                .to_string();
-            }
+            Err(e) => return tool_error(&e.to_string()),
         };
 
         let use_group = descriptors.len() > 1;
@@ -904,18 +855,17 @@ impl EditorState {
 
         if use_group {
             if failed {
-                let idx = self.document.active_page_index();
-                self.histories[idx].cancel_group(&mut self.document.active_page_mut().scene);
+                self.cancel_group();
             } else {
                 self.history_mut().end_group();
             }
         }
 
-        serde_json::json!({
-            "success": !failed,
-            "result": { "executed": executed }
-        })
-        .to_string()
+        if failed {
+            tool_error(&format!("tool partially failed after {executed} commands"))
+        } else {
+            tool_ok(serde_json::json!({ "executed": executed }))
+        }
     }
 
     /// Sets up a demo scene with colored rectangles on the active page.
@@ -1003,8 +953,7 @@ impl EditorState {
     ///
     /// Returns an error string if the page ID is invalid or the page is not found.
     pub fn generate_page_code(&self, page_id: &str) -> Result<String, String> {
-        let uuid = uuid::Uuid::parse_str(page_id).map_err(|_| "invalid page ID".to_string())?;
-        let pid = selean_common::types::PageId::from_uuid(uuid);
+        let pid = parse_page_id(page_id).ok_or_else(|| "invalid page ID".to_string())?;
         let page = self
             .document
             .page(pid)
@@ -1072,16 +1021,6 @@ fn compute_z_reorder(
         _ => return None,
     }
     Some(order)
-}
-
-/// Returns a JSON error response for z-order tools.
-fn z_error(msg: &str) -> String {
-    serde_json::json!({ "success": false, "error": msg }).to_string()
-}
-
-/// Returns a JSON no-op response for z-order tools.
-fn z_noop() -> String {
-    serde_json::json!({ "success": true, "result": { "moved": false } }).to_string()
 }
 
 impl Default for EditorState {
@@ -1368,6 +1307,12 @@ mod wasm {
             self.state.active_page_id()
         }
 
+        /// Returns the scene version counter. Monotonically increasing;
+        /// changes on any mutation, selection, or page switch.
+        pub fn scene_version(&self) -> u64 {
+            self.state.scene_version()
+        }
+
         /// Returns whether undo is available.
         pub fn can_undo(&self) -> bool {
             self.state.can_undo()
@@ -1446,6 +1391,13 @@ mod wasm {
         pub fn get_camera(&self) -> JsValue {
             let info = crate::queries::get_camera_info(self.renderer.camera());
             serde_wasm_bindgen::to_value(&info).unwrap_or(JsValue::NULL)
+        }
+
+        /// Returns lightweight bounds for all non-selected nodes.
+        /// Used by SnapGuides to find alignment targets efficiently.
+        pub fn get_snap_targets(&self) -> JsValue {
+            let targets = self.state.get_snap_targets();
+            serde_wasm_bindgen::to_value(&targets).unwrap_or(JsValue::NULL)
         }
 
         /// Clears the current selection.

@@ -32,6 +32,20 @@ pub enum ClipMode {
     ShaderRect,
 }
 
+impl ClipMode {
+    /// Returns the variant name as a static string, avoiding `format!("{:?}", ...)`
+    /// allocations on hot paths.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Scissor => "Scissor",
+            Self::Stencil => "Stencil",
+            Self::ShaderRect => "ShaderRect",
+        }
+    }
+}
+
 /// An axis-aligned clip rectangle in world-space coordinates.
 ///
 /// Represents the intersection of all active clip regions. Used for both

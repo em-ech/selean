@@ -375,4 +375,62 @@ mod tests {
         assert_eq!(result.text_align, TextAlign::Left);
         assert!(result.text_color.is_none());
     }
+
+    // ---- Error path tests ----
+
+    #[test]
+    fn parse_story_missing_self_id_returns_empty_id() {
+        let xml = r#"<Story>
+            <ParagraphStyleRange>
+                <CharacterStyleRange>
+                    <Content>Text</Content>
+                </CharacterStyleRange>
+            </ParagraphStyleRange>
+        </Story>"#;
+        let (id, story) = parse_story(xml);
+        assert!(id.is_empty());
+        assert_eq!(story.content, "Text");
+    }
+
+    #[test]
+    fn parse_story_empty_xml_returns_defaults() {
+        let xml = "";
+        let (id, story) = parse_story(xml);
+        assert!(id.is_empty());
+        assert!(story.content.is_empty());
+        assert_eq!(story.font_size, 16.0);
+    }
+
+    #[test]
+    fn parse_story_malformed_xml_does_not_panic() {
+        let xml = r"<Story Self='s1'><broken<<>>";
+        let (id, _story) = parse_story(xml);
+        // Should not panic; may extract partial data.
+        let _ = id;
+    }
+
+    #[test]
+    fn parse_story_unknown_justification_defaults_left() {
+        let xml = r#"<Story Self="s1">
+            <ParagraphStyleRange Justification="SomeUnknownValue">
+                <CharacterStyleRange>
+                    <Content>Text</Content>
+                </CharacterStyleRange>
+            </ParagraphStyleRange>
+        </Story>"#;
+        let (_, story) = parse_story(xml);
+        assert_eq!(story.text_align, TextAlign::Left);
+    }
+
+    #[test]
+    fn parse_story_no_content_elements_returns_empty() {
+        let xml = r#"<Story Self="s1">
+            <ParagraphStyleRange>
+                <CharacterStyleRange PointSize="24"/>
+            </ParagraphStyleRange>
+        </Story>"#;
+        let (_, story) = parse_story(xml);
+        assert!(story.content.is_empty());
+        assert!((story.font_size - 32.0).abs() < 0.01);
+    }
 }

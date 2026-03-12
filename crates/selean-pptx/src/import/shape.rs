@@ -723,4 +723,238 @@ mod tests {
         let nodes = parse_shapes(xml);
         assert!(nodes[0].fill.is_none());
     }
+
+    // ---- Error path tests ----
+
+    #[test]
+    fn parse_shape_missing_shape_id_still_produces_node() {
+        // cNvPr without an id attribute; the parser should not panic.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr name="NoId"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "NoId");
+    }
+
+    #[test]
+    fn parse_shape_invalid_color_hex_ignored() {
+        // "ZZZZZZ" is not valid hex; fill should remain None.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="BadColor"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>
+                    <a:solidFill><a:srgbClr val="ZZZZZZ"/></a:solidFill>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].fill.is_none());
+    }
+
+    #[test]
+    fn parse_shape_short_color_hex_ignored() {
+        // "FF00" is only 4 chars, not 6; should be silently ignored.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="ShortHex"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>
+                    <a:solidFill><a:srgbClr val="FF00"/></a:solidFill>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].fill.is_none());
+    }
+
+    #[test]
+    fn parse_shape_missing_transform_defaults_to_zero() {
+        // No <a:xfrm> at all; offsets and extents should default to 0.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="NoXfrm"/></p:nvSpPr>
+                <p:spPr/>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].bounds.x.abs() < f32::EPSILON);
+        assert!(nodes[0].bounds.y.abs() < f32::EPSILON);
+        assert!(nodes[0].bounds.width.abs() < f32::EPSILON);
+        assert!(nodes[0].bounds.height.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_empty_slide_tree_no_shapes() {
+        // A slide with an empty spTree; should produce zero nodes.
+        let xml = r"<p:sld><p:cSld><p:spTree/></p:cSld></p:sld>";
+        let nodes = parse_shapes(xml);
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn parse_malformed_xml_does_not_panic() {
+        // Completely broken XML; the parser should bail gracefully.
+        let xml = r"<p:spTree><p:sp><broken<<>></p:sp>";
+        let nodes = parse_shapes(xml);
+        // May produce partial results or nothing, but must not panic.
+        let _ = nodes;
+    }
+
+    #[test]
+    fn parse_shape_negative_emu_coordinates() {
+        // Negative EMU values should produce negative pixel values.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="Negative"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="-914400" y="-457200"/>
+                        <a:ext cx="1828800" cy="914400"/>
+                    </a:xfrm>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!((nodes[0].bounds.x - (-96.0)).abs() < 1.0);
+        assert!((nodes[0].bounds.y - (-48.0)).abs() < 1.0);
+        assert!((nodes[0].bounds.width - 192.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn parse_shape_overflow_emu_coordinates() {
+        // Very large EMU values should not panic (precision loss is OK).
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="Huge"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="9223372036854775000" y="0"/>
+                        <a:ext cx="0" cy="0"/>
+                    </a:xfrm>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        // Just verifying it doesn't panic; the pixel value will be very large.
+        assert!(nodes[0].bounds.x > 0.0);
+    }
+
+    #[test]
+    fn parse_shape_missing_text_body_produces_frame() {
+        // A shape with no <p:txBody> should produce a Frame, not Text.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="JustFrame"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(nodes[0].kind, SceneNodeKind::Frame { .. }));
+    }
+
+    #[test]
+    fn parse_shape_empty_text_body_with_paragraph_produces_text() {
+        // <txBody> with an empty paragraph; the Start event sets has_text_body.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="EmptyText"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm>
+                </p:spPr>
+                <p:txBody><a:p/></p:txBody>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(nodes[0].kind, SceneNodeKind::Text { .. }));
+        if let SceneNodeKind::Text { ref content, .. } = nodes[0].kind {
+            assert!(content.is_empty());
+        }
+    }
+
+    #[test]
+    fn parse_shape_self_closing_text_body_produces_frame() {
+        // A self-closing <p:txBody/> is an Empty event, not a Start event,
+        // so has_text_body is never set and the shape becomes a Frame.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="SelfClose"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm>
+                </p:spPr>
+                <p:txBody/>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(nodes[0].kind, SceneNodeKind::Frame { .. }));
+    }
+
+    #[test]
+    fn parse_shape_unknown_elements_gracefully_ignored() {
+        // Unknown child elements inside <p:sp> should be silently skipped.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="WithUnknown"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>
+                    <a:customFill><a:unknownElement foo="bar"/></a:customFill>
+                </p:spPr>
+                <p:unknownSection>
+                    <p:weirdChild attr="val"/>
+                </p:unknownSection>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "WithUnknown");
+    }
+
+    #[test]
+    fn parse_shape_non_numeric_emu_defaults_to_zero() {
+        // Non-numeric values in coordinate attributes default to 0.
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="BadCoords"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="abc" y="def"/>
+                        <a:ext cx="ghi" cy="jkl"/>
+                    </a:xfrm>
+                </p:spPr>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].bounds.x.abs() < f32::EPSILON);
+        assert!(nodes[0].bounds.y.abs() < f32::EPSILON);
+        assert!(nodes[0].bounds.width.abs() < f32::EPSILON);
+        assert!(nodes[0].bounds.height.abs() < f32::EPSILON);
+    }
 }

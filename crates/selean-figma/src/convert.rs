@@ -1128,4 +1128,205 @@ mod tests {
             _ => panic!("expected Text kind"),
         }
     }
+
+    // ---- Error path tests ----
+
+    #[test]
+    fn file_to_document_no_canvases_returns_error() {
+        // Document with children but none are CANVAS.
+        let response = FigmaFileResponse {
+            name: "Bad".to_string(),
+            document: FigmaNode {
+                node_type: FigmaNodeType::Document,
+                children: vec![FigmaNode {
+                    node_type: FigmaNodeType::Frame,
+                    name: "Not a canvas".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+        let result = file_to_document(&response);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("no CANVAS"));
+    }
+
+    #[test]
+    fn file_to_document_empty_document_children() {
+        let response = FigmaFileResponse {
+            name: "Empty".to_string(),
+            document: FigmaNode {
+                node_type: FigmaNodeType::Document,
+                children: vec![],
+                ..Default::default()
+            },
+        };
+        let result = file_to_document(&response);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn node_missing_bounds_produces_zero_bounds() {
+        // A node with no absoluteBoundingBox should get (0,0,0,0) bounds.
+        let node = FigmaNode {
+            node_type: FigmaNodeType::Frame,
+            name: "NoBounds".to_string(),
+            absolute_bounding_box: None,
+            ..Default::default()
+        };
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert_eq!(sn.bounds.x, 0.0);
+        assert_eq!(sn.bounds.y, 0.0);
+        assert_eq!(sn.bounds.width, 0.0);
+        assert_eq!(sn.bounds.height, 0.0);
+    }
+
+    #[test]
+    fn canvas_with_no_children_produces_empty_page() {
+        let response = FigmaFileResponse {
+            name: "Empty Canvas".to_string(),
+            document: FigmaNode {
+                node_type: FigmaNodeType::Document,
+                children: vec![FigmaNode {
+                    id: "0:1".to_string(),
+                    name: "Empty Page".to_string(),
+                    node_type: FigmaNodeType::Canvas,
+                    children: vec![],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+        let doc = file_to_document(&response).unwrap();
+        assert_eq!(doc.page_count(), 1);
+        assert_eq!(doc.active_page().scene.len(), 0);
+        // Default dimensions when no children have bounds.
+        assert_eq!(doc.active_page().width, 1920.0);
+        assert_eq!(doc.active_page().height, 1080.0);
+    }
+
+    #[test]
+    fn unknown_node_type_in_canvas_skipped() {
+        let response = FigmaFileResponse {
+            name: "With Unknown".to_string(),
+            document: FigmaNode {
+                node_type: FigmaNodeType::Document,
+                children: vec![FigmaNode {
+                    id: "0:1".to_string(),
+                    name: "Page".to_string(),
+                    node_type: FigmaNodeType::Canvas,
+                    children: vec![
+                        FigmaNode {
+                            node_type: FigmaNodeType::Unknown,
+                            name: "Weird".to_string(),
+                            ..Default::default()
+                        },
+                        FigmaNode {
+                            node_type: FigmaNodeType::Rectangle,
+                            name: "Good".to_string(),
+                            absolute_bounding_box: Some(FigmaRect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 100.0,
+                                height: 100.0,
+                            }),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+        let doc = file_to_document(&response).unwrap();
+        // Unknown type should be skipped, only the Rectangle should appear.
+        assert_eq!(doc.active_page().scene.len(), 1);
+    }
+
+    #[test]
+    fn text_node_with_zero_font_size_uses_default_line_height() {
+        // font_size = 0.0 would cause division; should fallback to 1.2 line_height.
+        let node = FigmaNode {
+            characters: Some("Zero".to_string()),
+            style: Some(FigmaTextStyle {
+                font_size: Some(0.0),
+                line_height_px: Some(20.0),
+                ..Default::default()
+            }),
+            ..make_node(FigmaNodeType::Text)
+        };
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        match &sn.kind {
+            SceneNodeKind::Text { line_height, .. } => {
+                // font_size is 0.0, so the division guard returns 1.2 default.
+                assert!((*line_height - 1.2).abs() < 1e-6);
+            }
+            _ => panic!("expected Text kind"),
+        }
+    }
+
+    #[test]
+    fn vector_node_no_fill_geometry_produces_empty_path() {
+        let node = FigmaNode {
+            node_type: FigmaNodeType::Vector,
+            name: "EmptyVec".to_string(),
+            fill_geometry: vec![],
+            absolute_bounding_box: Some(FigmaRect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            }),
+            ..Default::default()
+        };
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        match &sn.kind {
+            SceneNodeKind::Vector { path_data } => {
+                assert!(path_data.is_empty());
+            }
+            _ => panic!("expected Vector kind"),
+        }
+    }
+
+    #[test]
+    fn document_node_type_skipped() {
+        let node = make_node(FigmaNodeType::Document);
+        assert!(figma_node_to_scene_node(&node, (0.0, 0.0)).is_none());
+    }
+
+    #[test]
+    fn canvas_node_type_skipped() {
+        let node = make_node(FigmaNodeType::Canvas);
+        assert!(figma_node_to_scene_node(&node, (0.0, 0.0)).is_none());
+    }
+
+    #[test]
+    fn empty_fills_and_strokes_produce_none() {
+        let node = FigmaNode {
+            fills: vec![],
+            strokes: vec![],
+            ..make_node(FigmaNodeType::Frame)
+        };
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert!(sn.fill.is_none());
+        assert!(sn.stroke.is_none());
+        assert!(sn.fill_gradient.is_none());
+    }
+
+    #[test]
+    fn negative_bounding_box_coordinates_handled() {
+        let node = FigmaNode {
+            absolute_bounding_box: Some(FigmaRect {
+                x: -100.0,
+                y: -200.0,
+                width: 50.0,
+                height: 30.0,
+            }),
+            ..make_node(FigmaNodeType::Frame)
+        };
+        let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
+        assert_eq!(sn.bounds.x, -100.0);
+        assert_eq!(sn.bounds.y, -200.0);
+    }
 }

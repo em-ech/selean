@@ -170,8 +170,8 @@ impl From<&SceneNode> for NodeInfo {
             stroke_width: node.stroke_width,
             opacity: node.opacity,
             visible: node.visible,
-            blend_mode: format!("{:?}", node.blend_mode),
-            clip_mode: format!("{:?}", node.clip_mode),
+            blend_mode: node.blend_mode.as_str().to_string(),
+            clip_mode: node.clip_mode.as_str().to_string(),
             transform: *node.local_transform.raw(),
             scroll_offset: node.scroll_offset,
             corner_radius,
@@ -242,7 +242,6 @@ pub fn query_nodes_json(
     kind: Option<&str>,
 ) -> String {
     let pattern_lower = name_pattern.map(str::to_lowercase);
-    let kind_lower = kind.map(str::to_lowercase);
 
     let results: Vec<NodeSummary> = scene
         .nodes()
@@ -253,8 +252,8 @@ pub fn query_nodes_json(
                     return false;
                 }
             }
-            if let Some(ref k) = kind_lower {
-                if node.kind.kind_tag().to_lowercase() != *k {
+            if let Some(ref k) = kind {
+                if !node.kind.kind_tag().eq_ignore_ascii_case(k) {
                     return false;
                 }
             }
@@ -379,6 +378,41 @@ pub fn get_selected_bounds(scene: &SceneGraph, selected_ids: &[NodeId]) -> Vec<S
             let world_bb = node.world_transform.transform_aabb(&node.bounds);
             SelectionBounds {
                 node_id: node.id.to_string(),
+                x: world_bb.x,
+                y: world_bb.y,
+                width: world_bb.width,
+                height: world_bb.height,
+            }
+        })
+        .collect()
+}
+
+/// Lightweight bounding box for snap guides: all non-selected nodes.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NodeBoundsInfo {
+    /// Node ID as a string.
+    pub id: String,
+    /// World-space x.
+    pub x: f32,
+    /// World-space y.
+    pub y: f32,
+    /// Width.
+    pub width: f32,
+    /// Height.
+    pub height: f32,
+}
+
+/// Returns world-space bounds for all nodes except those in `excluded_ids`.
+/// Used by SnapGuides to get alignment targets without full-scene serialization.
+pub fn get_all_node_bounds(scene: &SceneGraph, excluded_ids: &[NodeId]) -> Vec<NodeBoundsInfo> {
+    scene
+        .nodes()
+        .values()
+        .filter(|node| !excluded_ids.contains(&node.id))
+        .map(|node| {
+            let world_bb = node.world_transform.transform_aabb(&node.bounds);
+            NodeBoundsInfo {
+                id: node.id.to_string(),
                 x: world_bb.x,
                 y: world_bb.y,
                 width: world_bb.width,

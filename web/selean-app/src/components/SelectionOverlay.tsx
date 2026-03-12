@@ -42,6 +42,7 @@ export function SelectionOverlay({
   const [bounds, setBounds] = useState<SelectionBounds[]>([]);
   const [camera, setCamera] = useState<CameraInfo | null>(null);
   const rafRef = useRef(0);
+  const lastVersionRef = useRef(-1);
 
   const { getHandleProps, isDragging } = useResizeDrag({
     editorRef,
@@ -62,8 +63,12 @@ export function SelectionOverlay({
       const editor = editorRef.current;
       if (editor) {
         try {
-          setBounds(editor.get_selected_bounds());
-          setCamera(editor.get_camera());
+          const version = editor.scene_version();
+          if (version !== lastVersionRef.current) {
+            lastVersionRef.current = version;
+            setBounds(editor.get_selected_bounds());
+            setCamera(editor.get_camera());
+          }
         } catch (e) {
           console.warn("selection-overlay:get-bounds failed", e);
         }

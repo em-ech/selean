@@ -298,7 +298,16 @@ describe("computeResizedBounds", () => {
   });
 
   it("shift + corner handle 0 (top-left): maintains aspect ratio", () => {
-    const r = computeResizedBounds(0, origX, origY, origW, origH, -40, -10, true);
+    const r = computeResizedBounds(
+      0,
+      origX,
+      origY,
+      origW,
+      origH,
+      -40,
+      -10,
+      true,
+    );
     const newRatio = r.width / r.height;
     const origRatio = origW / origH;
     expect(newRatio).toBeCloseTo(origRatio, 1);
@@ -318,7 +327,16 @@ describe("computeResizedBounds", () => {
   });
 
   it("shift resize still enforces MIN_SIZE", () => {
-    const r = computeResizedBounds(0, origX, origY, origW, origH, 500, 500, true);
+    const r = computeResizedBounds(
+      0,
+      origX,
+      origY,
+      origW,
+      origH,
+      500,
+      500,
+      true,
+    );
     expect(r.width).toBeGreaterThanOrEqual(10);
     expect(r.height).toBeGreaterThanOrEqual(10);
   });

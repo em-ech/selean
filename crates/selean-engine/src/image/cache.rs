@@ -50,7 +50,7 @@ impl ImageCache {
     /// Looks up a cached image by asset reference.
     #[must_use]
     pub fn get(&self, asset_ref: &str) -> Option<&CachedImage> {
-        self.inner.get(&asset_ref.to_string())
+        self.inner.get(asset_ref)
     }
 
     /// Inserts an image into the cache.
@@ -64,7 +64,7 @@ impl ImageCache {
     /// Returns `true` if the cache contains the given asset reference.
     #[must_use]
     pub fn contains(&self, asset_ref: &str) -> bool {
-        self.inner.contains(&asset_ref.to_string())
+        self.inner.contains(asset_ref)
     }
 
     /// Returns the number of cached images.
@@ -87,7 +87,7 @@ impl ImageCache {
 
     /// Removes a specific cached image by asset reference.
     pub fn clear_entry(&mut self, asset_ref: &str) {
-        self.inner.remove(&asset_ref.to_string());
+        self.inner.remove(asset_ref);
     }
 
     /// Removes all cached images.

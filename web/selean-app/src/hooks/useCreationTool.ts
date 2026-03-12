@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { ToolType } from "../components/Toolbar";
 import type { SeleanEditor } from "../wasm/types";
+import { screenToWorld } from "../utils/camera";
 
 interface DragState {
   startX: number;
@@ -76,7 +77,7 @@ export function useCreationTool({
         return;
       }
 
-      // Convert client coords to canvas-relative physical pixels
+      // Convert client coords to canvas-relative physical pixels, then to world
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
       const toPhysical = (cx: number, cy: number) => ({
@@ -87,15 +88,21 @@ export function useCreationTool({
       const start = toPhysical(drag.startX, drag.startY);
       const end = toPhysical(drag.currentX, drag.currentY);
 
-      const toWorldX = (sx: number) =>
-        (sx - camera.viewport_width / 2) / camera.zoom + camera.pan_x;
-      const toWorldY = (sy: number) =>
-        (sy - camera.viewport_height / 2) / camera.zoom + camera.pan_y;
+      const worldStart = screenToWorld(
+        Math.min(start.x, end.x),
+        Math.min(start.y, end.y),
+        camera,
+      );
+      const worldEnd = screenToWorld(
+        Math.max(start.x, end.x),
+        Math.max(start.y, end.y),
+        camera,
+      );
 
-      const x1 = toWorldX(Math.min(start.x, end.x));
-      const y1 = toWorldY(Math.min(start.y, end.y));
-      const x2 = toWorldX(Math.max(start.x, end.x));
-      const y2 = toWorldY(Math.max(start.y, end.y));
+      const x1 = worldStart.x;
+      const y1 = worldStart.y;
+      const x2 = worldEnd.x;
+      const y2 = worldEnd.y;
 
       const w = Math.max(x2 - x1, 10);
       const h = Math.max(y2 - y1, 10);

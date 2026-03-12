@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   CameraInfo,
-  NodeInfo,
+  NodeBoundsInfo,
   SelectionBounds,
   SeleanEditor,
 } from "../wasm/types";
@@ -57,15 +57,12 @@ export function SnapGuides({ editorRef, isDragging }: SnapGuidesProps) {
         }
 
         const sel = unionBounds(selectedBounds);
-        const sceneJson = editor.get_scene_json();
-        const scene = JSON.parse(sceneJson);
-        const selectedIds = new Set(selectedBounds.map((b) => b.node_id));
+        // Use typed narrow query instead of full-scene JSON serialization.
+        const targets: NodeBoundsInfo[] = editor.get_snap_targets();
 
         const newGuides: GuideLine[] = [];
 
-        for (const node of scene.nodes as NodeInfo[]) {
-          if (selectedIds.has(node.id)) continue;
-
+        for (const node of targets) {
           const edges = getEdges(node);
           const selEdges = getEdgesFromRect(sel);
 
@@ -143,7 +140,7 @@ export function SnapGuides({ editorRef, isDragging }: SnapGuidesProps) {
   );
 }
 
-function getEdges(node: NodeInfo) {
+function getEdges(node: NodeBoundsInfo) {
   return {
     xs: [node.x, node.x + node.width / 2, node.x + node.width],
     ys: [node.y, node.y + node.height / 2, node.y + node.height],

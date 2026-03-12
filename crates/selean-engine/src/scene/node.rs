@@ -373,6 +373,27 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
+    /// Returns the variant name as a static string, avoiding `format!("{:?}", ...)`
+    /// allocations on hot paths.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Add => "Add",
+            Self::Multiply => "Multiply",
+            Self::Screen => "Screen",
+            Self::Overlay => "Overlay",
+            Self::Darken => "Darken",
+            Self::Lighten => "Lighten",
+            Self::ColorDodge => "ColorDodge",
+            Self::ColorBurn => "ColorBurn",
+            Self::HardLight => "HardLight",
+            Self::SoftLight => "SoftLight",
+            Self::Difference => "Difference",
+            Self::Exclusion => "Exclusion",
+        }
+    }
+
     /// Returns `true` if this blend mode can be rendered natively with a wgpu blend state
     /// (no multi-pass rendering required).
     #[must_use]

@@ -443,3 +443,589 @@ impl SceneGraph {
         self.set_scroll_offset(id, clamped_x, clamped_y)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp, clippy::expect_used)]
+mod tests {
+    use selean_common::types::NodeId;
+
+    use crate::scene::clip::ClipMode;
+    use crate::scene::dirty::DirtyFlags;
+    use crate::scene::node::{
+        BlendMode, BoundingBox, Color, Effect, FontStyle, SceneNode, SceneNodeKind, TextAlign,
+    };
+    use crate::scene::store::SceneGraph;
+    use crate::scene::transform::Transform2D;
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    fn make_frame(name: &str) -> SceneNode {
+        SceneNode::new(
+            NodeId::new(),
+            name.to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+        )
+    }
+
+    fn make_text(name: &str, content: &str, font_size: f32) -> SceneNode {
+        SceneNode::new(
+            NodeId::new(),
+            name.to_string(),
+            SceneNodeKind::Text {
+                content: content.to_string(),
+                font_size,
+                font_family: "Inter".to_string(),
+                font_weight: 400,
+                font_style: FontStyle::Normal,
+                text_align: TextAlign::Left,
+                line_height: 1.2,
+                text_color: None,
+            },
+            BoundingBox::new(0.0, 0.0, 200.0, 50.0),
+        )
+    }
+
+    fn make_vector(name: &str, path_data: &str) -> SceneNode {
+        SceneNode::new(
+            NodeId::new(),
+            name.to_string(),
+            SceneNodeKind::Vector {
+                path_data: path_data.to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 50.0, 50.0),
+        )
+    }
+
+    fn make_image(name: &str, asset_ref: &str) -> SceneNode {
+        SceneNode::new(
+            NodeId::new(),
+            name.to_string(),
+            SceneNodeKind::Image {
+                asset_ref: asset_ref.to_string(),
+            },
+            BoundingBox::new(0.0, 0.0, 80.0, 80.0),
+        )
+    }
+
+    fn bogus_id() -> NodeId {
+        NodeId::new()
+    }
+
+    // -----------------------------------------------------------------------
+    // 1. Happy-path set_* on valid nodes (returns true)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_bounds_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        let new_bounds = BoundingBox::new(10.0, 20.0, 300.0, 400.0);
+        assert!(sg.set_bounds(id, new_bounds));
+        assert_eq!(sg.get(id).expect("node").bounds, new_bounds);
+    }
+
+    #[test]
+    fn set_fill_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        let color = Some(Color::new(1.0, 0.0, 0.0, 1.0));
+        assert!(sg.set_fill(id, color));
+        assert_eq!(sg.get(id).expect("node").fill, color);
+    }
+
+    #[test]
+    fn set_stroke_and_stroke_width_valid() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_stroke(id, Some(Color::new(0.0, 1.0, 0.0, 1.0))));
+        assert!(sg.set_stroke_width(id, 3.5));
+        assert_eq!(sg.get(id).expect("node").stroke_width, 3.5);
+    }
+
+    #[test]
+    fn set_opacity_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_opacity(id, 0.5));
+        assert_eq!(sg.get(id).expect("node").opacity, 0.5);
+    }
+
+    #[test]
+    fn set_visible_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_visible(id, false));
+        assert!(!sg.get(id).expect("node").visible);
+    }
+
+    #[test]
+    fn set_name_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("old"));
+        assert!(sg.set_name(id, "new".to_string()));
+        assert_eq!(sg.get(id).expect("node").name, "new");
+    }
+
+    #[test]
+    fn set_text_content_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hello", 16.0));
+        assert!(sg.set_text_content(id, "world".to_string()));
+        if let SceneNodeKind::Text { content, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(content, "world");
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_font_size_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(sg.set_font_size(id, 24.0));
+        if let SceneNodeKind::Text { font_size, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(*font_size, 24.0);
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_font_family_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(sg.set_font_family(id, "Roboto".to_string()));
+        if let SceneNodeKind::Text { font_family, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(font_family, "Roboto");
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_font_weight_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(sg.set_font_weight(id, 700));
+        if let SceneNodeKind::Text { font_weight, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(*font_weight, 700);
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_font_style_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(sg.set_font_style(id, FontStyle::Italic));
+        if let SceneNodeKind::Text { font_style, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(*font_style, FontStyle::Italic);
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_text_align_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(sg.set_text_align(id, TextAlign::Center));
+        if let SceneNodeKind::Text { text_align, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(*text_align, TextAlign::Center);
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_line_height_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(sg.set_line_height(id, 1.8));
+        if let SceneNodeKind::Text { line_height, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(*line_height, 1.8);
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_text_color_valid_text_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        let color = Some(Color::new(0.0, 0.0, 1.0, 1.0));
+        assert!(sg.set_text_color(id, color));
+        if let SceneNodeKind::Text { text_color, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(*text_color, color);
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_corner_radius_valid_frame() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_corner_radius(id, [8.0, 8.0, 0.0, 0.0]));
+        if let SceneNodeKind::Frame { corner_radius } = &sg.get(id).expect("node").kind {
+            assert_eq!(*corner_radius, [8.0, 8.0, 0.0, 0.0]);
+        } else {
+            panic!("expected Frame node");
+        }
+    }
+
+    #[test]
+    fn set_path_data_valid_vector() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_vector("v", "M0 0"));
+        assert!(sg.set_path_data(id, "M10 10 L20 20".to_string()));
+        if let SceneNodeKind::Vector { path_data } = &sg.get(id).expect("node").kind {
+            assert_eq!(path_data, "M10 10 L20 20");
+        } else {
+            panic!("expected Vector node");
+        }
+    }
+
+    #[test]
+    fn set_asset_ref_valid_image() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_image("i", "old.png"));
+        assert!(sg.set_asset_ref(id, "new.png".to_string()));
+        if let SceneNodeKind::Image { asset_ref } = &sg.get(id).expect("node").kind {
+            assert_eq!(asset_ref, "new.png");
+        } else {
+            panic!("expected Image node");
+        }
+    }
+
+    #[test]
+    fn set_blend_mode_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_blend_mode(id, BlendMode::Add));
+        assert_eq!(sg.get(id).expect("node").blend_mode, BlendMode::Add);
+    }
+
+    #[test]
+    fn set_clip_mode_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_clip_mode(id, ClipMode::Scissor));
+        assert_eq!(sg.get(id).expect("node").clip_mode, ClipMode::Scissor);
+    }
+
+    #[test]
+    fn set_effects_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        let effects = vec![Effect::Blur { radius: 4.0 }];
+        assert!(sg.set_effects(id, effects.clone()));
+        assert_eq!(sg.get(id).expect("node").effects, effects);
+    }
+
+    #[test]
+    fn set_fill_gradient_valid_node() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_fill_gradient(id, None));
+        assert!(sg.get(id).expect("node").fill_gradient.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. set_* on non-existent node (returns false)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_bounds_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_bounds(bogus_id(), BoundingBox::new(0.0, 0.0, 1.0, 1.0)));
+    }
+
+    #[test]
+    fn set_fill_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_fill(bogus_id(), None));
+    }
+
+    #[test]
+    fn set_text_content_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_text_content(bogus_id(), "x".to_string()));
+    }
+
+    #[test]
+    fn set_transform_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_transform(bogus_id(), Transform2D::identity()));
+    }
+
+    #[test]
+    fn set_rotation_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_rotation(bogus_id(), 1.0));
+    }
+
+    #[test]
+    fn set_scale_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_scale(bogus_id(), 2.0, 2.0));
+    }
+
+    #[test]
+    fn set_name_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_name(bogus_id(), "x".to_string()));
+    }
+
+    #[test]
+    fn set_scroll_offset_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_scroll_offset(bogus_id(), 10.0, 10.0));
+    }
+
+    #[test]
+    fn set_scroll_offset_clamped_nonexistent() {
+        let mut sg = SceneGraph::new();
+        assert!(!sg.set_scroll_offset_clamped(bogus_id(), 10.0, 10.0));
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Boundary values
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_opacity_clamps_to_0_1() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+
+        sg.set_opacity(id, -0.5);
+        assert_eq!(sg.get(id).expect("node").opacity, 0.0);
+
+        sg.set_opacity(id, 2.0);
+        assert_eq!(sg.get(id).expect("node").opacity, 1.0);
+    }
+
+    #[test]
+    fn set_font_size_negative_stored_as_is() {
+        // mutations.rs does not clamp font_size; the value is stored raw.
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(sg.set_font_size(id, -5.0));
+        if let SceneNodeKind::Text { font_size, .. } = &sg.get(id).expect("node").kind {
+            assert_eq!(*font_size, -5.0);
+        } else {
+            panic!("expected Text node");
+        }
+    }
+
+    #[test]
+    fn set_stroke_width_zero() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(sg.set_stroke_width(id, 0.0));
+        assert_eq!(sg.get(id).expect("node").stroke_width, 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. Type-specific mutations on wrong node types
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_text_content_on_frame_returns_false() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(!sg.set_text_content(id, "nope".to_string()));
+    }
+
+    #[test]
+    fn set_font_size_on_vector_returns_false() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_vector("v", "M0 0"));
+        assert!(!sg.set_font_size(id, 20.0));
+    }
+
+    #[test]
+    fn set_corner_radius_on_text_returns_false() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        assert!(!sg.set_corner_radius(id, [4.0; 4]));
+    }
+
+    #[test]
+    fn set_path_data_on_image_returns_false() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_image("i", "pic.png"));
+        assert!(!sg.set_path_data(id, "M0 0".to_string()));
+    }
+
+    #[test]
+    fn set_asset_ref_on_frame_returns_false() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        assert!(!sg.set_asset_ref(id, "pic.png".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. Dirty flag propagation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_fill_marks_dirty_style() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        sg.clear_all_dirty();
+
+        sg.set_fill(id, Some(Color::new(1.0, 0.0, 0.0, 1.0)));
+        let node = sg.get(id).expect("node");
+        assert!(node.dirty.contains(DirtyFlags::STYLE));
+        assert!(!node.dirty.contains(DirtyFlags::GEOMETRY));
+    }
+
+    #[test]
+    fn set_bounds_marks_dirty_geometry() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        sg.clear_all_dirty();
+
+        sg.set_bounds(id, BoundingBox::new(5.0, 5.0, 50.0, 50.0));
+        let node = sg.get(id).expect("node");
+        assert!(node.dirty.contains(DirtyFlags::GEOMETRY));
+    }
+
+    #[test]
+    fn set_text_content_marks_dirty_text() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_text("t", "hi", 12.0));
+        sg.clear_all_dirty();
+
+        sg.set_text_content(id, "bye".to_string());
+        let node = sg.get(id).expect("node");
+        assert!(node.dirty.contains(DirtyFlags::TEXT));
+    }
+
+    #[test]
+    fn set_effects_marks_dirty_effects() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        sg.clear_all_dirty();
+
+        sg.set_effects(id, vec![Effect::Blur { radius: 2.0 }]);
+        let node = sg.get(id).expect("node");
+        assert!(node.dirty.contains(DirtyFlags::EFFECTS));
+    }
+
+    #[test]
+    fn set_clip_mode_marks_dirty_clip() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        sg.clear_all_dirty();
+
+        sg.set_clip_mode(id, ClipMode::Stencil);
+        let node = sg.get(id).expect("node");
+        assert!(node.dirty.contains(DirtyFlags::CLIP));
+    }
+
+    #[test]
+    fn set_transform_marks_dirty_transform_and_propagates_up() {
+        let mut sg = SceneGraph::new();
+        let parent_id = sg.add_root(make_frame("parent"));
+        let child = make_frame("child");
+        let child_id = child.id;
+        sg.add_child(parent_id, child);
+        sg.clear_all_dirty();
+
+        sg.set_transform(child_id, Transform2D::identity());
+
+        let child_node = sg.get(child_id).expect("child");
+        assert!(child_node.dirty.contains(DirtyFlags::TRANSFORM));
+
+        let parent_node = sg.get(parent_id).expect("parent");
+        assert!(
+            parent_node.dirty.contains(DirtyFlags::CHILDREN),
+            "parent should have CHILDREN dirty after child mutation"
+        );
+    }
+
+    #[test]
+    fn set_name_does_not_set_dirty_flags() {
+        let mut sg = SceneGraph::new();
+        let id = sg.add_root(make_frame("f"));
+        sg.clear_all_dirty();
+
+        sg.set_name(id, "renamed".to_string());
+        let node = sg.get(id).expect("node");
+        assert!(
+            node.dirty.is_clean(),
+            "set_name should not set any dirty flags"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. Spatial index sync for set_bounds and set_transform
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_bounds_syncs_spatial_index() {
+        let mut sg = SceneGraph::new();
+        let node = SceneNode::new(
+            NodeId::new(),
+            "f".to_string(),
+            SceneNodeKind::Frame {
+                corner_radius: [0.0; 4],
+            },
+            BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+        );
+        let id = sg.add_root(node);
+
+        // Before move: the node is at (0,0)-(10,10).
+        assert!(sg.spatial().query_point(5.0, 5.0).contains(&id));
+        assert!(!sg.spatial().query_point(500.0, 500.0).contains(&id));
+
+        // Move the node to (490,490)-(590,590).
+        sg.set_bounds(id, BoundingBox::new(490.0, 490.0, 100.0, 100.0));
+
+        assert!(
+            sg.spatial().query_point(500.0, 500.0).contains(&id),
+            "spatial index should find node at new position"
+        );
+        assert!(
+            !sg.spatial().query_point(5.0, 5.0).contains(&id),
+            "spatial index should not find node at old position"
+        );
+    }
+
+    #[test]
+    fn set_transform_marks_descendants_dirty() {
+        let mut sg = SceneGraph::new();
+        let root_id = sg.add_root(make_frame("root"));
+        let child = make_frame("child");
+        let child_id = child.id;
+        sg.add_child(root_id, child);
+        let grandchild = make_frame("grandchild");
+        let grandchild_id = grandchild.id;
+        sg.add_child(child_id, grandchild);
+        sg.clear_all_dirty();
+
+        // Mutate the root transform.
+        sg.set_transform(root_id, Transform2D::identity());
+
+        // Both child and grandchild should have TRANSFORM dirty (downward propagation).
+        let child_node = sg.get(child_id).expect("child");
+        assert!(
+            child_node.dirty.contains(DirtyFlags::TRANSFORM),
+            "child should have TRANSFORM dirty after parent transform change"
+        );
+
+        let gc_node = sg.get(grandchild_id).expect("grandchild");
+        assert!(
+            gc_node.dirty.contains(DirtyFlags::TRANSFORM),
+            "grandchild should have TRANSFORM dirty after ancestor transform change"
+        );
+    }
+}

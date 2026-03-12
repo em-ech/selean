@@ -67,6 +67,8 @@ export function createMockEditor(
       .fn()
       .mockReturnValue('{"nodes":[],"roots":[],"node_count":0}'),
     execute_tool_call: vi.fn().mockReturnValue('{"ok":true}'),
+    scene_version: vi.fn().mockReturnValue(0),
+    get_snap_targets: vi.fn().mockReturnValue([]),
     can_undo: vi.fn().mockReturnValue(false),
     can_redo: vi.fn().mockReturnValue(false),
     get_pages_json: vi.fn().mockReturnValue(

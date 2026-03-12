@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { CollabSession } from "./useCollabSession";
 import type { CameraInfo, SelectionBounds, SeleanEditor } from "../wasm/types";
+import { clientToWorldDelta } from "../utils/camera";
 
 /** Minimum node size in world units. */
 const MIN_SIZE = 10;
@@ -82,20 +83,15 @@ export function useResizeDrag({
       const editor = editorRef.current;
       if (!editor) return;
 
-      const dpr =
-        typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
       const deltaClientX = e.clientX - drag.startClientX;
       const deltaClientY = e.clientY - drag.startClientY;
 
       // Convert client-space delta to world-space delta.
-      // Client pixels * dpr = physical pixels. Physical / zoom = world.
-      // But client delta maps directly: delta_world = delta_client / (zoom / dpr)
-      // Actually: screen CSS px -> physical px -> world. delta_world = delta_css * dpr / zoom.
-      // However, for overlays in CSS space, the zoom already accounts for the
-      // fact that camera viewport is in physical pixels. So:
-      //   screen delta (CSS px) * dpr / zoom = world delta
-      const worldDx = (deltaClientX * dpr) / camera.zoom;
-      const worldDy = (deltaClientY * dpr) / camera.zoom;
+      const [worldDx, worldDy] = clientToWorldDelta(
+        deltaClientX,
+        deltaClientY,
+        camera,
+      );
 
       const { x, y, width, height } = drag.originalBounds;
       const newBounds = computeResizedBounds(

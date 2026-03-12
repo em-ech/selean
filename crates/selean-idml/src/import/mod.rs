@@ -215,4 +215,141 @@ mod tests {
         assert_eq!(spreads.len(), 1);
         assert_eq!(stories.len(), 1);
     }
+
+    // ---- Error path tests ----
+
+    #[test]
+    fn import_rejects_empty_bytes() {
+        let result = import_idml(b"");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::IdmlError::Zip(_)));
+    }
+
+    #[test]
+    fn import_corrupted_zip_data_returns_zip_error() {
+        // Random bytes that start like a ZIP but are corrupted.
+        let corrupted = b"PK\x03\x04\x00\x00\x00\x00garbage_data_here_that_is_not_valid";
+        let result = import_idml(corrupted);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn import_zip_missing_designmap_returns_missing_part() {
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let buf = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let options = SimpleFileOptions::default();
+
+        // A valid ZIP but without designmap.xml.
+        zip.start_file("Spreads/Spread_u1.xml", options).unwrap();
+        zip.write_all(b"<Spread/>").unwrap();
+
+        let cursor = zip.finish().unwrap();
+        let bytes = cursor.into_inner();
+
+        let result = import_idml(&bytes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::IdmlError::MissingPart(ref msg) if msg.contains("designmap.xml")),
+            "expected MissingPart(designmap.xml), got: {err}"
+        );
+    }
+
+    #[test]
+    fn import_zip_empty_designmap_returns_invalid_format() {
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let buf = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let options = SimpleFileOptions::default();
+
+        // designmap.xml with no spread references.
+        zip.start_file("designmap.xml", options).unwrap();
+        zip.write_all(b"<Document></Document>").unwrap();
+
+        let cursor = zip.finish().unwrap();
+        let bytes = cursor.into_inner();
+
+        let result = import_idml(&bytes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::IdmlError::InvalidFormat(ref msg) if msg.contains("no spreads")),
+            "expected InvalidFormat(no spreads), got: {err}"
+        );
+    }
+
+    #[test]
+    fn import_zip_spread_ref_but_missing_spread_file() {
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let buf = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("designmap.xml", options).unwrap();
+        zip.write_all(br#"<Document><idPkg:Spread src="Spreads/Spread_missing.xml"/></Document>"#)
+            .unwrap();
+
+        let cursor = zip.finish().unwrap();
+        let bytes = cursor.into_inner();
+
+        let result = import_idml(&bytes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::IdmlError::MissingPart(ref msg) if msg.contains("Spread_missing")),
+            "expected MissingPart for missing spread, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_designmap_malformed_xml_returns_empty() {
+        let xml = r"<bad<<>>broken";
+        let (spreads, stories) = parse_designmap_xml(xml);
+        assert!(spreads.is_empty());
+        assert!(stories.is_empty());
+    }
+
+    #[test]
+    fn parse_designmap_elements_without_src_ignored() {
+        let xml = r#"<Document>
+            <idPkg:Spread/>
+            <idPkg:Story/>
+        </Document>"#;
+        let (spreads, stories) = parse_designmap_xml(xml);
+        assert!(spreads.is_empty());
+        assert!(stories.is_empty());
+    }
+
+    #[test]
+    fn import_valid_zip_with_empty_spread_produces_empty_page() {
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let buf = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("designmap.xml", options).unwrap();
+        zip.write_all(br#"<Document><idPkg:Spread src="Spreads/Spread_u1.xml"/></Document>"#)
+            .unwrap();
+
+        zip.start_file("Spreads/Spread_u1.xml", options).unwrap();
+        zip.write_all(b"<Spread></Spread>").unwrap();
+
+        let cursor = zip.finish().unwrap();
+        let bytes = cursor.into_inner();
+
+        let result = import_idml(&bytes);
+        assert!(result.is_ok());
+        let doc = result.unwrap();
+        assert_eq!(doc.page_count(), 1);
+        assert_eq!(doc.active_page().scene.len(), 0);
+    }
 }

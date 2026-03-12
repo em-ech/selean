@@ -702,4 +702,170 @@ mod tests {
         assert!(parse_point_pair("10.5").is_none());
         assert!(parse_point_pair("").is_none());
     }
+
+    // ---- Error path tests ----
+
+    #[test]
+    fn parse_malformed_spread_xml_does_not_panic() {
+        let xml = r"<Spread><Rectangle broken<<>></Rectangle>";
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        // Should not panic; may produce partial results or nothing.
+        let _ = nodes;
+    }
+
+    #[test]
+    fn parse_rectangle_no_path_geometry_uses_transform_fallback() {
+        // Rectangle without PathGeometry; bounds come from ItemTransform translation.
+        let xml = r#"<Spread>
+            <Rectangle Self="r1" Name="NoPath" ItemTransform="1 0 0 1 50 -30"/>
+        </Spread>"#;
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        assert_eq!(nodes.len(), 1);
+        // Fallback width/height = 100pt each, min 1.0px after conversion.
+        assert!(nodes[0].bounds.width >= 1.0);
+        assert!(nodes[0].bounds.height >= 1.0);
+    }
+
+    #[test]
+    fn parse_invalid_color_value_list_ignored() {
+        // Color value list with non-numeric values should be silently ignored.
+        let xml = r#"<Spread>
+            <Rectangle Self="r1" Name="BadColor" ItemTransform="1 0 0 1 0 0">
+                <Properties>
+                    <PathGeometry>
+                        <GeometryPathType PathOpen="false">
+                            <PathPointArray>
+                                <PathPointType Anchor="-50 -50" LeftDirection="-50 -50" RightDirection="-50 -50"/>
+                                <PathPointType Anchor="50 50" LeftDirection="50 50" RightDirection="50 50"/>
+                            </PathPointArray>
+                        </GeometryPathType>
+                    </PathGeometry>
+                </Properties>
+                <FillColor>abc def ghi</FillColor>
+            </Rectangle>
+        </Spread>"#;
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].fill.is_none());
+    }
+
+    #[test]
+    fn parse_color_value_list_wrong_count_ignored() {
+        // Only 2 values instead of 3; should be silently ignored.
+        let xml = r#"<Spread>
+            <Rectangle Self="r1" Name="TwoVals" ItemTransform="1 0 0 1 0 0">
+                <Properties>
+                    <PathGeometry>
+                        <GeometryPathType PathOpen="false">
+                            <PathPointArray>
+                                <PathPointType Anchor="-50 -50" LeftDirection="-50 -50" RightDirection="-50 -50"/>
+                                <PathPointType Anchor="50 50" LeftDirection="50 50" RightDirection="50 50"/>
+                            </PathPointArray>
+                        </GeometryPathType>
+                    </PathGeometry>
+                </Properties>
+                <FillColor>0.5 0.5</FillColor>
+            </Rectangle>
+        </Spread>"#;
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].fill.is_none());
+    }
+
+    #[test]
+    fn parse_text_frame_missing_story_gets_defaults() {
+        // TextFrame references a story that doesn't exist in the map.
+        let xml = r#"<Spread>
+            <TextFrame Self="tf_1" Name="Orphan" ParentStory="nonexistent_id" ItemTransform="1 0 0 1 0 0">
+                <Properties>
+                    <PathGeometry>
+                        <GeometryPathType PathOpen="false">
+                            <PathPointArray>
+                                <PathPointType Anchor="-50 -25" LeftDirection="-50 -25" RightDirection="-50 -25"/>
+                                <PathPointType Anchor="50 25" LeftDirection="50 25" RightDirection="50 25"/>
+                            </PathPointArray>
+                        </GeometryPathType>
+                    </PathGeometry>
+                </Properties>
+            </TextFrame>
+        </Spread>"#;
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        assert_eq!(nodes.len(), 1);
+        if let SceneNodeKind::Text {
+            ref content,
+            font_size,
+            ..
+        } = nodes[0].kind
+        {
+            assert!(content.is_empty());
+            assert!((font_size - 16.0).abs() < f32::EPSILON);
+        } else {
+            panic!("expected Text node kind");
+        }
+    }
+
+    #[test]
+    fn parse_path_point_missing_anchor_returns_none() {
+        // PathPointType without an Anchor attribute.
+        let xml = r#"<Spread>
+            <Rectangle Self="r1" Name="NoAnchor" ItemTransform="1 0 0 1 0 0">
+                <Properties>
+                    <PathGeometry>
+                        <GeometryPathType PathOpen="false">
+                            <PathPointArray>
+                                <PathPointType LeftDirection="0 0" RightDirection="0 0"/>
+                            </PathPointArray>
+                        </GeometryPathType>
+                    </PathGeometry>
+                </Properties>
+            </Rectangle>
+        </Spread>"#;
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        assert_eq!(nodes.len(), 1);
+        // With no valid path points, fallback bounds from transform are used.
+        assert!(nodes[0].bounds.width >= 1.0);
+    }
+
+    #[test]
+    fn parse_group_element_produces_group_kind() {
+        let xml = r#"<Spread>
+            <Group Self="g1" Name="MyGroup" ItemTransform="1 0 0 1 0 0"/>
+        </Spread>"#;
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(nodes[0].kind, SceneNodeKind::Group));
+    }
+
+    #[test]
+    fn parse_point_pair_three_values_returns_none() {
+        assert!(parse_point_pair("10.5 20.3 30.1").is_none());
+    }
+
+    #[test]
+    fn parse_single_path_point_uses_transform_fallback() {
+        // Only 1 path point (need >= 2); should fallback to transform-based bounds.
+        let xml = r#"<Spread>
+            <Rectangle Self="r1" Name="OnePoint" ItemTransform="1 0 0 1 10 20">
+                <Properties>
+                    <PathGeometry>
+                        <GeometryPathType PathOpen="false">
+                            <PathPointArray>
+                                <PathPointType Anchor="0 0" LeftDirection="0 0" RightDirection="0 0"/>
+                            </PathPointArray>
+                        </GeometryPathType>
+                    </PathGeometry>
+                </Properties>
+            </Rectangle>
+        </Spread>"#;
+        let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
+        assert_eq!(nodes.len(), 1);
+        // With only 1 point, fallback uses transform[4]=10, transform[5]=20, size 100x100.
+        assert!(nodes[0].bounds.width >= 1.0);
+    }
+
+    #[test]
+    fn path_points_to_svg_path_empty_returns_empty() {
+        let path = path_points_to_svg_path(&[], 0.0, 0.0);
+        assert!(path.is_empty());
+    }
 }

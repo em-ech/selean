@@ -57,6 +57,8 @@ export interface SeleanEditor {
   get_scene_json(): string;
   execute_tool_call(tool_name: string, args_json: string): string;
   active_page_id(): string;
+  /** Monotonically increasing version counter; changes on any mutation/selection/page switch. */
+  scene_version(): number;
   can_undo(): boolean;
   can_redo(): boolean;
   get_pages_json(): string;
@@ -74,6 +76,8 @@ export interface SeleanEditor {
   get_selected_bounds(): SelectionBounds[];
   /** Returns CameraInfo directly (typed, not JSON string). */
   get_camera(): CameraInfo;
+  /** Returns lightweight bounds for all non-selected nodes (for snap guides). */
+  get_snap_targets(): NodeBoundsInfo[];
   clear_selection(): void;
   select_node_by_id(node_id: string): boolean;
   register_image_asset(asset_ref: string, data: Uint8Array): boolean;
@@ -108,6 +112,15 @@ export type InteractionEvent = { type: string; [key: string]: unknown };
 /** Bounding box of a selected node in world space */
 export interface SelectionBounds {
   node_id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Lightweight node bounds for snap guide alignment targets */
+export interface NodeBoundsInfo {
+  id: string;
   x: number;
   y: number;
   width: number;

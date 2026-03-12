@@ -125,4 +125,92 @@ mod tests {
         let result = parse_response(200, "not json");
         assert!(matches!(result, Err(FigmaError::Parse(_))));
     }
+
+    // ---- Error path tests ----
+
+    #[test]
+    fn parse_response_empty_body_200_is_parse_error() {
+        let result = parse_response(200, "");
+        assert!(matches!(result, Err(FigmaError::Parse(_))));
+    }
+
+    #[test]
+    fn parse_response_null_json_is_parse_error() {
+        let result = parse_response(200, "null");
+        assert!(matches!(result, Err(FigmaError::Parse(_))));
+    }
+
+    #[test]
+    fn parse_response_empty_object_uses_defaults() {
+        // An empty JSON object should deserialize with all defaults.
+        let result = parse_response(200, "{}").unwrap();
+        assert!(result.name.is_empty());
+        assert_eq!(result.document.node_type, FigmaNodeType::Unknown);
+    }
+
+    #[test]
+    fn parse_response_missing_document_key_uses_default() {
+        let result = parse_response(200, r#"{"name":"Test"}"#).unwrap();
+        assert_eq!(result.name, "Test");
+        assert_eq!(result.document.node_type, FigmaNodeType::Unknown);
+    }
+
+    #[test]
+    fn parse_response_401_unauthorized() {
+        let result = parse_response(401, r#"{"err": "Invalid token"}"#);
+        let err = result.unwrap_err();
+        match err {
+            FigmaError::Api { status, body } => {
+                assert_eq!(status, 401);
+                assert!(body.contains("Invalid token"));
+            }
+            _ => panic!("expected Api error"),
+        }
+    }
+
+    #[test]
+    fn parse_response_429_rate_limited() {
+        let result = parse_response(429, "Rate limit exceeded");
+        let err = result.unwrap_err();
+        match err {
+            FigmaError::Api { status, .. } => assert_eq!(status, 429),
+            _ => panic!("expected Api error"),
+        }
+    }
+
+    #[test]
+    fn parse_response_malformed_json_with_200() {
+        // Valid-ish JSON structure but wrong types.
+        let result = parse_response(200, r#"{"name": 123, "document": "not_an_object"}"#);
+        assert!(matches!(result, Err(FigmaError::Parse(_))));
+    }
+
+    #[test]
+    fn parse_response_boundary_status_codes() {
+        // 199 is not 2xx; should be an error.
+        let result = parse_response(199, "body");
+        assert!(matches!(result, Err(FigmaError::Api { status: 199, .. })));
+
+        // 300 is not 2xx; should be an error.
+        let result = parse_response(300, "redirect");
+        assert!(matches!(result, Err(FigmaError::Api { status: 300, .. })));
+
+        // 200 and 299 are 2xx; should attempt parse.
+        let result = parse_response(200, r#"{"name":"A","document":{"type":"DOCUMENT"}}"#);
+        assert!(result.is_ok());
+
+        let result = parse_response(299, r#"{"name":"B","document":{"type":"DOCUMENT"}}"#);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_response_partial_document_uses_defaults() {
+        // Document node with only a type; everything else should default.
+        let body = r#"{"name":"Partial","document":{"id":"0:0","type":"DOCUMENT"}}"#;
+        let result = parse_response(200, body).unwrap();
+        assert_eq!(result.document.node_type, FigmaNodeType::Document);
+        assert!(result.document.children.is_empty());
+        assert!(result.document.fills.is_empty());
+        assert!(result.document.absolute_bounding_box.is_none());
+    }
 }

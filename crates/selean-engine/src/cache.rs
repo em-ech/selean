@@ -5,6 +5,7 @@
 //! atlas is rebuilt from scratch, all cached atlas regions become invalid
 //! anyway, so clearing everything is both correct and simple.
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -28,8 +29,15 @@ impl<K: Eq + Hash, V> BoundedCache<K, V> {
     }
 
     /// Looks up a cached value by key.
+    ///
+    /// Accepts any borrowed form of the key type (e.g. `&str` for `String` keys)
+    /// to avoid unnecessary allocations on lookup.
     #[must_use]
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         self.entries.get(key)
     }
 
@@ -44,8 +52,15 @@ impl<K: Eq + Hash, V> BoundedCache<K, V> {
     }
 
     /// Returns `true` if the cache contains the given key.
+    ///
+    /// Accepts any borrowed form of the key type (e.g. `&str` for `String` keys)
+    /// to avoid unnecessary allocations on lookup.
     #[must_use]
-    pub fn contains(&self, key: &K) -> bool {
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         self.entries.contains_key(key)
     }
 
@@ -73,7 +88,14 @@ impl<K: Eq + Hash, V> BoundedCache<K, V> {
     }
 
     /// Removes a specific entry by key. Returns `true` if it was present.
-    pub fn remove(&mut self, key: &K) -> bool {
+    ///
+    /// Accepts any borrowed form of the key type (e.g. `&str` for `String` keys)
+    /// to avoid unnecessary allocations on removal.
+    pub fn remove<Q>(&mut self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         self.entries.remove(key).is_some()
     }
 }

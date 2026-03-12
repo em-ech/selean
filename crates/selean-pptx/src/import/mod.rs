@@ -173,4 +173,93 @@ mod tests {
         let result = import_pptx(b"not a zip file");
         assert!(result.is_err());
     }
+
+    // ---- Error path tests ----
+
+    #[test]
+    fn parse_slide_size_malformed_xml_uses_defaults() {
+        // Completely broken XML should fall back to default dimensions.
+        let xml = r"<bad<<>>broken";
+        let (w, h) = parse_slide_size(xml);
+        assert!((w - 1920.0).abs() < f32::EPSILON);
+        assert!((h - 1080.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_slide_size_non_numeric_values_uses_defaults() {
+        // sldSz with non-numeric cx/cy; should fall back to defaults.
+        let xml = r#"<p:presentation><p:sldSz cx="not_a_number" cy="also_bad"/></p:presentation>"#;
+        let (w, h) = parse_slide_size(xml);
+        assert!((w - 1920.0).abs() < f32::EPSILON);
+        assert!((h - 1080.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_slide_size_empty_xml_uses_defaults() {
+        let xml = "";
+        let (w, h) = parse_slide_size(xml);
+        assert!((w - 1920.0).abs() < f32::EPSILON);
+        assert!((h - 1080.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn import_rejects_empty_bytes() {
+        let result = import_pptx(b"");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::PptxError::Zip(_)));
+    }
+
+    #[test]
+    fn import_zip_without_slides_returns_invalid_format() {
+        // Create a valid ZIP with presentation.xml but no slide files.
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let buf = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("ppt/presentation.xml", options).unwrap();
+        zip.write_all(
+            b"<p:presentation><p:sldSz cx=\"12192000\" cy=\"6858000\"/></p:presentation>",
+        )
+        .unwrap();
+
+        let cursor = zip.finish().unwrap();
+        let bytes = cursor.into_inner();
+
+        let result = import_pptx(&bytes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::PptxError::InvalidFormat(ref msg) if msg.contains("no slides")),
+            "expected InvalidFormat(no slides), got: {err}"
+        );
+    }
+
+    #[test]
+    fn import_zip_missing_presentation_xml_returns_missing_part() {
+        // Create a valid ZIP with a slide but no presentation.xml.
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let buf = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("ppt/slides/slide1.xml", options).unwrap();
+        zip.write_all(b"<p:sld><p:cSld><p:spTree/></p:cSld></p:sld>")
+            .unwrap();
+
+        let cursor = zip.finish().unwrap();
+        let bytes = cursor.into_inner();
+
+        let result = import_pptx(&bytes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::PptxError::MissingPart(ref msg) if msg.contains("presentation.xml")),
+            "expected MissingPart(presentation.xml), got: {err}"
+        );
+    }
 }
