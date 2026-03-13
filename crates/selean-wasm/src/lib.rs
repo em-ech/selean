@@ -1173,11 +1173,10 @@ mod wasm {
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
             let scene = &mut self.state.document.active_page_mut().scene;
-            let events = self.state.input.handle_event(
-                &event,
-                scene,
-                self.renderer.camera_mut(),
-            );
+            let events = self
+                .state
+                .input
+                .handle_event(&event, scene, self.renderer.camera_mut());
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
@@ -1200,11 +1199,10 @@ mod wasm {
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
             let scene = &mut self.state.document.active_page_mut().scene;
-            let events = self.state.input.handle_event(
-                &event,
-                scene,
-                self.renderer.camera_mut(),
-            );
+            let events = self
+                .state
+                .input
+                .handle_event(&event, scene, self.renderer.camera_mut());
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
@@ -1227,11 +1225,10 @@ mod wasm {
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
             let scene = &mut self.state.document.active_page_mut().scene;
-            let events = self.state.input.handle_event(
-                &event,
-                scene,
-                self.renderer.camera_mut(),
-            );
+            let events = self
+                .state
+                .input
+                .handle_event(&event, scene, self.renderer.camera_mut());
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
@@ -1256,11 +1253,10 @@ mod wasm {
                 modifiers: EditorState::modifiers(shift, ctrl, alt, meta),
             };
             let scene = &mut self.state.document.active_page_mut().scene;
-            let events = self.state.input.handle_event(
-                &event,
-                scene,
-                self.renderer.camera_mut(),
-            );
+            let events = self
+                .state
+                .input
+                .handle_event(&event, scene, self.renderer.camera_mut());
             serde_wasm_bindgen::to_value(&events).unwrap_or(JsValue::NULL)
         }
 
