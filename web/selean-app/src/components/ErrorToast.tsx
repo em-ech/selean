@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 
 export interface ToastMessage {
   id: number;
@@ -63,22 +63,22 @@ export function ErrorToast() {
 
 const containerStyle: React.CSSProperties = {
   position: "fixed",
-  bottom: 16,
-  right: 16,
+  bottom: spacing.lg,
+  right: spacing.lg,
   zIndex: 9999,
   display: "flex",
   flexDirection: "column",
-  gap: 8,
+  gap: spacing.sm,
   maxWidth: 400,
 };
 
 const toastStyle: React.CSSProperties = {
-  background: "#c53030",
-  color: "#fff",
+  background: colors.danger,
+  color: colors.white,
   fontSize: fontSizes.sm,
-  padding: "8px 12px",
-  borderRadius: 6,
+  padding: `${spacing.sm}px ${spacing.md}px`,
+  borderRadius: radii.md,
   cursor: "pointer",
-  boxShadow: `0 2px 8px rgba(0,0,0,0.3)`,
-  border: `1px solid ${colors.border}`,
+  boxShadow: shadows.md,
+  border: `1px solid ${colors.danger}`,
 };

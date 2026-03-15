@@ -1,7 +1,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { useCreationTool } from "./useCreationTool";
-import type { ToolType } from "../components/Toolbar";
+import type { ToolType } from "../types/editor";
 import { createMockEditor, DEFAULT_CAMERA } from "../test/mock-editor";
 
 function makeOptions(overrides: Record<string, unknown> = {}) {

@@ -5,7 +5,7 @@
 import type { ConnectionStatus } from "../collab/ws-client";
 import type { Participant } from "../collab/types";
 import { colorForUser } from "./PresenceOverlay";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, spacing } from "../theme";
 
 interface CollabBarProps {
   status: ConnectionStatus;
@@ -28,7 +28,8 @@ export function CollabBar({
         <span
           style={{
             ...dotStyle,
-            backgroundColor: status === "connected" ? "#2ecc71" : "#95a5a6",
+            backgroundColor:
+              status === "connected" ? colors.success : colors.textFaint,
           }}
           data-testid="collab-status-dot"
         />
@@ -84,19 +85,19 @@ export function CollabBar({
 const containerStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
+  gap: spacing.sm,
 };
 
 const statusContainerStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
+  gap: spacing.xs,
 };
 
 const dotStyle: React.CSSProperties = {
   width: 8,
   height: 8,
-  borderRadius: "50%",
+  borderRadius: radii.full,
   flexShrink: 0,
 };
 
@@ -106,11 +107,11 @@ const statusTextStyle: React.CSSProperties = {
 };
 
 const buttonStyle: React.CSSProperties = {
-  background: colors.border,
-  border: `1px solid ${colors.borderHover}`,
+  background: colors.surface,
+  border: `1px solid ${colors.border}`,
   color: colors.text,
-  padding: "2px 8px",
-  borderRadius: 4,
+  padding: `2px ${spacing.sm}px`,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.sm,
 };
@@ -121,13 +122,13 @@ const participantListStyle: React.CSSProperties = {
 };
 
 const avatarStyle: React.CSSProperties = {
-  width: 24,
-  height: 24,
-  borderRadius: "50%",
+  width: spacing.xl,
+  height: spacing.xl,
+  borderRadius: radii.full,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  color: "#fff",
-  fontSize: 12,
+  color: colors.white,
+  fontSize: fontSizes.sm,
   fontWeight: 600,
 };

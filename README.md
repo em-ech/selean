@@ -8,9 +8,9 @@ A design tool that combines the capabilities of Canva, Figma, and Adobe InDesign
 +---------------------------+
 |   React Frontend (Vite)   |
 |                           |
-|  Canvas  Chat  Inspector  |
-|  (WebGPU) (SSE)  (Props)  |
-|  CodePanel  ExportDialog  |
+| LeftSidebar ChatPanel     |
+| Canvas  FloatingToolbar   |
+| LayerPanel  CodePanel     |
 +-----------+---------------+
             |
             | wasm-bindgen FFI
@@ -84,16 +84,21 @@ The `SceneGraph` owns all `SceneNode` instances in a `HashMap<NodeId, SceneNode>
 - 13 blend modes (Normal, Add, Multiply, Screen, Overlay, etc. via multi-pass GPU shaders)
 - Visual effects (drop shadow, Gaussian blur via Dual Kawase pipeline)
 - Linear and radial gradients with arbitrary color stops
+- Canva-style color picker (hex input, hue/saturation spectrum, opacity slider, gradient modes, 24 preset swatches)
 - Full manual editing: drag-to-move, resize handles, rotation, grouping, z-order, alignment
+- Floating contextual toolbar (fill, stroke, opacity, font controls, alignment, delete)
 - Multi-page documents with per-page undo/redo
 - Keyboard shortcuts, context menu, inline text editing
-- Selection overlay, property inspector, layer panel, page bar
+- Layer panel with search filter, inline rename, expand/collapse
+- 6 starter templates (social post, presentation, business card, poster, flyer, resume)
+- Light theme with dark mode toggle
 
 ### AI Chat-Prompted Design
 
-- Claude-powered chat sidebar with streaming responses
+- Lovable-style chat panel with streaming responses and suggestion chips
 - 41 tool definitions covering node creation, property changes, layout, grouping, effects
 - AI and manual editing share the same undo stack and scene graph
+- Chat and manual editing given equal weight in the UI layout
 
 ### Import/Export
 
@@ -160,18 +165,21 @@ crates/
 web/
   selean-app/          React + TypeScript frontend (Vite)
     src/
-      components/      Canvas, ChatSidebar, PropertyInspector, FileMenu, LayerPanel,
-                       AlignmentBar, ContextMenu, InlineTextEditor, SelectionOverlay,
-                       Toolbar, PageBar, ErrorBoundary, ErrorToast, CollabBar,
-                       PresenceOverlay, CodePanel, ExportDialog, WorkspaceSelector,
-                       MemberManager
+      components/      Canvas, ChatPanel, LeftSidebar, FloatingToolbar, ColorPicker,
+                       LayerPanel, FileMenu, ContextMenu, InlineTextEditor,
+                       SelectionOverlay, PageBar, ErrorBoundary, ErrorToast,
+                       CollabBar, PresenceOverlay, CodePanel, ExportDialog,
+                       WorkspaceSelector, MemberManager, SnapGuides
       hooks/           useSeleanEditor, useSelection, useCreationTool, useResizeDrag,
                        useMoveDrag, useAutoSave, useKeyboardShortcuts, useCollabSession,
-                       useFileOperations, useFontLoader, useWorkspace, useGitHub
+                       useFileOperations, useFontLoader, useWorkspace, useGitHub,
+                       useChatEngine, useResizablePanel, useTheme
       auth/            AuthContext, LoginPage, ProtectedRoute, api
       collab/          WsClient, OperationBuffer, CollabContext
       wasm/            TypeScript type stubs for WASM bindings
-      theme.ts         Shared design tokens (colors, font sizes)
+      types/           Shared types (ToolType)
+      utils/           Camera transforms, color conversions, clipboard
+      theme.ts         Shared design tokens (light/dark palettes, spacing, radii, shadows)
 
 figma-plugin/          Figma plugin for importing Selean interchange format
 ```
@@ -230,13 +238,13 @@ See [.env.example](.env.example) for the full list.
 ## Testing
 
 ```bash
-# Rust (1682 tests across 11 crates)
+# Rust (1832 tests across 11 crates)
 cargo test --workspace
 
-# Frontend (410 tests via Vitest)
+# Frontend (474 tests via Vitest)
 cd web/selean-app && npx vitest run
 
-# Benchmarks (17 groups)
+# Benchmarks (18 groups)
 cargo bench -p selean-engine
 ```
 

@@ -7,7 +7,7 @@
 
 import type { CameraInfo, SeleanEditor } from "../wasm/types";
 import type { CursorPosition, Participant } from "../collab/types";
-import { colors } from "../theme";
+import { colors, fontSizes, radii } from "../theme";
 import { worldToScreen } from "../utils/camera";
 
 /** Presence data for a single remote participant. */
@@ -123,10 +123,10 @@ const overlayStyle: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = {
   display: "inline-block",
-  color: "#fff",
-  fontSize: 11,
+  color: colors.white,
+  fontSize: fontSizes.xs,
   padding: "1px 4px",
-  borderRadius: 3,
+  borderRadius: radii.sm,
   marginLeft: 4,
   whiteSpace: "nowrap",
 };

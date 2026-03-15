@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 import type { PageInfo, SeleanEditor } from "../wasm/types";
 
 interface PageBarProps {
@@ -135,7 +135,12 @@ export function PageBar({
     (e: React.MouseEvent, pageId: string) => {
       e.preventDefault();
       e.stopPropagation();
-      setContextMenu({ pageId, x: e.clientX, y: e.clientY });
+      // Clamp to viewport to prevent off-screen overflow.
+      const menuW = 120;
+      const menuH = 70;
+      const x = Math.min(e.clientX, window.innerWidth - menuW);
+      const y = Math.min(e.clientY, window.innerHeight - menuH);
+      setContextMenu({ pageId, x, y });
     },
     [],
   );
@@ -285,8 +290,9 @@ const barStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   height: 32,
+  background: colors.bg,
   borderBottom: `1px solid ${colors.border}`,
-  padding: "0 8px",
+  padding: `0 ${spacing.sm}px`,
   gap: 2,
   flexShrink: 0,
   overflow: "auto",
@@ -296,9 +302,10 @@ const barStyle: React.CSSProperties = {
 const tabStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
-  padding: "4px 12px",
+  gap: spacing.xs,
+  padding: `${spacing.xs}px ${spacing.md}px`,
   fontSize: fontSizes.sm,
+  color: colors.text,
   cursor: "pointer",
   whiteSpace: "nowrap",
   flexShrink: 0,
@@ -320,33 +327,34 @@ const addButtonStyle: React.CSSProperties = {
   color: colors.textDim,
   cursor: "pointer",
   fontSize: fontSizes.md,
-  width: 24,
-  height: 24,
+  width: spacing.xl,
+  height: spacing.xl,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  borderRadius: 4,
+  borderRadius: radii.sm,
   flexShrink: 0,
 };
 
 const renameInputStyle: React.CSSProperties = {
-  background: colors.bgLight,
+  background: colors.surface,
   border: `1px solid ${colors.accent}`,
   color: colors.text,
   fontSize: fontSizes.sm,
-  padding: "1px 4px",
+  padding: `1px ${spacing.xs}px`,
   outline: "none",
   width: 100,
 };
 
 const contextMenuStyle: React.CSSProperties = {
   position: "fixed",
-  background: colors.bgLight,
+  background: colors.bg,
   border: `1px solid ${colors.border}`,
-  borderRadius: 4,
-  padding: "4px 0",
+  borderRadius: radii.sm,
+  padding: `${spacing.xs}px 0`,
   zIndex: 1000,
   minWidth: 100,
+  boxShadow: shadows.md,
 };
 
 const menuItemStyle: React.CSSProperties = {
@@ -356,7 +364,7 @@ const menuItemStyle: React.CSSProperties = {
   border: "none",
   color: colors.text,
   fontSize: fontSizes.sm,
-  padding: "4px 12px",
+  padding: `${spacing.xs}px ${spacing.md}px`,
   cursor: "pointer",
   textAlign: "left",
 };

@@ -18,8 +18,82 @@
         overflow: hidden;
         font-family:
           -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: #1a1a2e;
-        color: #e0e0e0;
+        background: #ffffff;
+        color: #1a1a2e;
+      }
+      /* Interactive element hover states */
+      button[data-interactive] {
+        transition:
+          background 0.15s ease,
+          opacity 0.15s ease,
+          border-color 0.15s ease,
+          color 0.15s ease;
+      }
+      button[data-interactive]:hover:not(:disabled) {
+        filter: brightness(0.95);
+      }
+      button[data-interactive]:active:not(:disabled) {
+        filter: brightness(0.9);
+        transform: scale(0.98);
+      }
+      input,
+      textarea,
+      select {
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease;
+      }
+      input:focus,
+      textarea:focus {
+        border-color: #6c5ce7 !important;
+        box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.15);
+      }
+
+      /* Scrollbar styling */
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.15);
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 0, 0, 0.25);
+      }
+
+      /* Selection color */
+      ::selection {
+        background: rgba(108, 92, 231, 0.2);
+      }
+
+      /* Panel transitions */
+      [data-panel] {
+        transition:
+          width 0.2s ease,
+          min-width 0.2s ease,
+          opacity 0.15s ease;
+      }
+
+      /* Resize handle hover feedback */
+      [data-resize-handle]:hover {
+        background: rgba(108, 92, 231, 0.15);
+      }
+      [data-resize-handle]:active {
+        background: rgba(108, 92, 231, 0.25);
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
       }
     </style>
   </head>

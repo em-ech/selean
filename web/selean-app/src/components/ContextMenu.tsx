@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 import type { NodeInfo, SeleanEditor } from "../wasm/types";
 import { pasteNode } from "../utils/clipboard";
 
@@ -223,12 +223,12 @@ function getFirstSelectedNode(
 const menuStyle: React.CSSProperties = {
   position: "fixed",
   zIndex: 1000,
-  background: colors.surface,
+  background: colors.bg,
   border: `1px solid ${colors.border}`,
-  borderRadius: 6,
-  padding: "4px 0",
+  borderRadius: radii.md,
+  padding: `${spacing.xs}px 0`,
   minWidth: 160,
-  boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+  boxShadow: shadows.lg,
 };
 
 const itemBtnStyle: React.CSSProperties = {
@@ -238,7 +238,7 @@ const itemBtnStyle: React.CSSProperties = {
   border: "none",
   color: colors.text,
   fontSize: fontSizes.sm,
-  padding: "6px 12px",
+  padding: `6px ${spacing.md}px`,
   textAlign: "left",
   cursor: "pointer",
 };
@@ -246,5 +246,5 @@ const itemBtnStyle: React.CSSProperties = {
 const separatorStyle: React.CSSProperties = {
   height: 1,
   background: colors.border,
-  margin: "4px 0",
+  margin: `${spacing.xs}px 0`,
 };

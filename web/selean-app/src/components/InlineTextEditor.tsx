@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { colors } from "../theme";
 import type { CameraInfo, SeleanEditor } from "../wasm/types";
 
 interface InlineTextEditorProps {
@@ -106,9 +107,9 @@ export function InlineTextEditor({
         height: screenRect.h,
         fontSize: scaledFontSize,
         fontFamily: "Inter, sans-serif",
-        color: "white",
-        background: "rgba(0,0,0,0.3)",
-        border: "2px solid #4a4a8a",
+        color: colors.text,
+        background: colors.bg,
+        border: `2px solid ${colors.accent}`,
         outline: "none",
         resize: "none",
         padding: 2,

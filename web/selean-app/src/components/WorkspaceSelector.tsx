@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../hooks/useWorkspace";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 
 export function WorkspaceSelector() {
   const { workspaces, activeWorkspace, switchWorkspace, createWorkspace } =
@@ -150,8 +150,8 @@ const triggerStyle: React.CSSProperties = {
   background: "transparent",
   border: `1px solid ${colors.border}`,
   color: colors.text,
-  padding: "4px 10px",
-  borderRadius: 4,
+  padding: `${spacing.xs}px 10px`,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.base,
   display: "flex",
@@ -166,13 +166,13 @@ const caretStyle: React.CSSProperties = {
 
 const dropdownStyle: React.CSSProperties = {
   position: "absolute",
-  top: "calc(100% + 4px)",
+  top: `calc(100% + ${spacing.xs}px)`,
   left: 0,
   minWidth: 200,
-  background: colors.surface,
+  background: colors.bg,
   border: `1px solid ${colors.border}`,
-  borderRadius: 6,
-  boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+  borderRadius: radii.md,
+  boxShadow: shadows.lg,
   zIndex: 100,
   overflow: "hidden",
 };
@@ -183,14 +183,15 @@ const itemStyle: React.CSSProperties = {
   background: "transparent",
   border: "none",
   color: colors.text,
-  padding: "8px 12px",
+  padding: `${spacing.sm}px ${spacing.md}px`,
   textAlign: "left",
   cursor: "pointer",
   fontSize: fontSizes.base,
 };
 
 const activeItemStyle: React.CSSProperties = {
-  background: colors.accent,
+  background: colors.accentLight,
+  color: colors.accent,
 };
 
 const dividerStyle: React.CSSProperties = {
@@ -204,14 +205,14 @@ const newWorkspaceBtnStyle: React.CSSProperties = {
   background: "transparent",
   border: "none",
   color: colors.textMuted,
-  padding: "8px 12px",
+  padding: `${spacing.sm}px ${spacing.md}px`,
   textAlign: "left",
   cursor: "pointer",
   fontSize: fontSizes.base,
 };
 
 const createFormStyle: React.CSSProperties = {
-  padding: "8px 12px",
+  padding: `${spacing.sm}px ${spacing.md}px`,
   display: "flex",
   flexDirection: "column",
   gap: 6,
@@ -221,23 +222,23 @@ const inputStyle: React.CSSProperties = {
   background: colors.bg,
   border: `1px solid ${colors.border}`,
   color: colors.text,
-  padding: "4px 8px",
-  borderRadius: 4,
+  padding: `${spacing.xs}px ${spacing.sm}px`,
+  borderRadius: radii.sm,
   fontSize: fontSizes.base,
   outline: "none",
 };
 
 const createButtonsStyle: React.CSSProperties = {
   display: "flex",
-  gap: 4,
+  gap: spacing.xs,
 };
 
 const confirmBtnStyle: React.CSSProperties = {
   background: colors.accent,
   border: "none",
-  color: colors.text,
-  padding: "4px 10px",
-  borderRadius: 4,
+  color: colors.white,
+  padding: `${spacing.xs}px 10px`,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.sm,
 };
@@ -246,13 +247,13 @@ const cancelBtnStyle: React.CSSProperties = {
   background: "transparent",
   border: `1px solid ${colors.border}`,
   color: colors.textMuted,
-  padding: "4px 10px",
-  borderRadius: 4,
+  padding: `${spacing.xs}px 10px`,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.sm,
 };
 
 const errorStyle: React.CSSProperties = {
-  color: "#e55",
+  color: colors.danger,
   fontSize: fontSizes.xs,
 };

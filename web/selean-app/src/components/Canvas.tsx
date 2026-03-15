@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, spacing } from "../theme";
 import type { EditorStatus, SeleanEditor } from "../wasm/types";
 
 interface CanvasProps {
@@ -211,8 +211,9 @@ const overlayStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(26, 26, 46, 0.9)",
+  background: "rgba(255, 255, 255, 0.92)",
+  color: colors.text,
   fontSize: fontSizes.xl,
   flexDirection: "column",
-  gap: 8,
+  gap: spacing.sm,
 };

@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useWorkspace } from "../hooks/useWorkspace";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 
 interface MemberManagerProps {
   onClose: () => void;
@@ -161,7 +161,7 @@ export function MemberManager({ onClose }: MemberManagerProps) {
 const overlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.5)",
+  background: "rgba(0,0,0,0.3)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -169,21 +169,22 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  background: colors.surface,
+  background: colors.bg,
   border: `1px solid ${colors.border}`,
-  borderRadius: 8,
+  borderRadius: radii.lg,
   width: 480,
   maxHeight: "70vh",
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
+  boxShadow: shadows.lg,
 };
 
 const headerStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "12px 16px",
+  padding: `${spacing.md}px ${spacing.lg}px`,
   borderBottom: `1px solid ${colors.border}`,
 };
 
@@ -205,18 +206,18 @@ const closeBtnStyle: React.CSSProperties = {
 const memberListStyle: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
-  padding: "8px 0",
+  padding: `${spacing.sm}px 0`,
 };
 
 const memberRowStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "8px 16px",
+  padding: `${spacing.sm}px ${spacing.lg}px`,
 };
 
 const ownerRowStyle: React.CSSProperties = {
-  background: colors.surfaceAlt,
+  background: colors.surface,
 };
 
 const memberInfoStyle: React.CSSProperties = {
@@ -236,12 +237,12 @@ const memberEmailStyle: React.CSSProperties = {
 };
 
 const ownerBadgeStyle: React.CSSProperties = {
-  color: colors.textMuted,
+  color: colors.accent,
   fontSize: fontSizes.sm,
   fontWeight: 600,
-  padding: "2px 8px",
-  border: `1px solid ${colors.border}`,
-  borderRadius: 4,
+  padding: `2px ${spacing.sm}px`,
+  border: `1px solid ${colors.accent}`,
+  borderRadius: radii.sm,
 };
 
 const memberActionsStyle: React.CSSProperties = {
@@ -255,7 +256,7 @@ const roleSelectStyle: React.CSSProperties = {
   border: `1px solid ${colors.border}`,
   color: colors.text,
   padding: "3px 6px",
-  borderRadius: 4,
+  borderRadius: radii.sm,
   fontSize: fontSizes.sm,
 };
 
@@ -265,17 +266,17 @@ const roleLabelStyle: React.CSSProperties = {
 };
 
 const removeBtnStyle: React.CSSProperties = {
-  background: "transparent",
-  border: `1px solid ${colors.border}`,
-  color: "#e55",
-  padding: "3px 8px",
-  borderRadius: 4,
+  background: colors.dangerLight,
+  border: `1px solid ${colors.danger}`,
+  color: colors.danger,
+  padding: `3px ${spacing.sm}px`,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.sm,
 };
 
 const inviteFormStyle: React.CSSProperties = {
-  padding: "12px 16px",
+  padding: `${spacing.md}px ${spacing.lg}px`,
   borderTop: `1px solid ${colors.border}`,
 };
 
@@ -290,8 +291,8 @@ const inviteInputStyle: React.CSSProperties = {
   background: colors.bg,
   border: `1px solid ${colors.border}`,
   color: colors.text,
-  padding: "6px 8px",
-  borderRadius: 4,
+  padding: `6px ${spacing.sm}px`,
+  borderRadius: radii.sm,
   fontSize: fontSizes.base,
   outline: "none",
 };
@@ -299,15 +300,15 @@ const inviteInputStyle: React.CSSProperties = {
 const inviteBtnStyle: React.CSSProperties = {
   background: colors.accent,
   border: "none",
-  color: colors.text,
-  padding: "6px 12px",
-  borderRadius: 4,
+  color: colors.white,
+  padding: `6px ${spacing.md}px`,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.sm,
 };
 
 const errorStyle: React.CSSProperties = {
-  color: "#e55",
+  color: colors.danger,
   fontSize: fontSizes.sm,
-  padding: "8px 16px",
+  padding: `${spacing.sm}px ${spacing.lg}px`,
 };

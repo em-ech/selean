@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { SeleanEditor, NodeInfo } from "../wasm/types";
-import type { ToolType } from "../components/Toolbar";
+import type { ToolType } from "../types/editor";
 import { pasteNode } from "../utils/clipboard";
 
 /** Tags that should suppress single-key shortcuts. */
@@ -41,6 +41,10 @@ export interface UseKeyboardShortcutsParams {
   handleToolChange: (tool: ToolType) => void;
   clipboardRef: React.MutableRefObject<NodeInfo | null>;
   onUndoRedoTick: () => void;
+  /** Toggle panel visibility callbacks (optional). */
+  onToggleChat?: () => void;
+  onToggleSidebar?: () => void;
+  onToggleLayers?: () => void;
 }
 
 /**
@@ -57,6 +61,9 @@ export function useKeyboardShortcuts({
   handleToolChange,
   clipboardRef,
   onUndoRedoTick,
+  onToggleChat,
+  onToggleSidebar,
+  onToggleLayers,
 }: UseKeyboardShortcutsParams): void {
   useEffect(() => {
     if (!isReady) return;
@@ -119,6 +126,23 @@ export function useKeyboardShortcuts({
         e.preventDefault();
         editor.zoom_to(1.0);
         onSceneChanged();
+        return;
+      }
+
+      // Panel toggles: Cmd+J (chat), Cmd+B (sidebar), Cmd+L (layers)
+      if (isCtrlOrMeta && e.key === "j") {
+        e.preventDefault();
+        onToggleChat?.();
+        return;
+      }
+      if (isCtrlOrMeta && e.key === "b") {
+        e.preventDefault();
+        onToggleSidebar?.();
+        return;
+      }
+      if (isCtrlOrMeta && e.key === "l") {
+        e.preventDefault();
+        onToggleLayers?.();
         return;
       }
 
@@ -368,5 +392,8 @@ export function useKeyboardShortcuts({
     handleToolChange,
     clipboardRef,
     onUndoRedoTick,
+    onToggleChat,
+    onToggleSidebar,
+    onToggleLayers,
   ]);
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Highlight, themes } from "prism-react-renderer";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, spacing } from "../theme";
 import { ExportDialog } from "./ExportDialog";
 import type { SeleanEditor } from "../wasm/types";
 
@@ -266,12 +266,11 @@ function TokensView({ tokens }: { tokens: DesignTokens }) {
 // --- Styles ---
 
 const panelStyle: React.CSSProperties = {
-  width: 320,
-  borderLeft: `1px solid ${colors.border}`,
+  flex: 1,
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
-  background: colors.surface,
+  background: colors.bg,
   color: colors.text,
 };
 
@@ -283,7 +282,7 @@ const tabBarStyle: React.CSSProperties = {
 
 const tabStyle: React.CSSProperties = {
   flex: 1,
-  padding: "8px 0",
+  padding: `${spacing.sm}px 0`,
   background: "transparent",
   border: "none",
   borderBottomWidth: 2,
@@ -305,7 +304,7 @@ const toolbarStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "6px 12px",
+  padding: `6px ${spacing.md}px`,
   borderBottom: `1px solid ${colors.border}`,
   flexShrink: 0,
 };
@@ -326,11 +325,11 @@ const toolbarActionsStyle: React.CSSProperties = {
 };
 
 const exportBtnStyle: React.CSSProperties = {
-  background: "#3b82f6",
+  background: colors.accent,
   border: "none",
-  color: "#fff",
+  color: colors.white,
   padding: "3px 10px",
-  borderRadius: 4,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.xs,
   fontWeight: 500,
@@ -338,11 +337,11 @@ const exportBtnStyle: React.CSSProperties = {
 };
 
 const copyBtnStyle: React.CSSProperties = {
-  background: colors.accent,
-  border: "none",
+  background: colors.accentLight,
+  border: `1px solid ${colors.accent}`,
   color: colors.text,
   padding: "3px 10px",
-  borderRadius: 4,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.xs,
   fontWeight: 500,
@@ -359,14 +358,14 @@ const lineNumberStyle: React.CSSProperties = {
   color: colors.textFaint,
   userSelect: "none",
   display: "inline-block",
-  width: 32,
+  width: spacing.xxl,
   textAlign: "right",
-  marginRight: 16,
+  marginRight: spacing.lg,
   fontSize: fontSizes.xs,
 };
 
 const emptyStyle: React.CSSProperties = {
-  padding: "20px 12px",
+  padding: `${spacing.xl}px ${spacing.md}px`,
   color: colors.textFaint,
   fontSize: fontSizes.sm,
 };
@@ -402,7 +401,7 @@ const fileItemStyle: React.CSSProperties = {
 
 const activeFileStyle: React.CSSProperties = {
   ...fileItemStyle,
-  background: colors.border,
+  background: colors.accentLight,
   color: colors.text,
 };
 
@@ -414,17 +413,17 @@ const fileContentStyle: React.CSSProperties = {
 // Tokens tab styles
 
 const tokensContainer: React.CSSProperties = {
-  padding: 12,
+  padding: spacing.md,
   display: "flex",
   flexDirection: "column",
-  gap: 16,
+  gap: spacing.lg,
 };
 
 const tokensSectionHeader: React.CSSProperties = {
   fontWeight: 600,
   fontSize: fontSizes.sm,
   color: colors.textMuted,
-  marginBottom: 8,
+  marginBottom: spacing.sm,
   textTransform: "uppercase",
   letterSpacing: 1,
 };
@@ -432,21 +431,21 @@ const tokensSectionHeader: React.CSSProperties = {
 const colorGrid: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
-  gap: 8,
+  gap: spacing.sm,
 };
 
 const colorItem: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
-  gap: 4,
+  gap: spacing.xs,
   width: 60,
 };
 
 const colorSwatch: React.CSSProperties = {
-  width: 32,
-  height: 32,
-  borderRadius: 6,
+  width: spacing.xxl,
+  height: spacing.xxl,
+  borderRadius: radii.md,
   border: `1px solid ${colors.border}`,
 };
 
@@ -480,13 +479,13 @@ const fontFamily: React.CSSProperties = {
 
 const fontWeights: React.CSSProperties = {
   display: "flex",
-  gap: 4,
+  gap: spacing.xs,
 };
 
 const fontWeightBadge: React.CSSProperties = {
-  background: colors.border,
+  background: colors.surfaceAlt,
   color: colors.textDim,
   padding: "2px 6px",
-  borderRadius: 3,
+  borderRadius: radii.sm,
   fontSize: fontSizes.xs,
 };

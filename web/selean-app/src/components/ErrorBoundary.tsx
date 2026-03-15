@@ -1,5 +1,5 @@
 import { Component } from "react";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, spacing } from "../theme";
 
 interface ErrorBoundaryProps {
   name: string;
@@ -55,12 +55,12 @@ export class ErrorBoundary extends Component<
 }
 
 const fallbackStyle: React.CSSProperties = {
-  padding: 16,
+  padding: spacing.lg,
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  gap: 8,
+  gap: spacing.sm,
   color: colors.textDim,
   fontSize: fontSizes.sm,
   minHeight: 80,
@@ -80,11 +80,11 @@ const messageStyle: React.CSSProperties = {
 };
 
 const retryStyle: React.CSSProperties = {
-  background: colors.border,
-  border: `1px solid ${colors.borderHover}`,
+  background: colors.surface,
+  border: `1px solid ${colors.border}`,
   color: colors.text,
-  padding: "4px 12px",
-  borderRadius: 4,
+  padding: `${spacing.xs}px ${spacing.md}px`,
+  borderRadius: radii.sm,
   cursor: "pointer",
   fontSize: fontSizes.xs,
 };

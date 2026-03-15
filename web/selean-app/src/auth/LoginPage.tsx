@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useAuth } from "./AuthContext";
 import { githubAuthorizeUrl } from "./api";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 
 type Mode = "login" | "signup";
 
@@ -131,26 +131,28 @@ const pageStyle: React.CSSProperties = {
 };
 
 const cardStyle: React.CSSProperties = {
-  width: 360,
-  padding: 32,
-  background: colors.surface,
+  width: 380,
+  padding: spacing.xxl,
+  background: colors.bg,
   border: `1px solid ${colors.border}`,
-  borderRadius: 8,
+  borderRadius: radii.lg,
+  boxShadow: shadows.lg,
   display: "flex",
   flexDirection: "column",
-  gap: 16,
+  gap: spacing.lg,
 };
 
 const titleStyle: React.CSSProperties = {
-  fontSize: 24,
+  fontSize: fontSizes.heading,
   fontWeight: 700,
-  color: colors.text,
+  color: colors.accent,
   textAlign: "center",
   margin: 0,
+  letterSpacing: "-0.02em",
 };
 
 const subtitleStyle: React.CSSProperties = {
-  fontSize: fontSizes.base,
+  fontSize: fontSizes.md,
   color: colors.textDim,
   textAlign: "center",
   margin: 0,
@@ -159,32 +161,32 @@ const subtitleStyle: React.CSSProperties = {
 const formStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 12,
+  gap: spacing.md,
 };
 
 const inputStyle: React.CSSProperties = {
-  padding: "10px 12px",
+  padding: `${spacing.sm + 2}px ${spacing.md}px`,
   border: `1px solid ${colors.border}`,
-  borderRadius: 4,
-  background: colors.bg,
+  borderRadius: radii.md,
+  background: colors.surface,
   color: colors.text,
-  fontSize: fontSizes.base,
+  fontSize: fontSizes.md,
   outline: "none",
 };
 
 const errorStyle: React.CSSProperties = {
-  color: "#e74c3c",
+  color: colors.danger,
   fontSize: fontSizes.sm,
   margin: 0,
 };
 
 const submitStyle: React.CSSProperties = {
-  padding: "10px 16px",
-  background: "#3b82f6",
-  color: "#fff",
+  padding: `${spacing.sm + 2}px ${spacing.lg}px`,
+  background: colors.accent,
+  color: colors.white,
   border: "none",
-  borderRadius: 4,
-  fontSize: fontSizes.base,
+  borderRadius: radii.md,
+  fontSize: fontSizes.md,
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -192,7 +194,7 @@ const submitStyle: React.CSSProperties = {
 const dividerStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
+  gap: spacing.md,
 };
 
 const dividerLineStyle: React.CSSProperties = {
@@ -207,12 +209,12 @@ const dividerTextStyle: React.CSSProperties = {
 };
 
 const githubBtnStyle: React.CSSProperties = {
-  padding: "10px 16px",
-  background: "#24292e",
-  color: "#fff",
+  padding: `${spacing.sm + 2}px ${spacing.lg}px`,
+  background: colors.text,
+  color: colors.bg,
   border: `1px solid ${colors.border}`,
-  borderRadius: 4,
-  fontSize: fontSizes.base,
+  borderRadius: radii.md,
+  fontSize: fontSizes.md,
   fontWeight: 600,
   cursor: "pointer",
   textAlign: "center",
@@ -221,7 +223,7 @@ const githubBtnStyle: React.CSSProperties = {
 const toggleStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "#3b82f6",
+  color: colors.accent,
   cursor: "pointer",
   fontSize: fontSizes.sm,
   textAlign: "center",

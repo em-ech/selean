@@ -107,7 +107,7 @@ describe("CollabBar", () => {
       <CollabBar status="connected" participants={[]} hasPendingOps={false} />,
     );
     const dot = screen.getByTestId("collab-status-dot");
-    expect(dot.style.backgroundColor).toBe("rgb(46, 204, 113)");
+    expect(dot.style.backgroundColor).toBe("rgb(39, 174, 96)");
   });
 
   it("status dot is grey when disconnected", () => {
@@ -119,6 +119,6 @@ describe("CollabBar", () => {
       />,
     );
     const dot = screen.getByTestId("collab-status-dot");
-    expect(dot.style.backgroundColor).toBe("rgb(149, 165, 166)");
+    expect(dot.style.backgroundColor).toBe("rgb(153, 153, 153)");
   });
 });

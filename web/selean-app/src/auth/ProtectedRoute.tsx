@@ -1,5 +1,6 @@
 import { useAuth } from "./AuthContext";
 import { LoginPage } from "./LoginPage";
+import { colors } from "../theme";
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -25,5 +26,5 @@ const loadingStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  color: "#999",
+  color: colors.textFaint,
 };

@@ -109,45 +109,44 @@ describe("App", () => {
     expect(screen.getByText("WebGPU not supported")).toBeInTheDocument();
   });
 
-  it("renders ready state with header and status", () => {
+  it("renders ready state with header", () => {
     render(<App />);
     expect(screen.getByText("Selean")).toBeInTheDocument();
-    expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
-  // --- Undo/redo buttons ---
+  // --- Undo/redo buttons (now icon buttons with title attributes) ---
 
   it("renders undo and redo buttons when ready", () => {
     render(<App />);
-    expect(screen.getByText("Undo")).toBeInTheDocument();
-    expect(screen.getByText("Redo")).toBeInTheDocument();
+    expect(screen.getByTitle("Undo")).toBeInTheDocument();
+    expect(screen.getByTitle("Redo")).toBeInTheDocument();
   });
 
   it("disables undo button when can_undo returns false", () => {
     (mockEditor.can_undo as Mock).mockReturnValue(false);
     (mockEditor.can_redo as Mock).mockReturnValue(false);
     render(<App />);
-    expect(screen.getByText("Undo")).toBeDisabled();
-    expect(screen.getByText("Redo")).toBeDisabled();
+    expect(screen.getByTitle("Undo")).toBeDisabled();
+    expect(screen.getByTitle("Redo")).toBeDisabled();
   });
 
   it("enables undo button when can_undo returns true", () => {
     (mockEditor.can_undo as Mock).mockReturnValue(true);
     render(<App />);
-    expect(screen.getByText("Undo")).not.toBeDisabled();
+    expect(screen.getByTitle("Undo")).not.toBeDisabled();
   });
 
   it("calls editor.undo when undo button clicked", () => {
     (mockEditor.can_undo as Mock).mockReturnValue(true);
     render(<App />);
-    fireEvent.click(screen.getByText("Undo"));
+    fireEvent.click(screen.getByTitle("Undo"));
     expect(mockEditor.undo).toHaveBeenCalled();
   });
 
   it("calls editor.redo when redo button clicked", () => {
     (mockEditor.can_redo as Mock).mockReturnValue(true);
     render(<App />);
-    fireEvent.click(screen.getByText("Redo"));
+    fireEvent.click(screen.getByTitle("Redo"));
     expect(mockEditor.redo).toHaveBeenCalled();
   });
 
@@ -156,8 +155,8 @@ describe("App", () => {
   it("hides toolbar and panels when loading", () => {
     mockStatus = "loading";
     render(<App />);
-    expect(screen.queryByText("Undo")).not.toBeInTheDocument();
-    expect(screen.queryByText("Redo")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Undo")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Redo")).not.toBeInTheDocument();
   });
 
   // --- Context menu ---
@@ -191,6 +190,6 @@ describe("App", () => {
     mockStatus = "error";
     mockError = "fail";
     render(<App />);
-    expect(screen.queryByText("Undo")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Undo")).not.toBeInTheDocument();
   });
 });

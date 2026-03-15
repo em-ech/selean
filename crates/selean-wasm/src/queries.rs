@@ -9,6 +9,61 @@ use selean_engine::renderer::Camera;
 use selean_engine::scene::{SceneGraph, SceneNode};
 use serde::{Deserialize, Serialize};
 
+/// Serializable gradient stop for the frontend (color as RGBA array).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GradientStopInfo {
+    /// Position along the gradient axis in [0.0, 1.0].
+    pub position: f32,
+    /// Color at this stop as `[r, g, b, a]`.
+    pub color: [f32; 4],
+}
+
+/// Serializable gradient for the frontend.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum GradientInfo {
+    /// A linear gradient between two points.
+    Linear {
+        /// Start point as a fraction of node bounds [0..1].
+        start: [f32; 2],
+        /// End point as a fraction of node bounds [0..1].
+        end: [f32; 2],
+        /// Color stops along the gradient axis.
+        stops: Vec<GradientStopInfo>,
+    },
+    /// A radial gradient from a center point.
+    Radial {
+        /// Center point as a fraction of node bounds [0..1].
+        center: [f32; 2],
+        /// Radius where 1.0 = half the smaller dimension.
+        radius: f32,
+        /// Color stops from center to edge.
+        stops: Vec<GradientStopInfo>,
+    },
+}
+
+/// Serializable visual effect for the frontend.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum EffectInfo {
+    /// A drop shadow cast behind the node.
+    DropShadow {
+        /// Shadow color as `[r, g, b, a]`.
+        color: [f32; 4],
+        /// Horizontal offset in logical pixels.
+        offset_x: f32,
+        /// Vertical offset in logical pixels.
+        offset_y: f32,
+        /// Blur radius in logical pixels.
+        blur_radius: f32,
+    },
+    /// A Gaussian blur applied to the node's content.
+    Blur {
+        /// Blur radius in logical pixels.
+        radius: f32,
+    },
+}
+
 /// Serializable representation of a node for the frontend.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NodeInfo {
@@ -66,6 +121,10 @@ pub struct NodeInfo {
     pub line_height: Option<f32>,
     /// Text-specific color as RGBA (Text kind only).
     pub text_color: Option<[f32; 4]>,
+    /// Gradient fill, if set. Takes priority over solid fill during rendering.
+    pub gradient: Option<GradientInfo>,
+    /// Visual effects (drop shadow, blur) applied to this node.
+    pub effects: Vec<EffectInfo>,
     /// Child node IDs.
     pub children: Vec<String>,
     /// Parent node ID, if any.
@@ -185,6 +244,58 @@ impl From<&SceneNode> for NodeInfo {
             text_align,
             line_height,
             text_color,
+            gradient: node.fill_gradient.as_ref().map(|g| {
+                use selean_engine::scene::Gradient;
+                match g {
+                    Gradient::Linear { start, end, stops } => GradientInfo::Linear {
+                        start: *start,
+                        end: *end,
+                        stops: stops
+                            .iter()
+                            .map(|s| GradientStopInfo {
+                                position: s.position,
+                                color: [s.color.r, s.color.g, s.color.b, s.color.a],
+                            })
+                            .collect(),
+                    },
+                    Gradient::Radial {
+                        center,
+                        radius,
+                        stops,
+                    } => GradientInfo::Radial {
+                        center: *center,
+                        radius: *radius,
+                        stops: stops
+                            .iter()
+                            .map(|s| GradientStopInfo {
+                                position: s.position,
+                                color: [s.color.r, s.color.g, s.color.b, s.color.a],
+                            })
+                            .collect(),
+                    },
+                }
+            }),
+            effects: node
+                .effects
+                .iter()
+                .map(|e| {
+                    use selean_engine::scene::Effect;
+                    match e {
+                        Effect::DropShadow {
+                            color,
+                            offset_x,
+                            offset_y,
+                            blur_radius,
+                        } => EffectInfo::DropShadow {
+                            color: [color.r, color.g, color.b, color.a],
+                            offset_x: *offset_x,
+                            offset_y: *offset_y,
+                            blur_radius: *blur_radius,
+                        },
+                        Effect::Blur { radius } => EffectInfo::Blur { radius: *radius },
+                    }
+                })
+                .collect(),
             children: node.children.iter().map(ToString::to_string).collect(),
             parent: node.parent.map(|id| id.to_string()),
         }

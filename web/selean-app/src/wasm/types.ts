@@ -177,7 +177,28 @@ export interface NodeInfo {
   text_color: [number, number, number, number] | null;
   children: string[];
   parent: string | null;
+  gradient: GradientInfo | null;
   effects: Effect[];
+}
+
+/** Gradient fill information matching GradientInfo from queries.rs */
+export type GradientInfo =
+  | {
+      type: "Linear";
+      start: [number, number];
+      end: [number, number];
+      stops: GradientStopInfo[];
+    }
+  | {
+      type: "Radial";
+      center: [number, number];
+      radius: number;
+      stops: GradientStopInfo[];
+    };
+
+export interface GradientStopInfo {
+  position: number;
+  color: [number, number, number, number];
 }
 
 export type Effect =

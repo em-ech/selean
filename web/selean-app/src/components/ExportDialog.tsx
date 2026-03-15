@@ -582,8 +582,8 @@ const checkboxLabelStyle: React.CSSProperties = {
 
 const primaryBtnStyle: React.CSSProperties = {
   padding: "8px 16px",
-  background: "#3b82f6",
-  color: "#fff",
+  background: colors.accent,
+  color: colors.white,
   border: "none",
   borderRadius: 4,
   fontSize: fontSizes.base,
@@ -604,7 +604,7 @@ const secondaryBtnStyle: React.CSSProperties = {
 const linkBtnStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "#3b82f6",
+  color: colors.accent,
   cursor: "pointer",
   fontSize: fontSizes.sm,
   padding: 0,
@@ -630,15 +630,15 @@ const newRepoFormStyle: React.CSSProperties = {
 };
 
 const successStyle: React.CSSProperties = {
-  color: "#4ade80",
+  color: colors.success,
   fontSize: fontSizes.sm,
 };
 
 const errorStyle: React.CSSProperties = {
-  color: "#e55",
+  color: colors.danger,
   fontSize: fontSizes.sm,
 };
 
 const linkStyle: React.CSSProperties = {
-  color: "#3b82f6",
+  color: colors.accent,
 };

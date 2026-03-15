@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { colors, fontSizes } from "../theme";
+import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 import { authFetch } from "../utils/api";
 import type { SeleanEditor } from "../wasm/types";
 import {
@@ -330,8 +330,8 @@ const triggerStyle: React.CSSProperties = {
   color: colors.text,
   cursor: "pointer",
   fontSize: fontSizes.base,
-  padding: "4px 8px",
-  borderRadius: 4,
+  padding: `${spacing.xs}px ${spacing.sm}px`,
+  borderRadius: radii.sm,
 };
 
 const backdropStyle: React.CSSProperties = {
@@ -344,14 +344,14 @@ const menuStyle: React.CSSProperties = {
   position: "absolute",
   top: "100%",
   left: 0,
-  marginTop: 4,
-  background: colors.surface,
+  marginTop: spacing.xs,
+  background: colors.bg,
   border: `1px solid ${colors.border}`,
-  borderRadius: 6,
-  padding: "4px 0",
+  borderRadius: radii.md,
+  padding: `${spacing.xs}px 0`,
   zIndex: 100,
   minWidth: 160,
-  boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+  boxShadow: shadows.lg,
 };
 
 const menuItemStyle: React.CSSProperties = {
@@ -362,12 +362,12 @@ const menuItemStyle: React.CSSProperties = {
   color: colors.text,
   cursor: "pointer",
   fontSize: fontSizes.sm,
-  padding: "6px 16px",
+  padding: `6px ${spacing.lg}px`,
   textAlign: "left",
 };
 
 const dividerStyle: React.CSSProperties = {
   height: 1,
   background: colors.border,
-  margin: "4px 0",
+  margin: `${spacing.xs}px 0`,
 };

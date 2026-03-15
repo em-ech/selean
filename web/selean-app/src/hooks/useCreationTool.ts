@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import type { ToolType } from "../components/Toolbar";
 import type { SeleanEditor } from "../wasm/types";
+import type { ToolType } from "../types/editor";
 import { screenToWorld } from "../utils/camera";
 
 interface DragState {

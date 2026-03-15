@@ -3,6 +3,7 @@ import type { CameraInfo, SelectionBounds, SeleanEditor } from "../wasm/types";
 import { useResizeDrag } from "../hooks/useResizeDrag";
 import { useRotationDrag } from "../hooks/useRotationDrag";
 import { worldToScreen, worldDimsToScreen } from "../utils/camera";
+import { colors } from "../theme";
 
 interface SelectionOverlayProps {
   editorRef: React.RefObject<SeleanEditor | null>;
@@ -12,7 +13,7 @@ interface SelectionOverlayProps {
 /** Handle size in CSS pixels. */
 const HANDLE_SIZE = 8;
 /** Selection box border color. */
-const SELECTION_COLOR = "#4a90d9";
+const SELECTION_COLOR = colors.accent;
 /** Rotation handle offset above the top edge (CSS px). */
 const ROTATION_HANDLE_OFFSET = 24;
 /** Rotation handle size in CSS pixels. */
@@ -171,7 +172,7 @@ function SelectionBox({
             top: h.y,
             width: HANDLE_SIZE,
             height: HANDLE_SIZE,
-            background: "#fff",
+            background: colors.white,
             border: `1px solid ${SELECTION_COLOR}`,
             pointerEvents: interacting ? "none" : "auto",
             cursor: HANDLE_CURSORS[i],
@@ -203,7 +204,7 @@ function SelectionBox({
               width: ROTATION_HANDLE_SIZE,
               height: ROTATION_HANDLE_SIZE,
               borderRadius: "50%",
-              background: "#fff",
+              background: colors.white,
               border: `1.5px solid ${SELECTION_COLOR}`,
               pointerEvents: interacting ? "none" : "auto",
               cursor: "grab",
