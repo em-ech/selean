@@ -43,8 +43,11 @@ ENV RUST_LOG=info
 
 EXPOSE 8080
 
-# Create data directories
-RUN mkdir -p /app/data/rooms /app/data/assets /app/fonts
+# Create non-root user and data directories
+RUN groupadd -r selean && useradd -r -g selean -d /app selean \
+    && mkdir -p /app/data/rooms /app/data/assets /app/fonts \
+    && chown -R selean:selean /app
+USER selean
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

@@ -375,188 +375,203 @@ function AppContent() {
 
             {/* Body */}
             <div style={bodyStyle}>
-            {/* Left Sidebar: Elements / Templates / Uploads */}
-            {status === "ready" && (
-              <div
-                style={{ position: "relative", display: "flex", flexShrink: 0 }}
-              >
-                <ErrorBoundary name="Sidebar">
-                  <LeftSidebar
-                    editorRef={editorRef}
-                    onSceneChanged={onSceneChanged}
-                    isOpen={showLeftSidebar}
-                    onToggle={() => setShowLeftSidebar((v) => !v)}
-                    activeWorkspaceId={activeWorkspace?.id}
-                    width={sidebarResize.width}
-                  />
-                </ErrorBoundary>
-                {showLeftSidebar && <div {...sidebarResize.handleProps} />}
-              </div>
-            )}
+              {/* Left Sidebar: Elements / Templates / Uploads */}
+              {status === "ready" && (
+                <div
+                  style={{
+                    position: "relative",
+                    display: "flex",
+                    flexShrink: 0,
+                  }}
+                >
+                  <ErrorBoundary name="Sidebar">
+                    <LeftSidebar
+                      editorRef={editorRef}
+                      onSceneChanged={onSceneChanged}
+                      isOpen={showLeftSidebar}
+                      onToggle={() => setShowLeftSidebar((v) => !v)}
+                      activeWorkspaceId={activeWorkspace?.id}
+                      width={sidebarResize.width}
+                    />
+                  </ErrorBoundary>
+                  {showLeftSidebar && <div {...sidebarResize.handleProps} />}
+                </div>
+              )}
 
-            {/* Chat Panel */}
-            {status === "ready" && (
-              <div
-                style={{ position: "relative", display: "flex", flexShrink: 0 }}
-              >
-                <ErrorBoundary name="Chat">
-                  <ChatPanel
-                    editorRef={editorRef}
-                    onSceneChanged={onSceneChanged}
-                    isOpen={showChat}
-                    onToggle={() => setShowChat((v) => !v)}
-                    width={chatResize.width}
-                  />
-                </ErrorBoundary>
-                {showChat && <div {...chatResize.handleProps} />}
-              </div>
-            )}
+              {/* Chat Panel */}
+              {status === "ready" && (
+                <div
+                  style={{
+                    position: "relative",
+                    display: "flex",
+                    flexShrink: 0,
+                  }}
+                >
+                  <ErrorBoundary name="Chat">
+                    <ChatPanel
+                      editorRef={editorRef}
+                      onSceneChanged={onSceneChanged}
+                      isOpen={showChat}
+                      onToggle={() => setShowChat((v) => !v)}
+                      width={chatResize.width}
+                    />
+                  </ErrorBoundary>
+                  {showChat && <div {...chatResize.handleProps} />}
+                </div>
+              )}
 
-            {/* Main content area: Design (canvas + layers) or Code */}
-            <div style={mainAreaStyle}>
-              {rightView === "design" ? (
-                <>
-                  <div style={designRowStyle}>
-                    <div style={canvasAreaStyle}>
-                      <ErrorBoundary name="Canvas">
-                        <Canvas
-                          canvasId="selean-canvas"
-                          editorRef={editorRef}
-                          status={status}
-                          onInteractionEvents={handleInteractionEvents}
-                          onContextMenu={handleContextMenu}
-                        />
-                      </ErrorBoundary>
-                      {status === "ready" && (
-                        <SelectionOverlay
-                          editorRef={editorRef}
-                          onSceneChanged={onSceneChanged}
-                        />
-                      )}
-                      {status === "ready" && (
-                        <SnapGuides
-                          editorRef={editorRef}
-                          isDragging={isMoveDragging}
-                        />
-                      )}
-                      {status === "ready" && collab.status === "connected" && (
-                        <PresenceOverlay
-                          editorRef={editorRef}
-                          presences={presenceOverlayData}
-                          activePageId={activePageId}
-                        />
-                      )}
-                      {status === "ready" && (
-                        <FloatingToolbar
-                          node={selectedNode}
-                          selectedIds={selectedIds}
-                          editorRef={editorRef}
-                          onSceneChanged={onSceneChanged}
-                          isDragging={isMoveDragging}
-                          isEditing={editingNodeId !== null}
-                          screenBounds={floatingToolbarBounds}
-                        />
-                      )}
-                      {editingNodeId &&
-                        status === "ready" &&
-                        (() => {
-                          const editor = editorRef.current;
-                          if (!editor) return null;
-                          try {
-                            const json = editor.get_node_json(editingNodeId);
-                            if (json === "null") return null;
-                            const node: NodeInfo = JSON.parse(json);
-                            if (node.kind !== NodeKind.Text) return null;
-                            return (
-                              <InlineTextEditor
-                                nodeId={editingNodeId}
-                                initialContent={node.text_content ?? ""}
-                                bounds={{
-                                  x: node.x,
-                                  y: node.y,
-                                  width: node.width,
-                                  height: node.height,
-                                }}
-                                fontSize={node.font_size ?? 16}
-                                editorRef={editorRef}
-                                onCommit={(content) => {
-                                  editor.execute_tool_call(
-                                    "set_text",
-                                    JSON.stringify({
-                                      node_id: editingNodeId,
-                                      content,
-                                    }),
-                                  );
-                                  setEditingNodeId(null);
-                                  onSceneChanged();
-                                }}
-                                onCancel={() => setEditingNodeId(null)}
-                              />
-                            );
-                          } catch (e) {
-                            console.warn("inline text editor setup failed", e);
-                            return null;
-                          }
-                        })()}
-                      {contextMenuPos && (
-                        <ContextMenu
-                          x={contextMenuPos.x}
-                          y={contextMenuPos.y}
-                          editorRef={editorRef}
-                          onSceneChanged={onSceneChanged}
-                          onClose={handleCloseContextMenu}
-                          clipboardRef={clipboardRef}
-                        />
-                      )}
-                      {creationHandlers && (
-                        <div
-                          style={creationOverlayStyle}
-                          {...creationHandlers}
-                        />
-                      )}
-                    </div>
-
-                    {/* Layers panel (collapsible right drawer within design view) */}
-                    {status === "ready" && showLayers && (
-                      <div
-                        style={{
-                          ...layersPanelStyle,
-                          width: layersResize.width,
-                          position: "relative",
-                        }}
-                      >
-                        <div {...layersResize.handleProps} />
-                        <ErrorBoundary name="Layers">
-                          <LayerPanel
+              {/* Main content area: Design (canvas + layers) or Code */}
+              <div style={mainAreaStyle}>
+                {rightView === "design" ? (
+                  <>
+                    <div style={designRowStyle}>
+                      <div style={canvasAreaStyle}>
+                        <ErrorBoundary name="Canvas">
+                          <Canvas
+                            canvasId="selean-canvas"
                             editorRef={editorRef}
-                            onSceneChanged={onSceneChanged}
-                            refreshTick={refreshTick}
+                            status={status}
+                            onInteractionEvents={handleInteractionEvents}
+                            onContextMenu={handleContextMenu}
                           />
                         </ErrorBoundary>
+                        {status === "ready" && (
+                          <SelectionOverlay
+                            editorRef={editorRef}
+                            onSceneChanged={onSceneChanged}
+                          />
+                        )}
+                        {status === "ready" && (
+                          <SnapGuides
+                            editorRef={editorRef}
+                            isDragging={isMoveDragging}
+                          />
+                        )}
+                        {status === "ready" &&
+                          collab.status === "connected" && (
+                            <PresenceOverlay
+                              editorRef={editorRef}
+                              presences={presenceOverlayData}
+                              activePageId={activePageId}
+                            />
+                          )}
+                        {status === "ready" && (
+                          <FloatingToolbar
+                            node={selectedNode}
+                            selectedIds={selectedIds}
+                            editorRef={editorRef}
+                            onSceneChanged={onSceneChanged}
+                            isDragging={isMoveDragging}
+                            isEditing={editingNodeId !== null}
+                            screenBounds={floatingToolbarBounds}
+                          />
+                        )}
+                        {editingNodeId &&
+                          status === "ready" &&
+                          (() => {
+                            const editor = editorRef.current;
+                            if (!editor) return null;
+                            try {
+                              const json = editor.get_node_json(editingNodeId);
+                              if (json === "null") return null;
+                              const node: NodeInfo = JSON.parse(json);
+                              if (node.kind !== NodeKind.Text) return null;
+                              return (
+                                <InlineTextEditor
+                                  nodeId={editingNodeId}
+                                  initialContent={node.text_content ?? ""}
+                                  bounds={{
+                                    x: node.x,
+                                    y: node.y,
+                                    width: node.width,
+                                    height: node.height,
+                                  }}
+                                  fontSize={node.font_size ?? 16}
+                                  editorRef={editorRef}
+                                  onCommit={(content) => {
+                                    editor.execute_tool_call(
+                                      "set_text",
+                                      JSON.stringify({
+                                        node_id: editingNodeId,
+                                        content,
+                                      }),
+                                    );
+                                    setEditingNodeId(null);
+                                    onSceneChanged();
+                                  }}
+                                  onCancel={() => setEditingNodeId(null)}
+                                />
+                              );
+                            } catch (e) {
+                              console.warn(
+                                "inline text editor setup failed",
+                                e,
+                              );
+                              return null;
+                            }
+                          })()}
+                        {contextMenuPos && (
+                          <ContextMenu
+                            x={contextMenuPos.x}
+                            y={contextMenuPos.y}
+                            editorRef={editorRef}
+                            onSceneChanged={onSceneChanged}
+                            onClose={handleCloseContextMenu}
+                            clipboardRef={clipboardRef}
+                          />
+                        )}
+                        {creationHandlers && (
+                          <div
+                            style={creationOverlayStyle}
+                            {...creationHandlers}
+                          />
+                        )}
                       </div>
-                    )}
-                  </div>
-                  {/* end designRowStyle */}
-                </>
-              ) : (
-                /* Code view */
-                status === "ready" && (
-                  <ErrorBoundary name="Code">
-                    <CodePanel editorRef={editorRef} refreshKey={refreshTick} />
-                  </ErrorBoundary>
-                )
-              )}
 
-              {/* Page bar at the bottom of main area */}
-              {status === "ready" && rightView === "design" && (
-                <PageBar
-                  editorRef={editorRef}
-                  onSceneChanged={onSceneChanged}
-                  refreshTick={refreshTick}
-                />
-              )}
+                      {/* Layers panel (collapsible right drawer within design view) */}
+                      {status === "ready" && showLayers && (
+                        <div
+                          style={{
+                            ...layersPanelStyle,
+                            width: layersResize.width,
+                            position: "relative",
+                          }}
+                        >
+                          <div {...layersResize.handleProps} />
+                          <ErrorBoundary name="Layers">
+                            <LayerPanel
+                              editorRef={editorRef}
+                              onSceneChanged={onSceneChanged}
+                              refreshTick={refreshTick}
+                            />
+                          </ErrorBoundary>
+                        </div>
+                      )}
+                    </div>
+                    {/* end designRowStyle */}
+                  </>
+                ) : (
+                  /* Code view */
+                  status === "ready" && (
+                    <ErrorBoundary name="Code">
+                      <CodePanel
+                        editorRef={editorRef}
+                        refreshKey={refreshTick}
+                      />
+                    </ErrorBoundary>
+                  )
+                )}
+
+                {/* Page bar at the bottom of main area */}
+                {status === "ready" && rightView === "design" && (
+                  <PageBar
+                    editorRef={editorRef}
+                    onSceneChanged={onSceneChanged}
+                    refreshTick={refreshTick}
+                  />
+                )}
+              </div>
             </div>
-          </div>
           </div>
         </EditorProvider>
       </CollabContext.Provider>

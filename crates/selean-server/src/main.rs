@@ -7,13 +7,34 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use axum::http::HeaderValue;
+use axum::http::{HeaderValue, Method, header};
 use selean_server::{
     AppState, AuthConfig, CollabState, create_router_with_options, load_snapshots_into,
     start_snapshot_task,
 };
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
+
+fn build_cors_layer() -> CorsLayer {
+    let allowed_origins =
+        std::env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let origins: Vec<HeaderValue> = allowed_origins
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
+        .allow_credentials(true)
+}
 
 #[tokio::main]
 async fn main() {
@@ -61,17 +82,7 @@ async fn main() {
     let static_dir =
         std::env::var("STATIC_DIR").unwrap_or_else(|_| "web/selean-app/dist".to_string());
 
-    let allowed_origins =
-        std::env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
-    let origins: Vec<HeaderValue> = allowed_origins
-        .split(',')
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
-
-    let cors = CorsLayer::new()
-        .allow_origin(origins)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = build_cors_layer();
 
     let auth_config = AuthConfig::from_env();
     if auth_config.is_enabled() {
@@ -118,6 +129,14 @@ async fn main() {
 
     let app = create_router_with_options(state, collab, auth_config)
         .layer(cors)
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
         .fallback_service(ServeDir::new(&static_dir));
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
