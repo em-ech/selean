@@ -16,6 +16,9 @@ Thumbs.db
 .env
 .env.local
 
-# Node (for future SolidJS packages)
+# Node
 node_modules/
 dist/
+
+# TypeScript build cache
+*.tsbuildinfo
