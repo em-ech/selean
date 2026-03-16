@@ -1,342 +1,139 @@
 # Selean
 
-## Business Requirements
+## Overview
 
 Selean is a design tool that combines the capabilities of Canva, Figma, and Adobe InDesign into a single platform with AI-native design workflows.
 
 ### Core Capabilities
 
-1. **AI Chat-Prompted Design**: Users can start a design from scratch via chat prompts. The LLM interprets intent and generates scene graph operations (add nodes, set properties, arrange layouts) to produce a complete design.
+1. **AI Chat-Prompted Design**: Users start designs via chat prompts. The LLM generates scene graph operations (add nodes, set properties, arrange layouts) to produce complete designs.
 
-2. **Import/Export Interoperability**: Full bidirectional support for:
-   - PowerPoint (.pptx)
-   - Adobe InDesign (.indd / .idml)
-   - Figma (.fig / API)
-   - Native Selean format
+2. **Import/Export Interoperability**: Bidirectional support for PowerPoint (.pptx), Adobe InDesign (.indd/.idml), Figma (REST API), and native Selean format.
 
-   Users bring existing work into Selean from any tool and export back to any format.
+3. **AI-Assisted Editing**: Users prompt modifications to existing designs ("make the heading larger", "change the color scheme to dark mode") and the LLM applies targeted changes via the command system.
 
-3. **AI-Assisted Editing**: A working designer spends more time editing than creating from scratch. Users can prompt modifications to an existing design ("make the heading larger", "change the color scheme to dark mode", "swap the layout to two columns") and the LLM applies targeted changes via the command system.
+4. **Manual Direct Manipulation**: Full Canva/InDesign-style visual editing: drag to move/resize, property inspector, click-to-select, multi-select, alignment, layer management.
 
-4. **Manual Direct Manipulation**: Full Canva/InDesign-style visual editing: drag to move/resize, property inspector panels, click-to-select, multi-select, alignment tools, layer management. The manual editing path must be as capable as the AI path.
-
-5. **Hybrid Workflow**: AI and manual editing are interleaved freely. A user can prompt a layout, manually fine-tune positions, prompt a color change, manually adjust text, and undo/redo across both AI and manual actions seamlessly.
+5. **Hybrid Workflow**: AI and manual editing interleave freely on the same document, same undo stack, same scene graph.
 
 ### Design Principles
 
-- Import fidelity matters: a PPTX or Figma file should look as close to the original as possible on import.
-- Export fidelity matters equally: round-tripping a file through Selean should not degrade it.
-- The AI chat is not a separate mode. It operates on the same document, same undo stack, same scene graph.
-- Performance targets: 60fps rendering, sub-100ms command execution, real-time collaborative editing (future).
+- Import fidelity: a PPTX or Figma file should look as close to the original as possible.
+- Export fidelity: round-tripping through Selean should not degrade a file.
+- The AI chat operates on the same document, undo stack, and scene graph as manual editing.
+- Performance targets: 60fps rendering, sub-100ms command execution.
 
-# Engine Session Notes
+## Architecture
 
-## Current Phase: All Phases Complete + Code Review
+### Mutation Pipeline
 
-### Code Review Session (2026-03-06)
+All mutation sources converge on a single wire format:
 
-12 of 14 identified issues implemented across Architecture, Code Quality, Tests, and Performance.
+```
+[React UI edits]  --\
+[LLM tool calls]  ----> CommandDescriptor (JSON) --> Box<dyn Command> --> CommandHistory --> SceneGraph
+[File imports]    --/
+[Collab ops]      --/
+```
 
-**Architecture:**
+`CommandDescriptor` is a `#[serde(tag = "type")]` enum with 29 variants. Adding a new command requires: (1) engine `Command` impl, (2) descriptor variant. Nothing else changes.
 
-- A2-b: Graceful mutex recovery in `ws_handler.rs`. Replaced all `expect("room poisoned")` with `match` on lock results. Extracted `handle_join()` and `dispatch_message()` helpers with `JoinOutcome` enum.
-- A3-b: Body size limits in `routes.rs`. Split into `upload_routes` (50 MiB) and `json_routes` (1 MiB) via `DefaultBodyLimit` layer.
-- A4-b: Replaced `unreachable!()` in `selean-wasm/src/lib.rs` with error return for missing `parent_id` on non-root nodes.
+### Render Pipeline
 
-**Code Quality:**
+Three sequential phases per frame:
 
-- CQ1-b: `ErrorToast` pub/sub notification system (`showError()` global function, auto-dismiss, click-dismiss, max 5 toasts). Added to `App.tsx`.
-- CQ2-b: `useFileOperations.ts` hooks (`importFileViaUpload`, `exportViaFetch`, `useFileImportHandler`, `useFileExportHandler`). `FileMenu.tsx` refactored from 6 repetitive handlers to hook calls.
-- CQ3-b: `executeToolOnSelection` helper in `useKeyboardShortcuts.ts` with `minSelection`/`maxSelection` params. Replaced 5 repetitive z-order/group shortcut handlers.
+1. **DFS Traversal**: Walks the scene graph depth-first, populating texture atlases, computing render order, building the clip stack. Uses `SmallVec<[NodeId; 16]>` for stack-allocated child iteration.
 
-**Tests:**
+2. **Draw List Construction**: Finalizes UV coordinates, patches clip state, coalesces adjacent same-type commands via `merge_adjacent()`.
 
-- T1-b: 9 unit tests for `ws_handler` (CollabState creation/clone, join flow, leave flow, disconnect cleanup, error messages).
-- T2-b: 5 integration tests in `crates/selean-engine/tests/integration.rs` (create+save+load roundtrip, command+undo, command+persist, multi-page, multi-undo).
-- T3-b: 4 InDesign bridge tests with inline axum mock server in `indesign_bridge.rs`.
-- T4-b: 4 `GpuContextDescriptor` tests in `gpu.rs`.
+3. **Render Pass Execution**: Submits batched wgpu commands. `RectPipeline` for SDF rounded rectangles, `TextPipeline` for SDF glyphs, `TexturedQuadPipeline` for images/vectors. Non-native blend modes use shader-based GPU pipelines per the W3C Compositing spec. Effects use Dual Kawase blur with ping-pong half-resolution textures.
 
-**Performance:**
+### Scene Graph
 
-- P1-b: `SmallVec<[NodeId; 16]>` for DFS children iteration in `pipeline.rs` (avoids `.to_vec()` heap allocation).
-- P3-b: Explicit stack for dirty flag propagation in `store.rs` (replaces recursive `propagate_transform_dirty_down`). Also replaced `self.roots.clone()` with index-based iteration in `recompute_world_transforms`.
+`SceneGraph` owns all `SceneNode` instances in a `HashMap<NodeId, SceneNode>` with:
 
-**Deferred:**
+- **Dirty Flags**: 8-bit bitmask per node gating incremental updates. Propagation uses an explicit stack.
+- **World Transforms**: 3x2 affine matrices computed lazily. Scroll offsets injected as translation matrices.
+- **Spatial Index**: R-tree (via `rstar`) for O(log n) viewport culling and hit testing.
+- **Clipping**: Three modes (Scissor, Stencil, ShaderRect) with hierarchical DFS traversal.
 
-- A1-b: Typed `wasm-bindgen` returns for hot paths (pointer events, selection, camera). ~10-15 WASM methods to change from JSON strings to primitives/JsValue.
-- CQ4-c: Extract mutations from `store.rs` into `scene/mutations.rs`. Large refactor with medium risk.
+### Key Design Decisions
 
-**Test counts after review:** 1531 Rust + 351 frontend (up from 1509 + 345).
+- **Command pattern**: Per-mutation old-state capture. Redo calls `execute()` again. Camera and selection excluded from undo (ephemeral UI state).
+- **Platform-agnostic input**: `InputEvent` types carry no platform API references. Consumers translate from winit/SDL/web.
+- **Persistence**: JSON format for human readability. Transient state (spatial index, world transforms, dirty flags) excluded from serialization and rebuilt on load. 7 structural invariants validated before deserialization.
+- **Scroll containers**: Scroll offset is a transform injection, not a separate coordinate space. Composes naturally with existing transforms.
 
-### Phase 11 Summary (End-to-End Editor Wiring)
-
-**What was added:**
-
-- WASM rendering wired: `SeleanEditor` stores `surface` + `surface_config`, `render()` acquires texture and calls `render_frame()`, `resize()` reconfigures the surface
-- `execute_tool_call(name, args_json)` on `EditorState` and `SeleanEditor`: routes LLM tool calls through `selean_llm::map_tool_call()` in Rust, handles read-only tools (`get_scene_summary`, `get_node`, `query_nodes`) and mutation tools, wraps multi-descriptor calls in command groups
-- `query_nodes_json()` in queries.rs: filters nodes by optional name pattern (case-insensitive) and optional kind, returns `NodeSummary` array
-- Client-driven chat tool loop in `ChatSidebar.tsx`: detects `stop_reason: "tool_use"`, executes tools via `execute_tool_call`, sends tool_result messages back to server, loops up to 10 iterations
-- Complete property inspector: added editable fields for `stroke_width`, `corner_radius`, `blend_mode` (dropdown), `clip_mode` (dropdown), `font_family`, `font_weight`, `font_style` (dropdown), `text_align` (dropdown), `line_height`, `text_color` (color picker)
-- Event-driven selection: `Canvas.tsx` parses interaction events from WASM pointer handlers and propagates via `onInteractionEvents` callback, `App.tsx` triggers `refresh()` on `SelectionChanged`/`Clicked`/`ClickedCanvas`
-- Undo/redo refresh: button handlers and keyboard shortcuts call `refresh()` after undo/redo, `can_undo()`/`can_redo()` exposed via `#[wasm_bindgen]` for button disabled state
-- `uuid` crate `js` feature added for WASM target
-- 13 new tests (5 `query_nodes_json` + 8 `execute_tool_call`) bringing total to 828
-
-### Completed Phases
-
-- Phase 11: End-to-end editor wiring (WASM rendering, chat tool loop, tool call bridge, property inspector, event-driven selection, undo/redo refresh)
-
-- Phase 1: Rect rendering (SDF rounded corners)
-- Phase 2: SDF text rendering
-- Phase 3: Image and vector rendering
-- Phase 4: Scene graph, R-tree spatial index, dirty flags, 2D affine transforms, blend modes
-- Phase 5: Clipping and masking (Scissor, Stencil, ShaderRect)
-- Phase 6: Scroll containers
-- Phase 7: Input handling
-- Phase 8: Undo/redo system
-- Phase 9: Serialization / Persistence
-- Phase 10: Multi-page documents, PPTX import/export, extended text properties
-- Phase 11: End-to-end editor wiring
-
-### Phase 10 Summary (Multi-page Documents, PPTX, Extended Text Properties)
-
-**What was added (in progress):**
-
-- `FontStyle` enum (Normal, Italic) and `TextAlign` enum (Left, Center, Right, Justify) on `SceneNodeKind::Text`
-- 6 new text fields: `font_family`, `font_weight`, `font_style`, `text_align`, `line_height`, `text_color`
-- 7 new property commands + descriptors for the new text fields, plus `SetCornerRadiusCommand`
-- `Document` struct (multi-page container) and `Page` struct (owns a SceneGraph)
-- v2 persistence format with `PageData`, backward-compatible v1 loading
-- `save_document()` / `load_document()` for full multi-page persistence
-- `selean-pptx` crate: bidirectional PPTX import/export (EMU conversion, shape/text parsing, OOXML ZIP)
-- 9 new LLM tool definitions (total 22 tools)
-- Server routes: `POST /api/import/pptx`, `POST /api/export/pptx`
-- TypeScript types: `PageInfo`, `TreeNode`, new editor methods
-
-**What remains (not yet built):**
-
-- InDesign (.indd/.idml) import/export
-- Figma (.fig / API) import/export
-- WASM-side implementations for page management methods declared in TypeScript types
-- Full manual editing UI (drag handles, alignment tools, property inspector bindings)
-
-### Phase 9 Summary (Serialization / Persistence)
-
-**What was added:**
-
-- `Serialize`/`Deserialize` derives on all scene types: `BlendMode`, `BoundingBox`, `Color`, `SceneNodeKind`, `ClipMode`, `SceneNode`
-- Manual `Serialize`/`Deserialize` impl for `Transform2D` using `raw()`/`from_raw()`
-- `#[serde(skip)]` on transient fields: `dirty` (defaults to `ALL`), `world_transform` (defaults to identity)
-- `SceneGraph::from_document_state(nodes, roots)` constructor that rebuilds spatial index and recomputes world transforms
-- `SceneGraph::nodes()` accessor for the internal node map
-- `persistence/format.rs`: `DocumentFormat`, `SceneGraphData` with `from_graph()`, `validate()` (7 rules), `into_graph()`
-- `persistence/mod.rs`: `PersistenceError` (UnsupportedVersion, InvalidScene, Json), `save()`, `save_pretty()`, `load()`
-- `FORMAT_VERSION = 1`, timestamps via `std::time::SystemTime`
-- 36 tests: 18 in format.rs (10 roundtrip + 8 validation rejection), 18 in mod.rs (10 save/load roundtrip + 4 field checks + 4 rejection)
-
-**Design decisions:**
-
-- JSON format chosen for human readability and debugging. Binary format can be added later behind the same `DocumentFormat` abstraction.
-- Transient state (spatial index, world transforms, dirty flags, z-indices) is excluded from serialization and rebuilt on load.
-- `validate()` checks 7 structural invariants before `into_graph()`: roots exist, children exist, parent consistency, root parent is None, no root in children, no cycles (DFS), no orphans.
-- `from_document_state` sets `z_dirty` and `has_any_transform_dirty` to trigger full recomputation on first frame.
-- No new dependencies (serde_json and thiserror were added in steps 1-4).
-
-### Phase 8 Summary (Undo/Redo System)
-
-**What was added:**
-
-- `command/` module with 6 files: `mod.rs`, `traits.rs`, `property.rs`, `hierarchy.rs`, `batch.rs`, `history.rs`
-- `Command` trait: `execute(&mut self, &mut SceneGraph) -> bool`, `undo(&mut self, &mut SceneGraph) -> bool`, `description(&self) -> &str`. Debug supertrait, object-safe.
-- 11 macro-generated property commands via `define_property_command!`: `SetBoundsCommand`, `SetFillCommand`, `SetStrokeCommand`, `SetStrokeWidthCommand`, `SetOpacityCommand`, `SetVisibleCommand`, `SetNameCommand`, `SetBlendModeCommand`, `SetClipModeCommand`, `SetTransformCommand`
-- 1 macro-generated scroll command via `define_scroll_offset_command!`: `SetScrollOffsetCommand`
-- 4 manual kind-specific commands: `SetTextContentCommand`, `SetFontSizeCommand`, `SetPathDataCommand`, `SetAssetRefCommand`
-- 5 hierarchy commands: `AddRootCommand`, `AddChildCommand`, `RemoveNodeCommand` (full subtree DFS snapshot), `ReparentCommand`, `ReorderChildrenCommand`
-- `CommandGroup`: vec of `Box<dyn Command>`, executes forward, undoes in reverse, rollback on partial failure
-- `CommandHistory`: undo/redo stacks, `execute()`, `undo()`, `redo()`, `begin_group()`/`end_group()`/`cancel_group()`, configurable max size (default 100)
-- `SceneGraph::insert_root_at(node, index)`, `insert_child_at(parent_id, child, index)`, `reparent_to_root(node_id, index)` helper methods
-- 45 tests across the command module (2 traits + 17 property + 14 hierarchy + 4 batch + 8 history)
-
-**Design decisions:**
-
-- Command pattern with per-mutation old-state capture. No `redo()` method: redo calls `execute()` again, which re-captures old state.
-- Camera and selection excluded from undo (viewport concern and ephemeral UI state, not document state).
-- `RemoveNodeCommand` uses DFS to capture `Vec<NodeSnapshot>` (node clone + parent_id + child_index) on execute. Undo re-inserts top-down via `insert_root_at`/`insert_child_at` to restore exact positions.
-- `reparent_to_root()` added to SceneGraph (not in original plan) to support undoing a reparent that moved a root node into a subtree.
-- `CommandGroup` rolls back already-executed commands on partial execute failure.
-- `CommandHistory` blocks undo/redo during active group. New execute clears redo stack (no branching history).
-- No new dependencies added.
-
-### Phase 7 Summary (Input Handling)
-
-**What was added:**
-
-- `input/` module with 4 files: `mod.rs`, `event.rs`, `state.rs`, `handler.rs`
-- `PointerButton` enum (Left, Right, Middle) and `Modifiers` struct (shift, ctrl, alt, meta)
-- `InputEvent` enum: `PointerMove`, `PointerDown`, `PointerUp`, `ScrollDelta` (platform-agnostic, screen-space coordinates)
-- `InteractionEvent` enum: `HoverChanged`, `Clicked`, `ClickedCanvas`, `SelectionChanged`, `DragStarted`, `DragMoved`, `DragEnded`, `ScrollApplied`, `CameraPanned`, `CameraZoomed`
-- `SelectionSet` with `select_one()`, `toggle()`, `clear()`, `contains()`, `ids()`, `is_empty()`, `len()`
-- `DragPhase` (tracks node, start positions, threshold state), `CameraPanPhase` (tracks start screen/pan)
-- `InteractionState`: `hover_target`, `selection`, `drag`, `camera_pan`, `drag_threshold` (default 4.0px)
-- `InputHandler` with `new()`, `with_drag_threshold()`, `handle_event()`, `state()`, `state_mut()`
-- `Camera::pan_by(dx, dy)` for delta-based viewport translation
-- `Camera::zoom_at(factor, screen_x, screen_y)` for focus-aware zoom
-- `SceneGraph::parent(id)` for ancestor walking in scroll routing
-- 38 tests across the input module (6 event + 12 state + 20 handler)
-
-**Design decisions:**
-
-- Platform-agnostic boundary: `InputEvent` types carry no platform API references. Consumers translate from winit/SDL/web.
-- Stateful handler: `InputHandler` owns `InteractionState` to track gestures across event frames. Purely reactive, no event queuing.
-- Borrowing pattern: `handle_event()` requires `&mut SceneGraph` + `&mut Camera` to prevent stale references.
-- Priority ordering: camera pan (middle-button) > active drag > hover detection. Scroll routing walks ancestors via `parent()`, consuming delta at each scrollable container, then falls back to camera pan.
-- Drag gesture recognition: threshold-based (configurable). Below threshold = click, above = drag. Tracks screen-space for threshold check, world-space for delta computation.
-- Selection: Shift-click toggles individual nodes. Plain click replaces selection. Canvas click deselects all (only emits `SelectionChanged` if selection was non-empty).
-- No new dependencies added.
-
-### Phase 6 Summary (Scroll Containers)
-
-**What was added:**
-
-- `scroll_offset: [f32; 2]` field on `SceneNode` (default `[0.0, 0.0]`)
-- `BoundingBox::union()` for computing content bounds
-- `set_scroll_offset()`, `scroll_offset()` accessors on `SceneGraph`
-- `compute_content_bounds()`, `max_scroll()`, `set_scroll_offset_clamped()` on `SceneGraph`
-- Scroll translation injection in `recompute_world_transform_recursive`: children see `parent_world * translation(-offset_x, -offset_y)`
-- Implicit scissor clipping: scroll containers with `ClipMode::None` get an automatic `Scissor` clip in DFS and hit testing
-- `ancestor_clip_chain()` and `point_passes_clip()` updated for implicit scroll clips
-- `dfs_visit()` computes effective clip mode: explicit clip takes precedence, scroll implies Scissor, otherwise None
-- `scroll_fraction` config in benchmarks, Group 17 `bench_scroll_containers` with 4 benchmarks across 3 tiers
-
-**Design decisions:**
-
-- Scroll offset is a transform injection, not a separate coordinate space. Composes naturally with existing transforms and nested scroll containers.
-- No new dirty flag. Scroll offset changes reuse `TRANSFORM` since they require world transform recomputation on all descendants.
-- Content bounds computed on demand via `compute_content_bounds()`. No per-frame overhead.
-- No event/input handling. The caller sets scroll offset directly.
-
-### Test Count
-
-- 1531 Rust tests passing across 9 crates (`cargo test --workspace`)
-- 351 frontend tests passing (`cd web/selean-app && npx vitest run`)
-- 17 benchmark groups
-
-### Key Architecture Notes
-
-- Rendering uses hierarchical DFS traversal (replaced flat draw order in Phase 5)
-- Three-phase pipeline: Phase 1 (DFS: atlas population, render order), Phase 2 (UV finalization, clip patching, DrawList construction), Phase 3 (render pass execution)
-- `DrawList::merge_adjacent()` coalesces contiguous same-type draw commands for minimal draw calls
-- Stencil nesting uses IncrementClamp/DecrementClamp (max 255 depth)
-- ShaderRect uses per-instance `clip_rect` with fragment discard
-- Scissor uses GPU `set_scissor_rect()` (zero overhead, no rounded corners)
-- Scroll containers inject translation into child world transforms and auto-clip via implicit Scissor
-- `render_frame()` is the single entry point: takes `&mut SceneGraph` + `&TextureView`
-
-### File Layout
+## File Layout
 
 ```
 crates/
-  selean-common/           # Shared types and errors
-    src/
-      error/mod.rs         # SeleanError, EngineError
-      types/id.rs          # NodeId, TokenId, ProjectId, etc.
+  selean-common/           # Shared types (NodeId, PageId, errors)
   selean-engine/           # Core rendering engine
     src/
-      scene/               # Scene graph
-        node.rs            # SceneNode, SceneNodeKind, BoundingBox, Color, BlendMode, Gradient, Effect
-        store.rs           # SceneGraph (central store, transforms, hit testing, scroll, alignment)
-        transform.rs       # Transform2D (3x2 affine matrix)
-        dirty.rs           # DirtyFlags (8-bit bitmask)
-        clip.rs            # ClipMode, ClipRect
-      renderer/            # GPU rendering
-        pipeline.rs        # Renderer (top-level orchestrator, DFS traversal, SmallVec children)
-        rect_pipeline.rs   # RectPipeline, RectInstance, RectBatch
-        textured_quad.rs   # TexturedQuadPipeline, TexturedQuadInstance, TexturedQuadBatch
-        blend_pipeline.rs  # BlendPipeline (11 non-native blend modes)
-        blur_pipeline.rs   # BlurPipeline (Dual Kawase, ping-pong half-res)
-        shared.rs          # SharedPipelineResources, PersistentInstanceBuffer
-        clip_stack.rs      # ClipStack, ResolvedClipState
-        draw_list.rs       # DrawCommand, DrawList
-        camera.rs          # Camera, CameraUniform
-        texture_atlas.rs   # TextureAtlas<CHANNELS>
-        gpu.rs             # GpuContext, GpuContextDescriptor
-        quad.rs            # Unit quad vertices/indices
-        shaders/           # WGSL shaders (rect, text, textured_quad, blend, blur)
-      text/                # Text subsystem
-        mod.rs             # TextSystem (coordinator, FontRegistry)
-        font.rs            # FontData, FontRegistry (FontId, multi-font)
-        shaper.rs          # shape_text (rustybuzz, weight-aware)
-        layout.rs          # layout_text, PositionedGlyph (13 args, font_id)
-        sdf.rs             # generate_glyph_sdf (Felzenszwalb EDT)
-        cache.rs           # GlyphCache (GlyphCacheKey with font_id)
-        atlas.rs           # GlyphAtlas (TextureAtlas<1>)
-        packer.rs          # ShelfPacker
-        pipeline.rs        # TextPipeline, GlyphInstance, TextBatch
-      image/               # Image subsystem
-        mod.rs             # ImageSystem (coordinator)
-        loader.rs          # decode_image, decode_image_resized
-        cache.rs           # ImageCache
-      vector/              # Vector subsystem
-        mod.rs             # VectorSystem (coordinator)
-        parser.rs          # parse_path_data (SVG path commands)
-        rasterizer.rs      # rasterize_path (tiny-skia)
-        cache.rs           # VectorCache
-      input/               # Input handling
-        mod.rs             # Module re-exports
-        event.rs           # InputEvent, InteractionEvent, PointerButton, Modifiers
-        state.rs           # SelectionSet, DragPhase, CameraPanPhase, InteractionState
-        handler.rs         # InputHandler (event processing, hit testing, scroll routing)
-      command/             # Undo/redo system
-        mod.rs             # Module declarations and re-exports
-        traits.rs          # Command trait
-        property.rs        # 15 property commands (11 macro + 4 manual)
-        hierarchy.rs       # 5 hierarchy commands (add, remove, reparent, reorder)
-        batch.rs           # CommandGroup (multi-command undo unit)
-        history.rs         # CommandHistory (undo/redo stacks, grouping)
-      persistence/         # Document save/load
-        mod.rs             # PersistenceError, save(), save_pretty(), load(), save_document(), load_document()
-        format.rs          # DocumentFormat, SceneGraphData, PageData, validate(), FORMAT_VERSION=2
-        document.rs        # Document (multi-page container, active page tracking)
-        page.rs            # Page (id, name, dimensions, owns SceneGraph)
-      spatial/             # Spatial indexing
-        index.rs           # SpatialIndex (R-tree via rstar)
-    benches/
-      bench_utils.rs       # SceneConfig, generate_scene
-      engine_benchmarks.rs # 17 Criterion benchmark groups
-    tests/
-      integration.rs       # Cross-module integration tests (commands + persistence roundtrips)
+      scene/               # SceneNode, SceneGraph, Transform2D, DirtyFlags, ClipMode
+      renderer/            # Renderer, RectPipeline, TexturedQuadPipeline, BlendPipeline,
+                           # BlurPipeline, Camera, TextureAtlas, DrawList, ClipStack
+      text/                # TextSystem, FontRegistry, shaper, layout, SDF, GlyphCache
+      image/               # ImageSystem, loader, cache
+      vector/              # VectorSystem, SVG path parser, rasterizer, cache
+      input/               # InputEvent, InteractionEvent, InputHandler, SelectionSet
+      command/             # Command trait, 15 property + 5 hierarchy commands,
+                           # CommandGroup, CommandHistory
+      persistence/         # Document save/load, format validation, multi-page support
+      spatial/             # SpatialIndex (R-tree)
+    benches/               # 17 Criterion benchmark groups
+    tests/                 # Cross-module integration tests
   selean-wasm/             # WASM binding layer (SeleanEditor, EditorState, queries)
   selean-llm/              # LLM tool definitions (41 tools) and execution mapping
-  selean-pptx/             # PPTX import/export
-    src/
-      lib.rs               # PptxError, import_pptx(), export_pptx()
-      coord.rs             # EMU/pixel conversion, OOXML color parsing, font size conversion
-      import/              # ZIP reading, slide parsing, shape/text conversion
-      export/              # OOXML ZIP building, shape XML generation
+  selean-codegen/          # Scene graph to React + Tailwind CSS code generation
+  selean-pptx/             # PowerPoint import/export
   selean-idml/             # InDesign IDML import/export
   selean-figma/            # Figma REST API import, interchange export
   selean-collab/           # Collaborative editing protocol, OpLog, operation inverses
-  selean-server/           # Axum HTTP server
-    src/
-      main.rs              # Server binary with CORS, static serving, tracing
-      routes.rs            # API routes (split upload/json with body size limits)
-      indesign_bridge.rs   # InDesign .indd server bridge
-      collab/
-        ws_handler.rs      # WebSocket handler, CollabState, graceful mutex recovery
-        room_manager.rs    # Room, RoomManager
+  selean-server/           # Axum HTTP server (auth, GitHub OAuth, routes, storage, WebSocket)
+  selean-db/               # PostgreSQL database (sqlx, migrations, models, queries)
 
 web/
   selean-app/              # React + TypeScript frontend (Vite)
     src/
-      components/          # Canvas, ChatSidebar, PropertyInspector, FileMenu, LayerPanel,
-                           # AlignmentBar, ContextMenu, InlineTextEditor, SelectionOverlay,
-                           # Toolbar, PageBar, ErrorBoundary, ErrorToast, CollabBar, PresenceOverlay
+      components/          # Canvas, ChatPanel, LeftSidebar, FloatingToolbar, ColorPicker,
+                           # HeaderBar, LayerPanel, FileMenu, CodePanel, ContextMenu,
+                           # InlineTextEditor, SelectionOverlay, PageBar, ErrorBoundary,
+                           # ErrorToast, CollabBar, PresenceOverlay, ExportDialog,
+                           # WorkspaceSelector, MemberManager, SnapGuides
+      contexts/            # EditorContext (editorRef + onSceneChanged provider)
       hooks/               # useSeleanEditor, useSelection, useCreationTool, useResizeDrag,
                            # useMoveDrag, useAutoSave, useKeyboardShortcuts, useCollabSession,
-                           # useFileOperations, useFontLoader
+                           # useFileOperations, useFontLoader, useWorkspace, useGitHub,
+                           # useChatEngine, useResizablePanel, useTheme, useCommandDispatch
+      auth/                # AuthContext, LoginPage, ProtectedRoute
       collab/              # WsClient, OperationBuffer, CollabContext
+      data/                # Element presets, template definitions
       wasm/                # TypeScript type stubs for WASM bindings
-      theme.ts             # Shared design tokens (colors, font sizes)
+      types/               # Shared types (ToolType, NodeKind)
+      utils/               # Camera transforms, color conversions, clipboard
+      theme.ts             # Design tokens (light/dark palettes, spacing, radii, shadows)
 
 figma-plugin/              # Figma plugin for importing Selean interchange format
 ```
+
+## Development
+
+```bash
+# Pre-push checklist (CI enforces all of these)
+cargo fmt --all
+RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
+cargo test --workspace
+cd web/selean-app && npx vitest run
+```
+
+### Workspace Clippy Config
+
+- `pedantic = warn` (priority -1)
+- `unwrap_used = deny`: use `.expect("reason")` everywhere, including tests
+- `expect_used = warn`
+- Functions over 100 lines must be split
+- Struct constructor fields must match definition order
+
+See `Cargo.toml` `[workspace.lints.clippy]` for the full config.

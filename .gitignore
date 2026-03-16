@@ -22,3 +22,6 @@ dist/
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Claude Code
+.claude/
