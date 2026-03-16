@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, type InteractionEvent } from "./components/Canvas";
 import { ChatPanel } from "./components/ChatPanel";
-import { CollabBar } from "./components/CollabBar";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ErrorToast } from "./components/ErrorToast";
-import { FileMenu } from "./components/FileMenu";
 import { FloatingToolbar } from "./components/FloatingToolbar";
+import { HeaderBar } from "./components/HeaderBar";
 import { LayerPanel } from "./components/LayerPanel";
 import { LeftSidebar } from "./components/LeftSidebar";
 import { PageBar } from "./components/PageBar";
@@ -16,23 +15,21 @@ import { ContextMenu } from "./components/ContextMenu";
 import { InlineTextEditor } from "./components/InlineTextEditor";
 import { MemberManager } from "./components/MemberManager";
 import { SnapGuides } from "./components/SnapGuides";
-import { WorkspaceSelector } from "./components/WorkspaceSelector";
 import { CollabContext } from "./collab/CollabContext";
+import { EditorProvider } from "./contexts/EditorContext";
 import { useAutoSave } from "./hooks/useAutoSave";
 import { useCollabSession } from "./hooks/useCollabSession";
 import { useCreationTool } from "./hooks/useCreationTool";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMoveDrag } from "./hooks/useMoveDrag";
 import { WorkspaceProvider, useWorkspace } from "./hooks/useWorkspace";
-import { useAuth } from "./auth/AuthContext";
 import { useSeleanEditor } from "./hooks/useSeleanEditor";
 import { useSelection } from "./hooks/useSelection";
 import type { NodeInfo } from "./wasm/types";
 import { worldToScreen, worldDimsToScreen } from "./utils/camera";
-import { colors, fontSizes, radii, shadows, spacing } from "./theme";
+import { colors } from "./theme";
 import { useResizablePanel } from "./hooks/useResizablePanel";
-import { useTheme } from "./hooks/useTheme";
-import type { ToolType } from "./types/editor";
+import { NodeKind, type ToolType } from "./types/editor";
 
 /** Interaction event types that should trigger a selection refresh. */
 const REFRESH_EVENT_TYPES = new Set([
@@ -52,8 +49,6 @@ export function App() {
 type RightView = "design" | "code";
 
 function AppContent() {
-  const { user } = useAuth();
-  const { mode: themeMode, toggle: toggleTheme } = useTheme();
   const { activeWorkspace } = useWorkspace();
   const [undoRedoTick, setUndoRedoTick] = useState(0);
   const [activeTool, setActiveTool] = useState<ToolType>("select");
@@ -248,7 +243,7 @@ function AppContent() {
                 const json = editor.get_node_json(clickedId);
                 if (json !== "null") {
                   const node: NodeInfo = JSON.parse(json);
-                  if (node.kind === "Text") {
+                  if (node.kind === NodeKind.Text) {
                     setEditingNodeId(clickedId);
                     lastClickNodeIdRef.current = null;
                     lastClickTimeRef.current = 0;
@@ -313,11 +308,16 @@ function AppContent() {
 
   // Compute screen bounds for FloatingToolbar positioning.
   const floatingToolbarBounds = useMemo(() => {
-    if (!selectedNode || status !== "ready" || !editorRef.current) return undefined;
+    if (!selectedNode || status !== "ready" || !editorRef.current)
+      return undefined;
     try {
       const cam = editorRef.current.get_camera();
       const pos = worldToScreen(selectedNode.x, selectedNode.y, cam);
-      const dims = worldDimsToScreen(selectedNode.width, selectedNode.height, cam.zoom);
+      const dims = worldDimsToScreen(
+        selectedNode.width,
+        selectedNode.height,
+        cam.zoom,
+      );
       return { x: pos.x, y: pos.y, width: dims.w, height: dims.h };
     } catch {
       return undefined;
@@ -341,182 +341,40 @@ function AppContent() {
     collab.disconnect();
   }, [collab]);
 
+  const editorContextValue = useMemo(
+    () => ({ editorRef, onSceneChanged }),
+    [editorRef, onSceneChanged],
+  );
+
   return (
     <>
       <CollabContext.Provider value={collab}>
-        <div style={rootStyle}>
-          {/* Header */}
-          <header style={headerStyle}>
-            <div style={headerLeftStyle}>
-              <span style={logoStyle}>Selean</span>
-              {status === "ready" && (
-                <FileMenu
-                  editorRef={editorRef}
-                  onSceneChanged={onSceneChanged}
-                  onClearAutoSave={clearSavedDocument}
-                />
-              )}
-              {status === "ready" && <WorkspaceSelector />}
-            </div>
+        <EditorProvider value={editorContextValue}>
+          <div style={rootStyle}>
+            <HeaderBar
+              editorRef={editorRef}
+              status={status}
+              error={error}
+              rightView={rightView}
+              onRightViewChange={setRightView}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              showLayers={showLayers}
+              onToggleLayers={toggleLayers}
+              onShowMembers={useCallback(() => setShowMembers(true), [])}
+              onSceneChanged={onSceneChanged}
+              onClearAutoSave={clearSavedDocument}
+              collabStatus={collab.status}
+              collabParticipants={collab.participants}
+              collabHasPendingOps={collab.hasPendingOps}
+              onCollabConnect={handleCollabConnect}
+              onCollabDisconnect={handleCollabDisconnect}
+            />
 
-            <div style={headerCenterStyle}>
-              {status === "ready" && (
-                <div style={viewToggleStyle}>
-                  <button
-                    style={{
-                      ...viewToggleBtnStyle,
-                      ...(rightView === "design" ? viewToggleActiveStyle : {}),
-                    }}
-                    onClick={() => setRightView("design")}
-                  >
-                    Design
-                  </button>
-                  <button
-                    style={{
-                      ...viewToggleBtnStyle,
-                      ...(rightView === "code" ? viewToggleActiveStyle : {}),
-                    }}
-                    onClick={() => setRightView("code")}
-                  >
-                    Code
-                  </button>
-                </div>
-              )}
-              {status !== "ready" && (
-                <span style={statusStyle}>
-                  {status === "loading" && "Initializing..."}
-                  {status === "error" && `Error: ${error}`}
-                  {status === "unsupported" && "WebGPU not supported"}
-                </span>
-              )}
-            </div>
-
-            <div style={headerRightStyle}>
-              {status === "ready" && (
-                <>
-                  <button
-                    data-interactive
-                    style={{
-                      ...headerBtnStyle,
-                      opacity: canUndo ? 1 : 0.4,
-                      cursor: canUndo ? "pointer" : "default",
-                    }}
-                    onClick={handleUndo}
-                    disabled={!canUndo}
-                    title="Undo"
-                  >
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <polyline points="1 4 1 10 7 10" />
-                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                    </svg>
-                  </button>
-                  <button
-                    data-interactive
-                    style={{
-                      ...headerBtnStyle,
-                      opacity: canRedo ? 1 : 0.4,
-                      cursor: canRedo ? "pointer" : "default",
-                    }}
-                    onClick={handleRedo}
-                    disabled={!canRedo}
-                    title="Redo"
-                  >
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <polyline points="23 4 23 10 17 10" />
-                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                    </svg>
-                  </button>
-                  <CollabBar
-                    status={collab.status}
-                    participants={collab.participants}
-                    hasPendingOps={collab.hasPendingOps}
-                    onConnect={handleCollabConnect}
-                    onDisconnect={handleCollabDisconnect}
-                  />
-                  <button
-                    data-interactive
-                    style={{
-                      ...headerBtnStyle,
-                      ...(showLayers
-                        ? {
-                            background: colors.accentLight,
-                            color: colors.accent,
-                            borderColor: colors.accent,
-                          }
-                        : {}),
-                    }}
-                    onClick={() => setShowLayers((v) => !v)}
-                    title="Toggle layers panel"
-                  >
-                    Layers
-                  </button>
-                  <button
-                    data-interactive
-                    style={headerBtnStyle}
-                    onClick={() => setShowMembers(true)}
-                  >
-                    Share
-                  </button>
-                  <button
-                    data-interactive
-                    style={headerBtnStyle}
-                    onClick={toggleTheme}
-                    title={`Switch to ${themeMode === "light" ? "dark" : "light"} mode`}
-                  >
-                    {themeMode === "light" ? (
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                      </svg>
-                    ) : (
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <circle cx="12" cy="12" r="5" />
-                        <line x1="12" y1="1" x2="12" y2="3" />
-                        <line x1="12" y1="21" x2="12" y2="23" />
-                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                        <line x1="1" y1="12" x2="3" y2="12" />
-                        <line x1="21" y1="12" x2="23" y2="12" />
-                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-                      </svg>
-                    )}
-                  </button>
-                  {user && <span style={userStyle}>{user.display_name}</span>}
-                </>
-              )}
-            </div>
-          </header>
-
-          {/* Body */}
-          <div style={bodyStyle}>
+            {/* Body */}
+            <div style={bodyStyle}>
             {/* Left Sidebar: Elements / Templates / Uploads */}
             {status === "ready" && (
               <div
@@ -596,7 +454,6 @@ function AppContent() {
                           onSceneChanged={onSceneChanged}
                           isDragging={isMoveDragging}
                           isEditing={editingNodeId !== null}
-                          activePageId={activePageId}
                           screenBounds={floatingToolbarBounds}
                         />
                       )}
@@ -609,7 +466,7 @@ function AppContent() {
                             const json = editor.get_node_json(editingNodeId);
                             if (json === "null") return null;
                             const node: NodeInfo = JSON.parse(json);
-                            if (node.kind !== "Text") return null;
+                            if (node.kind !== NodeKind.Text) return null;
                             return (
                               <InlineTextEditor
                                 nodeId={editingNodeId}
@@ -700,7 +557,8 @@ function AppContent() {
               )}
             </div>
           </div>
-        </div>
+          </div>
+        </EditorProvider>
       </CollabContext.Provider>
       {showMembers && <MemberManager onClose={() => setShowMembers(false)} />}
       <ErrorToast />
@@ -719,95 +577,6 @@ const rootStyle: React.CSSProperties = {
   color: colors.text,
   fontFamily:
     '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-};
-
-const headerStyle: React.CSSProperties = {
-  height: 48,
-  display: "flex",
-  alignItems: "center",
-  padding: `0 ${spacing.lg}px`,
-  borderBottom: `1px solid ${colors.border}`,
-  flexShrink: 0,
-  background: colors.bg,
-  gap: spacing.lg,
-};
-
-const headerLeftStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: spacing.md,
-  flex: 1,
-};
-
-const logoStyle: React.CSSProperties = {
-  fontWeight: 700,
-  fontSize: fontSizes.xl,
-  color: colors.accent,
-  letterSpacing: "-0.02em",
-};
-
-const headerCenterStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const viewToggleStyle: React.CSSProperties = {
-  display: "flex",
-  background: colors.surface,
-  borderRadius: radii.md,
-  padding: 2,
-  border: `1px solid ${colors.border}`,
-};
-
-const viewToggleBtnStyle: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  padding: `${spacing.xs}px ${spacing.lg}px`,
-  fontSize: fontSizes.sm,
-  fontWeight: 500,
-  color: colors.textDim,
-  cursor: "pointer",
-  borderRadius: radii.md - 2,
-};
-
-const viewToggleActiveStyle: React.CSSProperties = {
-  background: colors.bg,
-  color: colors.text,
-  fontWeight: 600,
-  boxShadow: shadows.sm,
-};
-
-const statusStyle: React.CSSProperties = {
-  color: colors.textDim,
-  fontSize: fontSizes.sm,
-};
-
-const headerRightStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: spacing.sm,
-  flex: 1,
-  justifyContent: "flex-end",
-};
-
-const headerBtnStyle: React.CSSProperties = {
-  background: colors.surface,
-  border: `1px solid ${colors.border}`,
-  color: colors.text,
-  padding: `${spacing.xs}px ${spacing.md}px`,
-  borderRadius: radii.md,
-  cursor: "pointer",
-  fontSize: fontSizes.sm,
-  fontWeight: 500,
-  display: "flex",
-  alignItems: "center",
-  gap: spacing.xs,
-};
-
-const userStyle: React.CSSProperties = {
-  fontSize: fontSizes.sm,
-  color: colors.textDim,
 };
 
 const bodyStyle: React.CSSProperties = {

@@ -185,7 +185,9 @@ describe("LayerPanel", () => {
     );
     const searchInput = screen.getByPlaceholderText("Filter layers...");
     fireEvent.change(searchInput, { target: { value: "head" } });
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(screen.getByText("Header")).toBeInTheDocument();
     expect(screen.queryByText("Footer")).not.toBeInTheDocument();
     vi.useRealTimers();
@@ -204,7 +206,9 @@ describe("LayerPanel", () => {
     );
     const searchInput = screen.getByPlaceholderText("Filter layers...");
     fireEvent.change(searchInput, { target: { value: "zzz" } });
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(screen.getByText("No matching layers")).toBeInTheDocument();
     vi.useRealTimers();
   });

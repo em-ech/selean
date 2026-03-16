@@ -77,6 +77,14 @@ export function ColorPicker({ value, onChange, onClose }: ColorPickerProps) {
   const [mode, setMode] = useState<FillMode>(value.mode);
   const [activeStopIndex, setActiveStopIndex] = useState(0);
   const spectrumRef = useRef<HTMLDivElement>(null);
+
+  // Clamp activeStopIndex when gradient stops change externally (e.g. AI edit).
+  const stopsLen = value.gradient?.stops.length ?? 0;
+  useEffect(() => {
+    if (stopsLen > 0 && activeStopIndex >= stopsLen) {
+      setActiveStopIndex(stopsLen - 1);
+    }
+  }, [stopsLen, activeStopIndex]);
   const hueRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -240,10 +248,7 @@ export function ColorPicker({ value, onChange, onClose }: ColorPickerProps) {
                 style={{
                   ...gradientBarStyle,
                   background: `linear-gradient(to right, ${value.gradient.stops
-                    .map(
-                      (s) =>
-                        `${rgbaToString(s.color)} ${s.position * 100}%`,
-                    )
+                    .map((s) => `${rgbaToString(s.color)} ${s.position * 100}%`)
                     .join(", ")})`,
                 }}
               >

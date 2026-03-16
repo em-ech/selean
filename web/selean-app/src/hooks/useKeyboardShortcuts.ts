@@ -1,10 +1,13 @@
 import { useEffect } from "react";
 import type { SeleanEditor, NodeInfo } from "../wasm/types";
-import type { ToolType } from "../types/editor";
+import { NodeKind, type ToolType } from "../types/editor";
 import { pasteNode } from "../utils/clipboard";
 
 /** Tags that should suppress single-key shortcuts. */
 const INPUT_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
+/** Throttle timestamp for arrow-key nudge (60fps cap). */
+let lastNudgeTime = 0;
 
 /**
  * Executes a tool call on the first selected node via the editor.
@@ -218,7 +221,7 @@ export function useKeyboardShortcuts({
             const nodeJson = editor.get_node_json(ids[0]);
             if (nodeJson !== "null") {
               const node: NodeInfo = JSON.parse(nodeJson);
-              if (node.kind === "Group") {
+              if (node.kind === NodeKind.Group) {
                 editor.execute_tool_call(
                   "ungroup_node",
                   JSON.stringify({ node_id: ids[0] }),
@@ -312,11 +315,17 @@ export function useKeyboardShortcuts({
         return;
       }
 
-      // Arrow keys: Nudge selected nodes
+      // Arrow keys: Nudge selected nodes (batched as command group)
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
         e.preventDefault();
+        // Throttle: skip if last nudge was < 16ms ago
+        const now = performance.now();
+        if (now - lastNudgeTime < 16) return;
+        lastNudgeTime = now;
+
         try {
           const ids: string[] = editor.get_selected_ids();
+          if (ids.length === 0) return;
           const step = e.shiftKey ? 10 : 1;
           let dx = 0;
           let dy = 0;
@@ -325,6 +334,7 @@ export function useKeyboardShortcuts({
           if (e.key === "ArrowUp") dy = -step;
           if (e.key === "ArrowDown") dy = step;
 
+          editor.begin_command_group();
           for (const id of ids) {
             const json = editor.get_node_json(id);
             if (json === "null") continue;
@@ -340,7 +350,8 @@ export function useKeyboardShortcuts({
               }),
             );
           }
-          if (ids.length > 0) onSceneChanged();
+          editor.end_command_group();
+          onSceneChanged();
         } catch (err) {
           console.warn("shortcut:nudge failed", err);
         }

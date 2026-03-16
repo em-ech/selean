@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 import type { NodeInfo, SeleanEditor } from "../wasm/types";
 import { pasteNode } from "../utils/clipboard";
+import { NodeKind } from "../types/editor";
 
 interface ContextMenuProps {
   x: number;
@@ -62,7 +63,7 @@ export function ContextMenu({
   const editor = editorRef.current;
   const selectedIds = getSelectedIds(editor);
   const selectedNode = getFirstSelectedNode(editor, selectedIds);
-  const isGroup = selectedNode?.kind === "Group";
+  const isGroup = selectedNode?.kind === NodeKind.Group;
   const hasSelection = selectedIds.length > 0;
   const hasMultiSelection = selectedIds.length >= 2;
 

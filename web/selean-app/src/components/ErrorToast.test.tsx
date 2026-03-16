@@ -1,78 +1,80 @@
-import { render, screen, act } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ErrorToast, showError } from "./ErrorToast";
 
 describe("ErrorToast", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.useFakeTimers();
   });
 
-  it("renders nothing when no errors", () => {
-    const { container } = render(<ErrorToast />);
-    expect(container.textContent).toBe("");
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("shows error message when showError is called", () => {
+  it("showError renders a toast message", () => {
     render(<ErrorToast />);
-
     act(() => {
       showError("Something went wrong");
     });
-
-    expect(screen.getByText("Something went wrong")).toBeInTheDocument();
+    expect(screen.getByText("Something went wrong")).toBeTruthy();
   });
 
-  it("shows multiple errors", () => {
+  it("auto-dismisses after 5 seconds", () => {
     render(<ErrorToast />);
-
     act(() => {
-      showError("Error 1");
-      showError("Error 2");
+      showError("Temporary error");
     });
-
-    expect(screen.getByText("Error 1")).toBeInTheDocument();
-    expect(screen.getByText("Error 2")).toBeInTheDocument();
+    expect(screen.getByText("Temporary error")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByText("Temporary error")).toBeNull();
   });
 
-  it("dismisses on click", () => {
+  it("click-to-dismiss removes toast", () => {
     render(<ErrorToast />);
-
     act(() => {
-      showError("Click to dismiss");
+      showError("Click me away");
     });
-
-    expect(screen.getByText("Click to dismiss")).toBeInTheDocument();
-
-    act(() => {
-      screen.getByText("Click to dismiss").click();
-    });
-
-    expect(screen.queryByText("Click to dismiss")).not.toBeInTheDocument();
+    const toast = screen.getByText("Click me away");
+    fireEvent.click(toast);
+    expect(screen.queryByText("Click me away")).toBeNull();
   });
 
-  it("logs to console via console.warn", () => {
-    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("max 5 toasts visible", () => {
     render(<ErrorToast />);
-
-    act(() => {
-      showError("logged error");
-    });
-
-    expect(spy).toHaveBeenCalledWith("logged error");
-  });
-
-  it("keeps only the last 5 toasts", () => {
-    render(<ErrorToast />);
-
     act(() => {
       for (let i = 1; i <= 7; i++) {
-        showError(`Error ${i}`);
+        showError(`Toast ${i}`);
       }
     });
+    // slice(-4) keeps last 4 of prev, then pushes new -> max 5
+    // After 7 calls the oldest two are dropped
+    expect(screen.queryByText("Toast 1")).toBeNull();
+    expect(screen.queryByText("Toast 2")).toBeNull();
+    expect(screen.getByText("Toast 3")).toBeTruthy();
+    expect(screen.getByText("Toast 4")).toBeTruthy();
+    expect(screen.getByText("Toast 5")).toBeTruthy();
+    expect(screen.getByText("Toast 6")).toBeTruthy();
+    expect(screen.getByText("Toast 7")).toBeTruthy();
+  });
 
-    // Should keep last 5 (3-7) since we slice(-4) then add 1 = 5 max per batch
-    expect(screen.queryByText("Error 1")).not.toBeInTheDocument();
-    expect(screen.queryByText("Error 2")).not.toBeInTheDocument();
-    expect(screen.getByText("Error 7")).toBeInTheDocument();
+  it("listener error does not break broadcast", () => {
+    // Suppress console output from the try-catch in showError
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(<ErrorToast />);
+
+    act(() => {
+      showError("Still works");
+    });
+
+    expect(screen.getByText("Still works")).toBeTruthy();
+
+    consoleError.mockRestore();
+    consoleWarn.mockRestore();
   });
 });

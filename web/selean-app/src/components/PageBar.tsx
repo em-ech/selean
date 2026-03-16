@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { colors, fontSizes, radii, shadows, spacing } from "../theme";
+import { showError } from "./ErrorToast";
 import type { PageInfo, SeleanEditor } from "../wasm/types";
 
 interface PageBarProps {
@@ -85,8 +86,13 @@ export function PageBar({
     if (!editor || !editingPageId) return;
     const trimmed = editingName.trim();
     if (trimmed) {
-      editor.rename_page(editingPageId, trimmed);
-      onSceneChanged();
+      try {
+        editor.rename_page(editingPageId, trimmed);
+        onSceneChanged();
+      } catch (err) {
+        showError("Failed to rename page");
+        console.warn("page-bar:rename failed", err);
+      }
     }
     setEditingPageId(null);
   }, [editorRef, editingPageId, editingName, onSceneChanged]);
@@ -105,11 +111,16 @@ export function PageBar({
   const handleAddPage = useCallback(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    const name = `Page ${pages.length + 1}`;
-    const id = editor.add_page(name, 1920, 1080);
-    editor.set_active_page(id);
-    setActivePageId(id);
-    onSceneChanged();
+    try {
+      const name = `Page ${pages.length + 1}`;
+      const id = editor.add_page(name, 1920, 1080);
+      editor.set_active_page(id);
+      setActivePageId(id);
+      onSceneChanged();
+    } catch (err) {
+      showError("Failed to add page");
+      console.warn("page-bar:add-page failed", err);
+    }
   }, [editorRef, pages.length, onSceneChanged]);
 
   const handleRemovePage = useCallback(
@@ -118,14 +129,19 @@ export function PageBar({
       const editor = editorRef.current;
       if (!editor) return;
       if (pages.length <= 1) return;
-      const ok = editor.remove_page(pageId);
-      if (ok) {
-        const remaining = pages.filter((p) => p.id !== pageId);
-        if (remaining.length > 0) {
-          editor.set_active_page(remaining[0].id);
-          setActivePageId(remaining[0].id);
+      try {
+        const ok = editor.remove_page(pageId);
+        if (ok) {
+          const remaining = pages.filter((p) => p.id !== pageId);
+          if (remaining.length > 0) {
+            editor.set_active_page(remaining[0].id);
+            setActivePageId(remaining[0].id);
+          }
+          onSceneChanged();
         }
-        onSceneChanged();
+      } catch (err) {
+        showError("Failed to remove page");
+        console.warn("page-bar:remove-page failed", err);
       }
     },
     [editorRef, pages, onSceneChanged],
@@ -149,11 +165,16 @@ export function PageBar({
     (pageId: string) => {
       const editor = editorRef.current;
       if (!editor) return;
-      const newId = editor.duplicate_page(pageId);
-      if (newId) {
-        editor.set_active_page(newId);
-        setActivePageId(newId);
-        onSceneChanged();
+      try {
+        const newId = editor.duplicate_page(pageId);
+        if (newId) {
+          editor.set_active_page(newId);
+          setActivePageId(newId);
+          onSceneChanged();
+        }
+      } catch (err) {
+        showError("Failed to duplicate page");
+        console.warn("page-bar:duplicate failed", err);
       }
       setContextMenu(null);
     },

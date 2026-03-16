@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
-import { useCollab } from "../collab/CollabContext";
 import { colors, fontSizes, radii, shadows, spacing } from "../theme";
 import type { NodeInfo, SeleanEditor } from "../wasm/types";
 import { ColorPicker, type ColorPickerValue } from "./ColorPicker";
 import { rgbaArrayToString } from "../utils/color";
+import { NodeKind } from "../types/editor";
+import { useCommandDispatch } from "../hooks/useCommandDispatch";
 
 /** Alignment icon paths (16x16 viewBox). */
 const ALIGN_ICONS: Record<string, string> = {
@@ -46,7 +47,6 @@ interface FloatingToolbarProps {
   onSceneChanged: () => void;
   isDragging: boolean;
   isEditing: boolean;
-  activePageId?: string;
   /** Bounding box in screen coordinates for positioning. */
   screenBounds?: { x: number; y: number; width: number; height: number };
 }
@@ -177,23 +177,9 @@ export function FloatingToolbar({
   onSceneChanged,
   isDragging,
   isEditing,
-  activePageId,
   screenBounds,
 }: FloatingToolbarProps) {
-  const collab = useCollab();
-
-  const executeCommand = useCallback(
-    (command: Record<string, unknown>) => {
-      const editor = editorRef.current;
-      if (!editor) return;
-      editor.execute_command(JSON.stringify(command));
-      onSceneChanged();
-      if (collab?.status === "connected" && activePageId) {
-        collab.submitOp(command, activePageId);
-      }
-    },
-    [editorRef, onSceneChanged, collab, activePageId],
-  );
+  const executeCommand = useCommandDispatch();
 
   const handleAlign = useCallback(
     (kind: string) => {
@@ -251,7 +237,7 @@ export function FloatingToolbar({
     };
   }
 
-  const isText = node.kind === "Text";
+  const isText = node.kind === NodeKind.Text;
   const showAlignment = selectedIds.length >= 2;
 
   return (

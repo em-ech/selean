@@ -16,7 +16,11 @@ export function showError(message: string): void {
   console.warn(message);
   const msg: ToastMessage = { id: nextId++, text: message };
   for (const fn of listeners) {
-    fn(msg);
+    try {
+      fn(msg);
+    } catch (e) {
+      console.error("ErrorToast listener threw", e);
+    }
   }
 }
 

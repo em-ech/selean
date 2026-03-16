@@ -10,11 +10,17 @@ vi.mock("../collab/CollabContext", () => ({
   useCollab: () => null,
 }));
 
+const mockDispatch = vi.fn();
+vi.mock("../hooks/useCommandDispatch", () => ({
+  useCommandDispatch: () => mockDispatch,
+}));
+
 const editorRef = createMockEditorRef();
 const onSceneChanged = vi.fn();
 
 beforeEach(() => {
   onSceneChanged.mockClear();
+  mockDispatch.mockClear();
   (editorRef.current.execute_command as ReturnType<typeof vi.fn>).mockClear();
   (editorRef.current.execute_tool_call as ReturnType<typeof vi.fn>).mockClear();
   (editorRef.current.align_nodes as ReturnType<typeof vi.fn>).mockClear();
@@ -206,10 +212,9 @@ describe("FloatingToolbar", () => {
     );
     const opacityInput = screen.getByTitle("Opacity");
     fireEvent.change(opacityInput, { target: { value: "80" } });
-    expect(editorRef.current.execute_command).toHaveBeenCalledWith(
-      expect.stringContaining('"SetOpacity"'),
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "SetOpacity" }),
     );
-    expect(onSceneChanged).toHaveBeenCalled();
   });
 
   it("positions using screenBounds when provided", () => {
@@ -342,8 +347,8 @@ describe("FloatingToolbar", () => {
       />,
     );
     fireEvent.click(screen.getByTitle("Bold"));
-    expect(editorRef.current.execute_command).toHaveBeenCalledWith(
-      expect.stringContaining('"SetFontWeight"'),
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "SetFontWeight" }),
     );
   });
 
@@ -365,8 +370,87 @@ describe("FloatingToolbar", () => {
       />,
     );
     fireEvent.click(screen.getByTitle("Italic"));
-    expect(editorRef.current.execute_command).toHaveBeenCalledWith(
-      expect.stringContaining('"SetFontStyle"'),
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "SetFontStyle" }),
     );
+  });
+
+  it("hides text controls for non-Text node when mixed types selected", () => {
+    const node = makeNodeInfo({ kind: "Rect" });
+    render(
+      <FloatingToolbar
+        node={node}
+        selectedIds={["a", "b"]}
+        editorRef={editorRef}
+        onSceneChanged={onSceneChanged}
+        isDragging={false}
+        isEditing={false}
+      />,
+    );
+    expect(screen.queryByTitle("Font size")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Font family")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Bold")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Italic")).not.toBeInTheDocument();
+  });
+
+  it("font size rejects zero", () => {
+    const node = makeNodeInfo({
+      kind: "Text",
+      font_size: 16,
+      text_content: "Hello",
+    });
+    render(
+      <FloatingToolbar
+        node={node}
+        selectedIds={[node.id]}
+        editorRef={editorRef}
+        onSceneChanged={onSceneChanged}
+        isDragging={false}
+        isEditing={false}
+      />,
+    );
+    const fontSizeInput = screen.getByTitle("Font size");
+    fireEvent.change(fontSizeInput, { target: { value: "0" } });
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it("opacity clamps to 0-100", () => {
+    const node = makeNodeInfo({ opacity: 1.0 });
+    render(
+      <FloatingToolbar
+        node={node}
+        selectedIds={[node.id]}
+        editorRef={editorRef}
+        onSceneChanged={onSceneChanged}
+        isDragging={false}
+        isEditing={false}
+      />,
+    );
+    const opacityInput = screen.getByTitle("Opacity");
+    fireEvent.change(opacityInput, { target: { value: "150" } });
+    // The command should use the clamped value (max 1.0)
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "SetOpacity" }),
+    );
+    const callArg = mockDispatch.mock.calls[0][0];
+    expect(callArg.type).toBe("SetOpacity");
+    expect(callArg.opacity).toBeLessThanOrEqual(1.0);
+  });
+
+  it("shows alignment buttons for multi-select", () => {
+    const node = makeNodeInfo();
+    render(
+      <FloatingToolbar
+        node={node}
+        selectedIds={["a", "b"]}
+        editorRef={editorRef}
+        onSceneChanged={onSceneChanged}
+        isDragging={false}
+        isEditing={false}
+      />,
+    );
+    expect(screen.getByTitle("Align left")).toBeInTheDocument();
+    expect(screen.getByTitle("Align center")).toBeInTheDocument();
+    expect(screen.getByTitle("Align right")).toBeInTheDocument();
   });
 });

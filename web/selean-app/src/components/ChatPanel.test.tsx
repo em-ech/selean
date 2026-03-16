@@ -246,4 +246,35 @@ describe("ChatPanel", () => {
     );
     expect(screen.queryByText("Design with AI")).not.toBeInTheDocument();
   });
+
+  it("displays error message on send failure", () => {
+    mockChatState.displayMessages = [
+      { role: "user", text: "do something" },
+      { role: "assistant", text: "Error: Server error: 500" },
+    ];
+    render(
+      <ChatPanel
+        editorRef={editorRef}
+        onSceneChanged={onSceneChanged}
+        isOpen={true}
+        onToggle={onToggle}
+      />,
+    );
+    expect(screen.getByText("Error: Server error: 500")).toBeInTheDocument();
+  });
+
+  it("Enter key in input triggers send", () => {
+    mockChatState.input = "hello";
+    render(
+      <ChatPanel
+        editorRef={editorRef}
+        onSceneChanged={onSceneChanged}
+        isOpen={true}
+        onToggle={onToggle}
+      />,
+    );
+    const input = screen.getByPlaceholderText("Ask Selean...");
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
+    expect(mockSendMessage).toHaveBeenCalled();
+  });
 });

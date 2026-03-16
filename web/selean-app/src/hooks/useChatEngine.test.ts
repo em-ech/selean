@@ -255,4 +255,178 @@ describe("useChatEngine", () => {
     // The key point is loading blocks duplicate sends
     expect(result.current.loading).toBe(true);
   });
+
+  it("handles server 500 during streaming gracefully", async () => {
+    mockAuthFetch.mockResolvedValueOnce(
+      new Response("Internal Server Error", { status: 500 }),
+    );
+
+    const { result } = renderHook(() =>
+      useChatEngine({ editorRef, onSceneChanged }),
+    );
+
+    act(() => {
+      result.current.setInput("do something");
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.displayMessages).toHaveLength(2);
+    expect(result.current.displayMessages[1].role).toBe("assistant");
+    expect(result.current.displayMessages[1].text).toContain("Error:");
+    expect(result.current.displayMessages[1].text).toContain("500");
+  });
+
+  it("handles malformed SSE event without crashing", async () => {
+    // Build a response with invalid JSON in the SSE data line
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode("data: {not valid json!!!}\ndata: \n"),
+        );
+        controller.close();
+      },
+    });
+    mockAuthFetch.mockResolvedValueOnce(new Response(stream, { status: 200 }));
+
+    const { result } = renderHook(() =>
+      useChatEngine({ editorRef, onSceneChanged }),
+    );
+
+    act(() => {
+      result.current.setInput("test malformed");
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    // Hook should complete without throwing, loading should be false
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("handles tool execution throwing an error", async () => {
+    const failEditor = createMockEditor({
+      execute_tool_call: vi.fn().mockImplementation(() => {
+        throw new Error("WASM panicked");
+      }),
+    });
+    const failEditorRef = { current: failEditor };
+
+    mockAuthFetch.mockResolvedValueOnce(
+      makeSseResponse([
+        { type: "text", text: "Applying..." },
+        {
+          type: "tool_use",
+          id: "t1",
+          name: "set_fill",
+          input: { node_id: "n1", r: 1, g: 0, b: 0, a: 1 },
+        },
+        { type: "done", stop_reason: "tool_use" },
+      ]),
+    );
+
+    const { result } = renderHook(() =>
+      useChatEngine({ editorRef: failEditorRef, onSceneChanged }),
+    );
+
+    act(() => {
+      result.current.setInput("make it red");
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.displayMessages.length).toBeGreaterThanOrEqual(2);
+    const lastMsg =
+      result.current.displayMessages[result.current.displayMessages.length - 1];
+    expect(lastMsg.role).toBe("assistant");
+    expect(lastMsg.text).toContain("Error:");
+    expect(lastMsg.text).toContain("WASM panicked");
+  });
+
+  it("clears loading on abort", async () => {
+    // Use a response that never resolves to keep loading=true
+    mockAuthFetch.mockReturnValueOnce(new Promise(() => {}));
+
+    const { result } = renderHook(() =>
+      useChatEngine({ editorRef, onSceneChanged }),
+    );
+
+    act(() => {
+      result.current.setInput("long running");
+    });
+
+    // Start send (will hang on fetch)
+    act(() => {
+      result.current.sendMessage();
+    });
+
+    expect(result.current.loading).toBe(true);
+
+    // Abort should clear loading
+    act(() => {
+      result.current.abort();
+    });
+
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("sends tool_result back to server after tool execution", async () => {
+    // First response: tool_use
+    mockAuthFetch.mockResolvedValueOnce(
+      makeSseResponse([
+        { type: "text", text: "Setting fill." },
+        {
+          type: "tool_use",
+          id: "t-abc",
+          name: "set_fill",
+          input: { node_id: "n1", r: 0, g: 1, b: 0, a: 1 },
+        },
+        { type: "done", stop_reason: "tool_use" },
+      ]),
+    );
+    // Second response: end_turn after receiving tool_result
+    mockAuthFetch.mockResolvedValueOnce(
+      makeSseResponse([
+        { type: "text", text: "All done." },
+        { type: "done", stop_reason: "end_turn" },
+      ]),
+    );
+
+    const { result } = renderHook(() =>
+      useChatEngine({ editorRef, onSceneChanged }),
+    );
+
+    act(() => {
+      result.current.setInput("set green");
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    // authFetch called twice: initial request + tool_result follow-up
+    expect(mockAuthFetch).toHaveBeenCalledTimes(2);
+
+    // The second call's body should contain tool_result in the messages
+    const secondCallBody = JSON.parse(
+      mockAuthFetch.mock.calls[1][1].body as string,
+    );
+    const lastMessage =
+      secondCallBody.messages[secondCallBody.messages.length - 1];
+    expect(lastMessage.role).toBe("user");
+    expect(Array.isArray(lastMessage.content)).toBe(true);
+    const toolResult = lastMessage.content.find(
+      (b: Record<string, unknown>) => b.type === "tool_result",
+    );
+    expect(toolResult).toBeDefined();
+    expect(toolResult.tool_use_id).toBe("t-abc");
+  });
 });

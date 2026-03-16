@@ -65,11 +65,16 @@ export function LayerPanel({
     (nodeId: string, currentVisible: boolean) => {
       const editor = editorRef.current;
       if (!editor) return;
-      editor.execute_tool_call(
-        "set_visible",
-        JSON.stringify({ node_id: nodeId, visible: !currentVisible }),
-      );
-      onSceneChanged();
+      try {
+        editor.execute_tool_call(
+          "set_visible",
+          JSON.stringify({ node_id: nodeId, visible: !currentVisible }),
+        );
+        onSceneChanged();
+      } catch (err) {
+        showError("Failed to toggle visibility");
+        console.warn("layer-panel:toggle-visible failed", err);
+      }
     },
     [editorRef, onSceneChanged],
   );
@@ -78,11 +83,16 @@ export function LayerPanel({
     (nodeId: string) => {
       const editor = editorRef.current;
       if (!editor) return;
-      editor.execute_tool_call(
-        "move_forward",
-        JSON.stringify({ node_id: nodeId }),
-      );
-      onSceneChanged();
+      try {
+        editor.execute_tool_call(
+          "move_forward",
+          JSON.stringify({ node_id: nodeId }),
+        );
+        onSceneChanged();
+      } catch (err) {
+        showError("Failed to move layer forward");
+        console.warn("layer-panel:move-forward failed", err);
+      }
     },
     [editorRef, onSceneChanged],
   );
@@ -91,11 +101,16 @@ export function LayerPanel({
     (nodeId: string) => {
       const editor = editorRef.current;
       if (!editor) return;
-      editor.execute_tool_call(
-        "move_backward",
-        JSON.stringify({ node_id: nodeId }),
-      );
-      onSceneChanged();
+      try {
+        editor.execute_tool_call(
+          "move_backward",
+          JSON.stringify({ node_id: nodeId }),
+        );
+        onSceneChanged();
+      } catch (err) {
+        showError("Failed to move layer backward");
+        console.warn("layer-panel:move-backward failed", err);
+      }
     },
     [editorRef, onSceneChanged],
   );
