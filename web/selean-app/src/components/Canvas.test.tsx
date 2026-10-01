@@ -205,3 +205,77 @@ describe("Canvas pointer events", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 });
+
+describe("Canvas drag outside the canvas", () => {
+  function renderCanvas() {
+    const ref = createMockEditorRef();
+    const onEvents = vi.fn();
+    render(
+      <Canvas
+        canvasId="test-canvas"
+        editorRef={ref}
+        status="ready"
+        onInteractionEvents={onEvents}
+      />,
+    );
+    const canvas = document.getElementById("test-canvas") as HTMLCanvasElement;
+    return { ref, onEvents, canvas };
+  }
+
+  it("forwards window pointermove to the editor while a drag is active", () => {
+    const { ref, onEvents, canvas } = renderCanvas();
+    const moved = [{ type: "DragMoved" }];
+    (ref.current.on_pointer_move as Mock).mockReturnValue(moved);
+
+    fireEvent.pointerDown(canvas, { clientX: 5, clientY: 5, pointerId: 1 });
+    fireEvent.pointerMove(document.body, {
+      clientX: 500,
+      clientY: 400,
+      pointerId: 1,
+    });
+
+    expect(ref.current.on_pointer_move).toHaveBeenCalledTimes(1);
+    expect(onEvents).toHaveBeenCalledWith(moved);
+  });
+
+  it("emits the events returned when the pointer is released outside", () => {
+    const { ref, onEvents, canvas } = renderCanvas();
+    const ended = [{ type: "DragEnded" }];
+    (ref.current.on_pointer_up as Mock).mockReturnValue(ended);
+
+    fireEvent.pointerDown(canvas, { clientX: 5, clientY: 5, pointerId: 1 });
+    fireEvent.pointerUp(document.body, {
+      clientX: 500,
+      clientY: 400,
+      pointerId: 1,
+    });
+
+    expect(ref.current.on_pointer_up).toHaveBeenCalledTimes(1);
+    expect(onEvents).toHaveBeenCalledWith(ended);
+
+    // The drag is over: later moves outside the canvas are ignored.
+    fireEvent.pointerMove(document.body, { clientX: 1, clientY: 1, pointerId: 1 });
+    expect(ref.current.on_pointer_move).not.toHaveBeenCalled();
+  });
+
+  it("does not handle a canvas pointer event twice", () => {
+    const { ref, canvas } = renderCanvas();
+
+    fireEvent.pointerDown(canvas, { clientX: 5, clientY: 5, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { clientX: 10, clientY: 10, pointerId: 1 });
+
+    expect(ref.current.on_pointer_move).toHaveBeenCalledTimes(1);
+    expect(ref.current.on_pointer_up).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores window pointer events when no drag started on the canvas", () => {
+    const { ref } = renderCanvas();
+
+    fireEvent.pointerMove(document.body, { clientX: 1, clientY: 1, pointerId: 1 });
+    fireEvent.pointerUp(document.body, { clientX: 1, clientY: 1, pointerId: 1 });
+
+    expect(ref.current.on_pointer_move).not.toHaveBeenCalled();
+    expect(ref.current.on_pointer_up).not.toHaveBeenCalled();
+  });
+});

@@ -31,15 +31,26 @@ export function Canvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
 
-  // Render loop
+  // Render loop (stops after 5 consecutive failures to prevent freeze)
   useEffect(() => {
     if (status !== "ready") return;
+    let failCount = 0;
 
     function frame() {
       try {
         editorRef.current?.render();
+        failCount = 0;
       } catch (e) {
-        console.warn("canvas:render-frame failed", e);
+        failCount++;
+        if (failCount <= 3) {
+          console.warn("canvas:render-frame failed", e);
+        }
+        if (failCount >= 5) {
+          console.error(
+            "canvas: render loop stopped after 5 consecutive failures",
+          );
+          return;
+        }
       }
       rafRef.current = requestAnimationFrame(frame);
     }
@@ -90,40 +101,57 @@ export function Canvas({
     (e: React.PointerEvent) => {
       const editor = editorRef.current;
       if (!editor) return;
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      const x = (e.clientX - rect.left) * devicePixelRatio;
-      const y = (e.clientY - rect.top) * devicePixelRatio;
-      const events = editor.on_pointer_move(
-        x,
-        y,
-        e.shiftKey,
-        e.ctrlKey,
-        e.altKey,
-        e.metaKey,
-      );
-      emitEvents(events);
+      try {
+        const rect = (e.target as HTMLElement).getBoundingClientRect();
+        const x = (e.clientX - rect.left) * devicePixelRatio;
+        const y = (e.clientY - rect.top) * devicePixelRatio;
+        const events = editor.on_pointer_move(
+          x,
+          y,
+          e.shiftKey,
+          e.ctrlKey,
+          e.altKey,
+          e.metaKey,
+        );
+        emitEvents(events);
+      } catch {
+        // Silently ignore pointer move failures to prevent UI freeze.
+      }
     },
     [editorRef, emitEvents],
   );
+
+  // Track whether a pointer is currently down on the canvas so we can
+  // listen for pointermove/pointerup on window (instead of using pointer
+  // capture, which steals events from sidebar buttons).
+  const activePointerRef = useRef<number | null>(null);
+  const canvasRectRef = useRef<DOMRect | null>(null);
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       const editor = editorRef.current;
       if (!editor) return;
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      const x = (e.clientX - rect.left) * devicePixelRatio;
-      const y = (e.clientY - rect.top) * devicePixelRatio;
-      const events = editor.on_pointer_down(
-        x,
-        y,
-        e.button,
-        e.shiftKey,
-        e.ctrlKey,
-        e.altKey,
-        e.metaKey,
-      );
-      emitEvents(events);
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      try {
+        const rect = (e.target as HTMLElement).getBoundingClientRect();
+        canvasRectRef.current = rect;
+        const x = (e.clientX - rect.left) * devicePixelRatio;
+        const y = (e.clientY - rect.top) * devicePixelRatio;
+        const events = editor.on_pointer_down(
+          x,
+          y,
+          e.button,
+          e.shiftKey,
+          e.ctrlKey,
+          e.altKey,
+          e.metaKey,
+        );
+        emitEvents(events);
+        if (e.button === 0) {
+          activePointerRef.current = e.pointerId;
+        }
+      } catch (err) {
+        console.warn("canvas:pointer-down failed", err);
+      }
     },
     [editorRef, emitEvents],
   );
@@ -132,43 +160,117 @@ export function Canvas({
     (e: React.PointerEvent) => {
       const editor = editorRef.current;
       if (!editor) return;
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      const x = (e.clientX - rect.left) * devicePixelRatio;
-      const y = (e.clientY - rect.top) * devicePixelRatio;
-      const events = editor.on_pointer_up(
-        x,
-        y,
-        e.button,
-        e.shiftKey,
-        e.ctrlKey,
-        e.altKey,
-        e.metaKey,
-      );
-      emitEvents(events);
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      activePointerRef.current = null;
+      try {
+        const rect =
+          canvasRectRef.current ??
+          (e.target as HTMLElement).getBoundingClientRect();
+        const x = (e.clientX - rect.left) * devicePixelRatio;
+        const y = (e.clientY - rect.top) * devicePixelRatio;
+        const events = editor.on_pointer_up(
+          x,
+          y,
+          e.button,
+          e.shiftKey,
+          e.ctrlKey,
+          e.altKey,
+          e.metaKey,
+        );
+        emitEvents(events);
+      } catch (err) {
+        console.warn("canvas:pointer-up failed", err);
+      }
     },
     [editorRef, emitEvents],
   );
+
+  // Window-level listeners that keep a drag alive once the pointer leaves
+  // the canvas (e.g. over the sidebar or an overlay). Moves and the release
+  // are forwarded to the editor and the returned events are emitted, so
+  // DragMoved/DragEnded still reach the drag hooks. Events that target the
+  // canvas itself are skipped: the React handlers above already handled them.
+  useEffect(() => {
+    const isOutsideDrag = (e: PointerEvent) =>
+      activePointerRef.current === e.pointerId &&
+      (e.target as HTMLElement | null)?.id !== canvasId;
+
+    const handleWindowPointerMove = (e: PointerEvent) => {
+      if (!isOutsideDrag(e)) return;
+      const editor = editorRef.current;
+      const rect = canvasRectRef.current;
+      if (!editor || !rect) return;
+      try {
+        const x = (e.clientX - rect.left) * devicePixelRatio;
+        const y = (e.clientY - rect.top) * devicePixelRatio;
+        const events = editor.on_pointer_move(
+          x,
+          y,
+          e.shiftKey,
+          e.ctrlKey,
+          e.altKey,
+          e.metaKey,
+        );
+        emitEvents(events);
+      } catch {
+        // Silently ignore pointer move failures to prevent UI freeze.
+      }
+    };
+
+    const handleWindowPointerUp = (e: PointerEvent) => {
+      if (!isOutsideDrag(e)) return;
+      activePointerRef.current = null;
+      const editor = editorRef.current;
+      const rect = canvasRectRef.current;
+      if (!editor || !rect) return;
+      try {
+        const x = (e.clientX - rect.left) * devicePixelRatio;
+        const y = (e.clientY - rect.top) * devicePixelRatio;
+        const events = editor.on_pointer_up(
+          x,
+          y,
+          e.button,
+          e.shiftKey,
+          e.ctrlKey,
+          e.altKey,
+          e.metaKey,
+        );
+        emitEvents(events);
+      } catch (err) {
+        console.warn("canvas:pointer-up failed", err);
+      }
+    };
+
+    window.addEventListener("pointermove", handleWindowPointerMove);
+    window.addEventListener("pointerup", handleWindowPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("pointerup", handleWindowPointerUp);
+    };
+  }, [canvasId, editorRef, emitEvents]);
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       const editor = editorRef.current;
       if (!editor) return;
       e.preventDefault();
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      const x = (e.clientX - rect.left) * devicePixelRatio;
-      const y = (e.clientY - rect.top) * devicePixelRatio;
-      const events = editor.on_scroll(
-        x,
-        y,
-        e.deltaX,
-        e.deltaY,
-        e.shiftKey,
-        e.ctrlKey,
-        e.altKey,
-        e.metaKey,
-      );
-      emitEvents(events);
+      try {
+        const rect = (e.target as HTMLElement).getBoundingClientRect();
+        const x = (e.clientX - rect.left) * devicePixelRatio;
+        const y = (e.clientY - rect.top) * devicePixelRatio;
+        const events = editor.on_scroll(
+          x,
+          y,
+          e.deltaX,
+          e.deltaY,
+          e.shiftKey,
+          e.ctrlKey,
+          e.altKey,
+          e.metaKey,
+        );
+        emitEvents(events);
+      } catch {
+        // Silently ignore scroll failures.
+      }
     },
     [editorRef, emitEvents],
   );
