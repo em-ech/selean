@@ -83,7 +83,7 @@ export const TEXT_ELEMENTS: TextElement[] = [
       },
       React.createElement("path", { d: "M4 4h16M4 12h16M4 20h10" }),
     ),
-    defaults: { content: "Heading", font_size: 32, width: 300, height: 50 },
+    defaults: { text_content: "Heading", font_size: 32, width: 300, height: 50 },
   },
   {
     label: "Subheading",
@@ -99,7 +99,7 @@ export const TEXT_ELEMENTS: TextElement[] = [
       },
       React.createElement("path", { d: "M4 6h16M4 14h12" }),
     ),
-    defaults: { content: "Subheading", font_size: 20, width: 250, height: 35 },
+    defaults: { text_content: "Subheading", font_size: 20, width: 250, height: 35 },
   },
   {
     label: "Body text",
@@ -116,7 +116,7 @@ export const TEXT_ELEMENTS: TextElement[] = [
       React.createElement("path", { d: "M4 6h16M4 10h16M4 14h16M4 18h10" }),
     ),
     defaults: {
-      content: "Type your text here",
+      text_content: "Type your text here",
       font_size: 14,
       width: 250,
       height: 24,

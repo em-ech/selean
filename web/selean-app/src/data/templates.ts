@@ -30,7 +30,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 0,
         width: 1080,
         height: 1080,
-        fill: { r: 0.96, g: 0.96, b: 0.98, a: 1 },
+        fill_r: 0.96, fill_g: 0.96, fill_b: 0.98, fill_a: 1,
       },
       {
         kind: "Text",
@@ -39,7 +39,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 400,
         width: 800,
         height: 80,
-        content: "Your Title Here",
+        text_content: "Your Title Here",
         font_size: 48,
       },
       {
@@ -49,7 +49,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 500,
         width: 600,
         height: 40,
-        content: "Add your subtitle",
+        text_content: "Add your subtitle",
         font_size: 24,
       },
     ],
@@ -69,7 +69,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 0,
         width: 1920,
         height: 1080,
-        fill: { r: 1, g: 1, b: 1, a: 1 },
+        fill_r: 1, fill_g: 1, fill_b: 1, fill_a: 1,
       },
       {
         kind: "Text",
@@ -78,7 +78,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 200,
         width: 1680,
         height: 100,
-        content: "Presentation Title",
+        text_content: "Presentation Title",
         font_size: 56,
       },
       {
@@ -88,7 +88,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 400,
         width: 1680,
         height: 400,
-        content: "Add your content here",
+        text_content: "Add your content here",
         font_size: 24,
       },
     ],
@@ -108,7 +108,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 0,
         width: 1050,
         height: 600,
-        fill: { r: 1, g: 1, b: 1, a: 1 },
+        fill_r: 1, fill_g: 1, fill_b: 1, fill_a: 1,
       },
       {
         kind: "Text",
@@ -117,7 +117,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 200,
         width: 930,
         height: 50,
-        content: "Your Name",
+        text_content: "Your Name",
         font_size: 32,
       },
       {
@@ -127,7 +127,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 260,
         width: 930,
         height: 30,
-        content: "Job Title",
+        text_content: "Job Title",
         font_size: 18,
       },
       {
@@ -137,7 +137,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 400,
         width: 930,
         height: 60,
-        content: "email@example.com\n+1 (555) 000-0000",
+        text_content: "email@example.com\n+1 (555) 000-0000",
         font_size: 14,
       },
     ],
@@ -157,7 +157,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 0,
         width: 1440,
         height: 2160,
-        fill: { r: 0.95, g: 0.93, b: 0.9, a: 1 },
+        fill_r: 0.95, fill_g: 0.93, fill_b: 0.9, fill_a: 1,
       },
       {
         kind: "Text",
@@ -166,7 +166,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 300,
         width: 1200,
         height: 120,
-        content: "EVENT NAME",
+        text_content: "EVENT NAME",
         font_size: 72,
       },
       {
@@ -176,7 +176,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 1600,
         width: 1200,
         height: 200,
-        content: "Date / Time / Location",
+        text_content: "Date / Time / Location",
         font_size: 28,
       },
     ],
@@ -196,7 +196,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 0,
         width: 1275,
         height: 1650,
-        fill: { r: 1, g: 1, b: 1, a: 1 },
+        fill_r: 1, fill_g: 1, fill_b: 1, fill_a: 1,
       },
       {
         kind: "Text",
@@ -205,7 +205,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 120,
         width: 1075,
         height: 80,
-        content: "Flyer Title",
+        text_content: "Flyer Title",
         font_size: 48,
       },
       {
@@ -215,7 +215,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 300,
         width: 1075,
         height: 800,
-        content:
+        text_content:
           "Add your content here. Describe your event, product, or announcement.",
         font_size: 18,
       },
@@ -236,7 +236,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 0,
         width: 1275,
         height: 1650,
-        fill: { r: 1, g: 1, b: 1, a: 1 },
+        fill_r: 1, fill_g: 1, fill_b: 1, fill_a: 1,
       },
       {
         kind: "Text",
@@ -245,7 +245,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 80,
         width: 1075,
         height: 60,
-        content: "Your Name",
+        text_content: "Your Name",
         font_size: 36,
       },
       {
@@ -255,7 +255,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 150,
         width: 1075,
         height: 30,
-        content: "email@example.com | (555) 000-0000 | City, State",
+        text_content: "email@example.com | (555) 000-0000 | City, State",
         font_size: 14,
       },
       {
@@ -265,7 +265,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 200,
         width: 1075,
         height: 2,
-        fill: { r: 0.8, g: 0.8, b: 0.8, a: 1 },
+        fill_r: 0.8, fill_g: 0.8, fill_b: 0.8, fill_a: 1,
       },
       {
         kind: "Text",
@@ -274,7 +274,7 @@ export const TEMPLATES: TemplateCard[] = [
         y: 240,
         width: 1075,
         height: 30,
-        content: "EXPERIENCE",
+        text_content: "EXPERIENCE",
         font_size: 16,
       },
     ],

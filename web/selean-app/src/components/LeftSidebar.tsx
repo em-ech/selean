@@ -95,17 +95,20 @@ export function LeftSidebar({
         // Fallback to default position.
       }
 
-      editor.execute_tool_call(
-        "create_node",
-        JSON.stringify({
+      try {
+        const args = JSON.stringify({
           kind,
-          name: defaults.content ? String(defaults.content) : kind,
+          name: defaults.text_content ? String(defaults.text_content) : kind,
           x,
           y,
           ...defaults,
-        }),
-      );
-      onSceneChanged();
+        });
+        editor.execute_tool_call("create_node", args);
+        onSceneChanged();
+      } catch (err) {
+        console.error("placeElement failed:", err);
+        showError("Failed to create element");
+      }
     },
     [editorRef, onSceneChanged],
   );
