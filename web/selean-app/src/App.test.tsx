@@ -82,6 +82,8 @@ vi.mock("./hooks/useWorkspace", () => ({
 }));
 
 beforeEach(() => {
+  // Panel visibility is persisted; start every test from the defaults.
+  localStorage.clear();
   mockEditor = createMockEditor();
   mockStatus = "ready";
   mockError = null;
@@ -168,8 +170,15 @@ describe("App", () => {
 
   // --- Hidden file input for image upload ---
 
-  it("renders hidden file input for image upload", () => {
+  it("keeps the sidebar closed by default", () => {
     render(<App />);
+    expect(screen.getByTitle("Open sidebar")).toBeInTheDocument();
+    expect(screen.queryByTitle("Close sidebar")).not.toBeInTheDocument();
+  });
+
+  it("renders hidden file input for image upload once the sidebar is open", () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle("Open sidebar"));
     const input = document.querySelector(
       'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
     );
