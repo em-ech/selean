@@ -48,6 +48,8 @@ pub struct SdfBitmap {
     pub glyph_width_funits: u16,
     /// Glyph bounding box height in font units.
     pub glyph_height_funits: u16,
+    /// SDF pixels per font unit: the scale the outline was rasterized at.
+    pub scale: f32,
 }
 
 /// Generates an SDF bitmap for a single glyph.
@@ -139,8 +141,12 @@ pub fn generate_glyph_sdf(
         bearing_y,
         glyph_width_funits: glyph_w_funits,
         glyph_height_funits: glyph_h_funits,
+        scale,
     })
 }
+
+/// Coverage this close to 0 or 1 is treated as fully outside or inside.
+const COVERAGE_EPSILON: f32 = 1.0 / 255.0;
 
 /// Converts a coverage bitmap to an SDF bitmap using the EDT algorithm.
 ///
@@ -172,16 +178,20 @@ fn coverage_to_sdf(coverage: &[f32], width: usize, height: usize, spread: u32) -
             outer[i] = 0.0;
         }
 
-        // Sub-pixel refinement at edges.
-        if a > 0.0 && a < 1.0 {
-            // Approximate distance from coverage: d ≈ 0.5 - a
+        // Sub-pixel refinement at edges. The rasterizer accumulates coverage
+        // across the whole bitmap, so pixels after a curve carry a tiny
+        // floating-point residue; only genuinely partial pixels are edges.
+        if a > COVERAGE_EPSILON && a < 1.0 - COVERAGE_EPSILON {
+            // Approximate distance from the pixel centre to the edge: |0.5 - a|.
             let d = 0.5 - a;
             if d > 0.0 {
-                outer[i] = d * d;
-                inner[i] = 0.0;
-            } else {
+                // Mostly outside: the nearest inside point is `d` away.
                 inner[i] = d * d;
                 outer[i] = 0.0;
+            } else {
+                // Mostly inside: the nearest outside point is `|d|` away.
+                outer[i] = d * d;
+                inner[i] = 0.0;
             }
         }
     }
@@ -463,6 +473,70 @@ mod tests {
         );
         // Pixels deep outside (x=9) should be < 128.
         assert!(sdf[5 * 10 + 9] < 128);
+    }
+
+    #[test]
+    fn coverage_to_sdf_ignores_accumulation_residue() {
+        // A filled 4x4 block, with the tiny non-zero coverage the rasterizer
+        // leaves on every pixel after a curved segment.
+        let (w, h) = (16_usize, 16_usize);
+        let mut coverage = vec![1e-6_f32; w * h];
+        for y in 6..10 {
+            for x in 6..10 {
+                coverage[y * w + x] = 1.0;
+            }
+        }
+        let sdf = coverage_to_sdf(&coverage, w, h, 4);
+
+        assert!(sdf[7 * w + 7] > 128, "block centre should be inside");
+        for &(x, y) in &[(0, 0), (15, 0), (0, 15), (15, 15), (0, 8), (15, 8)] {
+            assert!(
+                sdf[y * w + x] < 100,
+                "pixel ({x}, {y}) far from the block should be outside, got {}",
+                sdf[y * w + x]
+            );
+        }
+    }
+
+    #[test]
+    fn coverage_to_sdf_partial_pixels_keep_their_side() {
+        // One row: inside | mostly inside | mostly outside | outside.
+        let coverage = [1.0_f32, 1.0, 1.0, 0.8, 0.2, 0.0, 0.0, 0.0];
+        let sdf = coverage_to_sdf(&coverage, coverage.len(), 1, 4);
+
+        assert!(sdf[3] > 128, "80% covered pixel is inside, got {}", sdf[3]);
+        assert!(sdf[4] < 128, "20% covered pixel is outside, got {}", sdf[4]);
+        // Values fall monotonically from inside to outside.
+        for pair in sdf.windows(2) {
+            assert!(pair[0] >= pair[1], "not monotonic: {sdf:?}");
+        }
+    }
+
+    #[test]
+    fn curved_glyph_sdf_is_outside_along_the_bitmap_border() {
+        let font = FontData::default_font().unwrap_or_else(|_| unreachable!());
+        let face = font.face().unwrap_or_else(|_| unreachable!());
+        let params = SdfParams::default();
+
+        for ch in "eaodgnsuOQS8&@".chars() {
+            let glyph_id = face.glyph_index(ch).unwrap_or_else(|| unreachable!());
+            let sdf =
+                generate_glyph_sdf(&face, glyph_id, &params).unwrap_or_else(|| unreachable!());
+            let (w, h) = (sdf.width as usize, sdf.height as usize);
+
+            for y in 0..h {
+                for x in 0..w {
+                    let on_border = x == 0 || y == 0 || x == w - 1 || y == h - 1;
+                    if on_border {
+                        assert!(
+                            sdf.data[y * w + x] < 128,
+                            "'{ch}': border pixel ({x}, {y}) is inside ({})",
+                            sdf.data[y * w + x]
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

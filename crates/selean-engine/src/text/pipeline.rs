@@ -689,6 +689,7 @@ mod tests {
                 bearing_y: 40.0,
                 glyph_width_funits: 600,
                 glyph_height_funits: 800,
+                sdf_scale: 0.045,
             },
         );
 
@@ -765,6 +766,7 @@ mod tests {
                 bearing_y: 36.0,
                 glyph_width_funits: 600,
                 glyph_height_funits: 800,
+                sdf_scale: 0.045,
             },
         );
 
@@ -837,6 +839,7 @@ mod tests {
                 bearing_y: 36.0,
                 glyph_width_funits: 600,
                 glyph_height_funits: 800,
+                sdf_scale: 0.045,
             },
         );
 
