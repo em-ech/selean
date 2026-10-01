@@ -3,7 +3,7 @@ import { LoginPage } from "./LoginPage";
 import { colors } from "../theme";
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isGuest, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -13,7 +13,9 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAuthenticated) {
+  // Guests are let through: the server only reports guest mode when auth
+  // is disabled, and then none of its routes require a token.
+  if (!isAuthenticated && !isGuest) {
     return <LoginPage />;
   }
 

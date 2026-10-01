@@ -10,6 +10,7 @@ vi.mock("./api", () => ({
   signup: vi.fn(),
   refreshTokens: vi.fn(),
   logout: vi.fn(),
+  fetchAuthEnabled: vi.fn(),
 }));
 
 // Mutable ref container so TypeScript control-flow analysis doesn't narrow to `null`.
@@ -59,6 +60,8 @@ describe("AuthContext", () => {
       },
     );
     vi.clearAllMocks();
+    // Auth is enabled unless a test says otherwise.
+    vi.mocked(authApi.fetchAuthEnabled).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -73,7 +76,36 @@ describe("AuthContext", () => {
       expect(ref.current?.isLoading).toBe(false);
     });
     expect(ref.current?.isAuthenticated).toBe(false);
+    expect(ref.current?.isGuest).toBe(false);
     expect(ref.current?.user).toBeNull();
+  });
+
+  it("runs as a guest when the server has auth disabled", async () => {
+    vi.mocked(authApi.fetchAuthEnabled).mockResolvedValue(false);
+
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
+
+    await waitFor(() => {
+      expect(ref.current?.isLoading).toBe(false);
+    });
+    expect(ref.current?.isGuest).toBe(true);
+    expect(ref.current?.isAuthenticated).toBe(false);
+    expect(ref.current?.user).toBeNull();
+  });
+
+  it("does not try to restore a session in guest mode", async () => {
+    storedItems["selean_refresh_token"] = "stored-refresh";
+    vi.mocked(authApi.fetchAuthEnabled).mockResolvedValue(false);
+
+    const ref: AuthStateRef = { current: null };
+    renderWithAuth(ref);
+
+    await waitFor(() => {
+      expect(ref.current?.isLoading).toBe(false);
+    });
+    expect(ref.current?.isGuest).toBe(true);
+    expect(authApi.refreshTokens).not.toHaveBeenCalled();
   });
 
   it("logs in and stores tokens", async () => {

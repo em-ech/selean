@@ -15,6 +15,8 @@ export interface AuthState {
   user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  /** True when the server runs with auth disabled: no account, no login. */
+  isGuest: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (
     email: string,
@@ -31,6 +33,7 @@ const REFRESH_TOKEN_KEY = "selean_refresh_token";
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isGuest, setIsGuest] = useState(false);
   const refreshTokenRef = useRef<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -86,8 +89,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => setRefreshFunction(null);
   }, [performRefresh]);
 
-  // Try to restore session on mount, including GitHub OAuth callback.
-  useEffect(() => {
+  // Try to restore session, including GitHub OAuth callback.
+  const restoreSession = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     const ghState = params.get("state");
@@ -115,6 +118,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
       }
     }
+  }, [handleAuthResponse, performRefresh]);
+
+  // On mount: run as a guest when the server has auth disabled, otherwise
+  // restore the previous session (or fall through to the login screen).
+  useEffect(() => {
+    let cancelled = false;
+    void authApi.fetchAuthEnabled().then((authEnabled) => {
+      if (cancelled) return;
+      if (authEnabled) {
+        restoreSession();
+      } else {
+        setIsGuest(true);
+        setIsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loginFn = useCallback(
@@ -155,11 +176,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       isLoading,
       isAuthenticated: user !== null,
+      isGuest,
       login: loginFn,
       signup: signupFn,
       logout: logoutFn,
     }),
-    [user, isLoading, loginFn, signupFn, logoutFn],
+    [user, isLoading, isGuest, loginFn, signupFn, logoutFn],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
