@@ -55,8 +55,7 @@ pub enum PersistenceError {
 pub fn save(graph: &SceneGraph) -> Result<String, PersistenceError> {
     let saved_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
 
     let doc = DocumentFormat {
         version: FORMAT_VERSION,
@@ -82,8 +81,7 @@ pub fn save(graph: &SceneGraph) -> Result<String, PersistenceError> {
 pub fn save_pretty(graph: &SceneGraph) -> Result<String, PersistenceError> {
     let saved_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
 
     let doc = DocumentFormat {
         version: FORMAT_VERSION,
@@ -124,8 +122,7 @@ pub fn load(json: &str) -> Result<SceneGraph, PersistenceError> {
 pub fn save_document(doc: &Document) -> Result<String, PersistenceError> {
     let saved_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
 
     let pages: Vec<PageData> = doc.pages().iter().map(PageData::from_page).collect();
 

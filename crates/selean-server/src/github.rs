@@ -209,6 +209,7 @@ fn require_github_config(state: &AppState) -> Result<(&str, &str), axum::respons
 }
 
 /// Makes a GET request to the GitHub API with authentication.
+#[allow(clippy::result_large_err)]
 async fn github_api_get<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
     url: &str,
@@ -245,6 +246,7 @@ async fn github_api_get<T: serde::de::DeserializeOwned>(
 }
 
 /// Makes a POST request to the GitHub API with authentication.
+#[allow(clippy::result_large_err)]
 async fn github_api_post<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
     url: &str,
@@ -283,6 +285,7 @@ async fn github_api_post<T: serde::de::DeserializeOwned>(
 }
 
 /// Makes a PATCH request to the GitHub API with authentication.
+#[allow(clippy::result_large_err)]
 async fn github_api_patch(
     client: &reqwest::Client,
     url: &str,
@@ -332,6 +335,7 @@ fn map_github_status(status: u16) -> StatusCode {
 }
 
 /// Fetches the GitHub token for the current user from the database.
+#[allow(clippy::result_large_err)]
 async fn get_user_github_token(
     pool: &sqlx::PgPool,
     user_id: Uuid,
@@ -461,6 +465,7 @@ async fn github_callback(
 }
 
 /// Exchanges an OAuth authorization code for an access token.
+#[allow(clippy::result_large_err)]
 async fn exchange_code_for_token(
     client: &reqwest::Client,
     client_id: &str,
@@ -506,6 +511,7 @@ async fn exchange_code_for_token(
 
 /// Finds an existing user by `github_id` or email, or creates a new one.
 /// Links the GitHub account and stores the token.
+#[allow(clippy::result_large_err)]
 async fn find_or_create_user(
     pool: &sqlx::PgPool,
     gh_user: &GitHubUser,
@@ -749,6 +755,7 @@ fn validate_push_request(req: &PushRequest) -> Result<(), axum::response::Respon
 }
 
 /// Executes the Git Data API push workflow.
+#[allow(clippy::result_large_err)]
 async fn execute_push(
     client: &reqwest::Client,
     token: &str,
@@ -862,6 +869,7 @@ async fn execute_push(
 }
 
 /// Gets an existing branch ref, or creates it from a base SHA.
+#[allow(clippy::result_large_err)]
 async fn get_or_create_branch(
     client: &reqwest::Client,
     token: &str,
@@ -959,6 +967,7 @@ async fn disconnect_github(
 }
 
 /// Extracts `CurrentUser` from extensions and reads the body bytes.
+#[allow(clippy::result_large_err)]
 async fn extract_user_and_body(
     request: axum::extract::Request,
 ) -> Result<(CurrentUser, axum::body::Bytes), axum::response::Response> {

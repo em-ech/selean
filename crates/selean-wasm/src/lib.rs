@@ -2640,7 +2640,7 @@ mod tests {
         state.set_active_page(&page1_id);
 
         // Apply remote op to page 2 while page 1 is active.
-        let desc_json = format!(r#"{{"type":"SetOpacity","node_id":"{id}","opacity":0.3}}"#,);
+        let desc_json = format!(r#"{{"type":"SetOpacity","node_id":"{id}","opacity":0.3}}"#);
         assert!(state.apply_remote_op(&page2_id, &desc_json));
 
         // Verify the change on page 2.

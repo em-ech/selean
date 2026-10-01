@@ -194,6 +194,7 @@ fn error_response(status: StatusCode, message: &str) -> axum::response::Response
 }
 
 /// Reads the "file" field from a multipart upload.
+#[allow(clippy::result_large_err)]
 async fn read_multipart_file(
     multipart: &mut Multipart,
 ) -> Result<axum::body::Bytes, axum::response::Response> {

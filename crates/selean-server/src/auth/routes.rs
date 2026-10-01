@@ -289,6 +289,7 @@ async fn me(
 }
 
 /// Helper: creates a DB session and returns token pair + user response.
+#[allow(clippy::result_large_err)]
 async fn create_session_and_tokens(
     pool: &sqlx::PgPool,
     jwt_config: &JwtConfig,

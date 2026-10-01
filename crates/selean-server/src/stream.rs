@@ -100,10 +100,7 @@ impl StreamParser {
         self.line_buffer.push_str(&text);
 
         let mut events = Vec::new();
-        loop {
-            let Some(newline_pos) = self.line_buffer.find('\n') else {
-                break;
-            };
+        while let Some(newline_pos) = self.line_buffer.find('\n') {
             let line = self.line_buffer[..newline_pos].to_string();
             self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
 
