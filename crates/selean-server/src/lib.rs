@@ -1,7 +1,8 @@
 //! HTTP server for the Selean design platform.
 //!
 //! Provides a REST API for:
-//! - `POST /api/chat`: Claude API proxy with tool definitions and SSE streaming
+//! - `POST /api/chat`: LLM proxy with tool definitions and SSE streaming (a local
+//!   Ollama server by default; see [`provider`])
 //! - `POST /api/tools`: Execute tool calls against a scene
 //! - `GET /api/tools`: List available LLM tools
 //!

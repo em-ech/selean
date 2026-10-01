@@ -6,6 +6,9 @@
 
 pub mod anthropic;
 pub mod anthropic_stream;
+pub mod openai_compatible;
+pub mod openai_stream;
+pub mod settings;
 pub mod sse;
 
 use crate::chat::{ChatError, ChatEvent, ChatMessage};
@@ -43,11 +46,34 @@ pub trait ChatProvider: Sync {
 
     /// Creates a parser for this provider's streaming response format.
     fn stream_parser(&self) -> Box<dyn EventParser>;
+
+    /// Turns a failed request into a message that tells the user how to fix
+    /// it, when the provider recognises the failure. `None` leaves the
+    /// generic error in place.
+    fn explain_failure(&self, state: &AppState, failure: &Failure) -> Option<String>;
+}
+
+/// A failed provider request, as passed to [`ChatProvider::explain_failure`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failure {
+    /// No connection could be made to the provider.
+    Unreachable,
+    /// The provider answered with an error status.
+    Status {
+        /// HTTP status code.
+        status: u16,
+        /// Response body.
+        body: String,
+    },
 }
 
 /// Which LLM provider serves the AI chat.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Provider {
+    /// Any server that implements the chat completions API, by default a
+    /// local Ollama server.
+    #[default]
+    OpenAiCompatible,
     /// The Claude API.
     Anthropic,
 }
@@ -56,6 +82,7 @@ impl Provider {
     /// Returns the implementation of this provider.
     pub fn client(self) -> &'static dyn ChatProvider {
         match self {
+            Self::OpenAiCompatible => &openai_compatible::OpenAiCompatible,
             Self::Anthropic => &anthropic::Anthropic,
         }
     }

@@ -8,6 +8,7 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use crate::provider::Failure;
 use crate::provider::sse::EventParser;
 use crate::state::AppState;
 
@@ -102,24 +103,14 @@ pub async fn send_chat_request(
     request: &ChatRequest,
 ) -> Result<Vec<ChatEvent>, ChatError> {
     let provider = state.llm_provider.client();
-    let response = provider
-        .request(state, &system_prompt(request), &request.messages, false)?
-        .send()
-        .await
-        .map_err(|e| ChatError::HttpError(e.to_string()))?;
+    let http_request =
+        provider.request(state, &system_prompt(request), &request.messages, false)?;
 
-    let status = response.status();
+    let response = send_to_provider(state, http_request).await?;
     let body = response
         .text()
         .await
         .map_err(|e| ChatError::HttpError(e.to_string()))?;
-    if !status.is_success() {
-        return Err(ChatError::ApiError {
-            status: status.as_u16(),
-            body,
-        });
-    }
-
     provider.parse_response(&body)
 }
 
@@ -128,8 +119,8 @@ pub async fn send_chat_request(
 ///
 /// Spawns a background tokio task that reads the byte stream, parses it with
 /// the provider's [`EventParser`], and forwards the events through an `mpsc`
-/// channel. If the provider is not configured, the receiver yields a single
-/// error event and no request is made.
+/// channel. Any failure, including a provider that is not configured or not
+/// reachable, arrives as a single [`ChatEvent::Error`].
 pub fn send_chat_request_streaming(
     state: &AppState,
     request: &ChatRequest,
@@ -139,88 +130,106 @@ pub fn send_chat_request_streaming(
 
     match provider.request(state, &system_prompt(request), &request.messages, true) {
         Ok(http_request) => {
-            tokio::spawn(forward_stream(http_request, provider.stream_parser(), tx));
+            let state = state.clone();
+            tokio::spawn(async move {
+                let mut parser = provider.stream_parser();
+                if let Err(e) = forward_stream(&state, http_request, parser.as_mut(), &tx).await {
+                    let _ = tx.send(error_event(&e)).await;
+                }
+            });
         }
         Err(e) => {
             // The channel was just created with spare capacity, so this cannot fail.
-            let _ = tx.try_send(ChatEvent::Error {
-                message: e.to_string(),
-            });
+            let _ = tx.try_send(error_event(&e));
         }
     }
 
     rx
 }
 
-/// Sends the request and forwards the parsed response stream to `tx`. Any
-/// failure is forwarded as a single [`ChatEvent::Error`].
-async fn forward_stream(
+fn error_event(error: &ChatError) -> ChatEvent {
+    ChatEvent::Error {
+        message: error.to_string(),
+    }
+}
+
+/// Sends the request and returns the response if the provider accepted it.
+///
+/// A failure the provider can explain (server not running, model missing,
+/// key rejected) becomes [`ChatError::Provider`] with the fix in the message.
+async fn send_to_provider(
+    state: &AppState,
     http_request: reqwest::RequestBuilder,
-    mut parser: Box<dyn EventParser>,
-    tx: tokio::sync::mpsc::Sender<ChatEvent>,
-) {
-    if let Err(e) = pump_stream(http_request, parser.as_mut(), &tx).await {
-        let _ = tx
-            .send(ChatEvent::Error {
-                message: e.to_string(),
-            })
-            .await;
-    }
-}
+) -> Result<reqwest::Response, ChatError> {
+    let provider = state.llm_provider.client();
 
-/// Outcome of forwarding events to the client.
-enum Forwarded {
-    /// The client is still listening.
-    Delivered,
-    /// The client went away; stop reading the provider's stream.
-    ClientGone,
-}
-
-async fn forward_events(
-    events: Vec<ChatEvent>,
-    tx: &tokio::sync::mpsc::Sender<ChatEvent>,
-) -> Forwarded {
-    for event in events {
-        if tx.send(event).await.is_err() {
-            return Forwarded::ClientGone;
+    let response = match http_request.send().await {
+        Ok(response) => response,
+        Err(e) => {
+            let explained = e
+                .is_connect()
+                .then(|| provider.explain_failure(state, &Failure::Unreachable))
+                .flatten();
+            return Err(
+                explained.map_or_else(|| ChatError::HttpError(e.to_string()), ChatError::Provider)
+            );
         }
+    };
+
+    if response.status().is_success() {
+        return Ok(response);
     }
-    Forwarded::Delivered
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+    let failure = Failure::Status {
+        status,
+        body: body.clone(),
+    };
+    Err(provider
+        .explain_failure(state, &failure)
+        .map_or(ChatError::ApiError { status, body }, ChatError::Provider))
 }
 
-async fn pump_stream(
+/// Sends the request and forwards the parsed response stream to `tx`.
+/// Returns early, without error, if the client stops listening.
+async fn forward_stream(
+    state: &AppState,
     http_request: reqwest::RequestBuilder,
     parser: &mut dyn EventParser,
     tx: &tokio::sync::mpsc::Sender<ChatEvent>,
 ) -> Result<(), ChatError> {
-    let response = http_request
-        .send()
-        .await
-        .map_err(|e| ChatError::HttpError(e.to_string()))?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let body = response.text().await.unwrap_or_default();
-        return Err(ChatError::ApiError { status, body });
-    }
+    let response = send_to_provider(state, http_request).await?;
 
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| ChatError::StreamError(e.to_string()))?;
-        if let Forwarded::ClientGone = forward_events(parser.feed(&chunk), tx).await {
+        for event in parser.feed(&chunk) {
+            if tx.send(event).await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+    for event in parser.finish() {
+        if tx.send(event).await.is_err() {
             return Ok(());
         }
     }
-    forward_events(parser.finish(), tx).await;
     Ok(())
 }
 
 /// Errors from chat operations.
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
-    /// The server has no `ANTHROPIC_API_KEY`, so AI chat is disabled.
-    #[error("AI chat is disabled: ANTHROPIC_API_KEY is not set on the server")]
+    /// Anthropic is selected but the server has no `ANTHROPIC_API_KEY`.
+    #[error(
+        "AI chat is disabled: LLM_PROVIDER=anthropic needs ANTHROPIC_API_KEY, which is not set \
+         on the server"
+    )]
     MissingApiKey,
+    /// The provider could not serve the request; the message tells the user
+    /// what happened and, where known, how to fix it.
+    #[error("{0}")]
+    Provider(String),
     /// HTTP request failed.
     #[error("HTTP error: {0}")]
     HttpError(String),
@@ -243,7 +252,249 @@ pub enum ChatError {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::http::{HeaderMap, StatusCode, header};
+    use serde_json::{Value, json};
+
     use super::*;
+
+    /// What the stand-in model server saw in the last request.
+    #[derive(Clone, Default)]
+    struct Received {
+        authorization: Arc<Mutex<Option<String>>>,
+        body: Arc<Mutex<Value>>,
+    }
+
+    /// Starts a local stand-in for an OpenAI-compatible server that answers
+    /// `POST /v1/chat/completions` with the given status and body, and returns
+    /// app state pointed at it with no API key.
+    async fn keyless_state_with_model_server(
+        status: StatusCode,
+        content_type: &'static str,
+        response_body: &'static str,
+    ) -> (AppState, Received) {
+        let received = Received::default();
+        let recorder = received.clone();
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            axum::routing::post(
+                move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| async move {
+                    *recorder.authorization.lock().expect("lock") = headers
+                        .get(header::AUTHORIZATION)
+                        .map(|value| value.to_str().unwrap_or_default().to_string());
+                    *recorder.body.lock().expect("lock") = body;
+                    (
+                        status,
+                        [(header::CONTENT_TYPE, content_type)],
+                        response_body,
+                    )
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let address = listener.local_addr().expect("local address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let mut state = AppState::new_test();
+        state.llm_base_url = Some(Arc::from(format!("http://{address}/v1")));
+        (state, received)
+    }
+
+    /// App state pointed at a local port where nothing is listening.
+    async fn keyless_state_with_no_model_server() -> AppState {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let address = listener.local_addr().expect("local address");
+        drop(listener);
+
+        let mut state = AppState::new_test();
+        state.llm_base_url = Some(Arc::from(format!("http://{address}/v1")));
+        state
+    }
+
+    async fn collect(mut rx: tokio::sync::mpsc::Receiver<ChatEvent>) -> Vec<ChatEvent> {
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
+    }
+
+    const TOOL_CALL_STREAM: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"On it.\"}}]}\n\n\
+data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"set_fill\",\"arguments\":\"{\\\"r\\\":\"}}]}}]}\n\n\
+data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1.0}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n";
+
+    const MODEL_NOT_FOUND: &str = r#"{"error":{"message":"model \"qwen2.5:7b\" not found, try pulling it first","type":"api_error","param":null,"code":null}}"#;
+
+    #[tokio::test]
+    async fn keyless_streaming_chat_reaches_the_server_and_yields_client_events() {
+        let (state, received) =
+            keyless_state_with_model_server(StatusCode::OK, "text/event-stream", TOOL_CALL_STREAM)
+                .await;
+
+        let events = collect(send_chat_request_streaming(&state, &hello_request())).await;
+
+        assert_eq!(events.len(), 3, "got: {events:?}");
+        assert!(matches!(&events[0], ChatEvent::Text { text } if text == "On it."));
+        match &events[1] {
+            ChatEvent::ToolUse { id, name, input } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "set_fill");
+                assert_eq!(input, &json!({"r": 1.0}));
+            }
+            other => panic!("expected ToolUse, got {other:?}"),
+        }
+        assert!(matches!(&events[2], ChatEvent::Done { stop_reason } if stop_reason == "tool_use"));
+
+        assert!(received.authorization.lock().expect("lock").is_none());
+        let body = received.body.lock().expect("lock");
+        assert_eq!(body["model"], "qwen2.5:7b");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(
+            body["messages"][1],
+            json!({"role": "user", "content": "hello"})
+        );
+        assert_eq!(body["tools"][0]["type"], "function");
+    }
+
+    #[tokio::test]
+    async fn keyless_non_streaming_chat_returns_client_events() {
+        let (state, received) = keyless_state_with_model_server(
+            StatusCode::OK,
+            "application/json",
+            r#"{"choices":[{"message":{"role":"assistant","content":"Hi there."},"finish_reason":"stop"}]}"#,
+        )
+        .await;
+
+        let events = send_chat_request(&state, &hello_request())
+            .await
+            .expect("chat succeeds without a key");
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], ChatEvent::Text { text } if text == "Hi there."));
+        assert!(matches!(&events[1], ChatEvent::Done { stop_reason } if stop_reason == "end_turn"));
+        assert!(received.authorization.lock().expect("lock").is_none());
+        assert!(received.body.lock().expect("lock").get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn api_key_is_sent_as_a_bearer_token_when_set() {
+        let (mut state, received) = keyless_state_with_model_server(
+            StatusCode::OK,
+            "application/json",
+            r#"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#,
+        )
+        .await;
+        state.api_key = Some(Arc::from("test-key"));
+
+        send_chat_request(&state, &hello_request())
+            .await
+            .expect("chat succeeds");
+
+        assert_eq!(
+            received.authorization.lock().expect("lock").as_deref(),
+            Some("Bearer test-key")
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_with_no_model_server_yields_one_actionable_error() {
+        let state = keyless_state_with_no_model_server().await;
+        let base_url = state.llm_base_url.clone().expect("base URL is set");
+
+        let events = collect(send_chat_request_streaming(&state, &hello_request())).await;
+
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        match &events[0] {
+            ChatEvent::Error { message } => {
+                assert!(message.contains("could not reach"), "got: {message}");
+                assert!(message.contains(&*base_url), "got: {message}");
+                assert!(message.contains("LLM_BASE_URL"), "got: {message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_streaming_with_no_model_server_is_an_actionable_error() {
+        let state = keyless_state_with_no_model_server().await;
+
+        let err = send_chat_request(&state, &hello_request())
+            .await
+            .expect_err("nothing is listening");
+
+        match err {
+            ChatError::Provider(message) => {
+                assert!(message.contains("could not reach"), "got: {message}");
+            }
+            other => panic!("expected a provider error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_with_a_model_that_is_not_downloaded_yields_one_actionable_error() {
+        let (state, _) = keyless_state_with_model_server(
+            StatusCode::NOT_FOUND,
+            "application/json",
+            MODEL_NOT_FOUND,
+        )
+        .await;
+
+        let events = collect(send_chat_request_streaming(&state, &hello_request())).await;
+
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        match &events[0] {
+            ChatEvent::Error { message } => {
+                assert!(message.contains("qwen2.5:7b"), "got: {message}");
+                assert!(message.contains("was not found"), "got: {message}");
+                assert!(message.contains("LLM_MODEL"), "got: {message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_streaming_with_a_model_that_is_not_downloaded_is_an_actionable_error() {
+        let (state, _) = keyless_state_with_model_server(
+            StatusCode::NOT_FOUND,
+            "application/json",
+            MODEL_NOT_FOUND,
+        )
+        .await;
+
+        let err = send_chat_request(&state, &hello_request())
+            .await
+            .expect_err("the model is missing");
+        assert!(matches!(err, ChatError::Provider(message) if message.contains("LLM_MODEL")));
+    }
+
+    #[tokio::test]
+    async fn unexplained_server_error_keeps_status_and_body() {
+        let (state, _) = keyless_state_with_model_server(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "text/plain",
+            "boom",
+        )
+        .await;
+
+        let err = send_chat_request(&state, &hello_request())
+            .await
+            .expect_err("server error");
+        assert!(matches!(err, ChatError::ApiError { status: 500, body } if body == "boom"));
+
+        let events = collect(send_chat_request_streaming(&state, &hello_request())).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], ChatEvent::Error { message }
+            if message == "API error (status 500): boom"));
+    }
 
     fn hello_request() -> ChatRequest {
         ChatRequest {
@@ -256,8 +507,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streaming_without_api_key_yields_single_error_event() {
-        let mut state = AppState::new_test();
+    async fn anthropic_streaming_without_api_key_yields_single_error_event() {
+        let mut state = AppState::new_test_anthropic();
         state.api_key = None;
 
         let mut rx = send_chat_request_streaming(&state, &hello_request());
@@ -272,8 +523,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_streaming_without_api_key_errors() {
-        let mut state = AppState::new_test();
+    async fn anthropic_non_streaming_without_api_key_errors() {
+        let mut state = AppState::new_test_anthropic();
         state.api_key = None;
 
         let err = send_chat_request(&state, &hello_request())

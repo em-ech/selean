@@ -172,7 +172,8 @@ async fn list_tools() -> Json<Vec<selean_llm::ToolDefinition>> {
     Json(selean_llm::all_tools())
 }
 
-/// Handles chat requests. Sends to Claude API and streams response as SSE.
+/// Handles chat requests. Sends to the configured LLM provider and streams
+/// the response as SSE.
 async fn chat_handler(
     State(state): State<AppState>,
     Json(request): Json<ChatRequest>,

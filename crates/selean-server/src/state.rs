@@ -6,18 +6,26 @@ use sqlx::PgPool;
 
 use crate::auth::jwt::JwtConfig;
 use crate::provider::Provider;
+use crate::provider::settings::{LlmSettings, UnknownProviderError};
+#[cfg(test)]
+use crate::provider::{anthropic, openai_compatible};
 use crate::storage::StorageBackend;
 
 /// Shared application state for the Axum server.
 #[derive(Clone)]
 pub struct AppState {
-    /// Claude API key. Read from `ANTHROPIC_API_KEY` env var. When `None`,
-    /// the server still runs and `/api/chat` reports that AI chat is disabled.
-    pub api_key: Option<Arc<str>>,
-    /// Claude model to use (e.g. `claude-sonnet-4-6`).
-    pub model: Arc<str>,
-    /// LLM provider that serves the AI chat.
+    /// LLM provider that serves the AI chat. Read from `LLM_PROVIDER`;
+    /// defaults to an OpenAI-compatible local Ollama server, which needs no key.
     pub llm_provider: Provider,
+    /// API root of the OpenAI-compatible server. Read from `LLM_BASE_URL`.
+    /// `None` for Anthropic.
+    pub llm_base_url: Option<Arc<str>>,
+    /// API key for the selected provider: `LLM_API_KEY` (optional) for an
+    /// OpenAI-compatible server, `ANTHROPIC_API_KEY` for Anthropic.
+    pub api_key: Option<Arc<str>>,
+    /// Model to use: `LLM_MODEL` for an OpenAI-compatible server,
+    /// `ANTHROPIC_MODEL` for Anthropic.
+    pub model: Arc<str>,
     /// HTTP client for LLM provider requests.
     pub http_client: reqwest::Client,
     /// Figma personal access token. Read from `FIGMA_ACCESS_TOKEN` env var.
@@ -43,15 +51,10 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns an error if the configured storage backend cannot be initialized.
+    /// Returns an error if `LLM_PROVIDER` names an unknown provider or the
+    /// configured storage backend cannot be initialized.
     pub fn from_env() -> Result<Self, AppStateError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(Arc::from);
-
-        let model =
-            std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
+        let llm = LlmSettings::from_env()?;
 
         let figma_access_token = std::env::var("FIGMA_ACCESS_TOKEN")
             .ok()
@@ -76,9 +79,10 @@ impl AppState {
             };
 
         Ok(Self {
-            api_key,
-            model: Arc::from(model),
-            llm_provider: Provider::Anthropic,
+            llm_provider: llm.provider,
+            llm_base_url: llm.base_url,
+            api_key: llm.api_key,
+            model: llm.model,
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .build()
@@ -115,13 +119,15 @@ impl AppState {
         self.db.as_ref().ok_or(AppStateError::NoDatabaseConfigured)
     }
 
-    /// Creates app state with explicit values (for testing).
+    /// Creates app state for testing, with the default chat provider: a
+    /// keyless OpenAI-compatible server at the local Ollama address.
     #[cfg(test)]
     pub fn new_test() -> Self {
         Self {
-            api_key: Some(Arc::from("test-key")),
-            model: Arc::from("claude-sonnet-4-6"),
-            llm_provider: Provider::Anthropic,
+            llm_provider: Provider::OpenAiCompatible,
+            llm_base_url: Some(Arc::from(openai_compatible::DEFAULT_BASE_URL)),
+            api_key: None,
+            model: Arc::from(openai_compatible::DEFAULT_MODEL),
             http_client: reqwest::Client::new(),
             figma_access_token: None,
             indesign_server_url: None,
@@ -134,6 +140,18 @@ impl AppState {
             github_client_secret: None,
         }
     }
+
+    /// Creates app state for testing with Anthropic selected and a key set.
+    #[cfg(test)]
+    pub fn new_test_anthropic() -> Self {
+        Self {
+            llm_provider: Provider::Anthropic,
+            llm_base_url: None,
+            api_key: Some(Arc::from("test-key")),
+            model: Arc::from(anthropic::DEFAULT_MODEL),
+            ..Self::new_test()
+        }
+    }
 }
 
 /// Errors from app state initialization.
@@ -142,6 +160,9 @@ pub enum AppStateError {
     /// Database pool was requested but `DATABASE_URL` was not configured.
     #[error("DATABASE_URL not configured; database features are unavailable")]
     NoDatabaseConfigured,
+    /// `LLM_PROVIDER` names an unknown provider.
+    #[error(transparent)]
+    UnknownProvider(#[from] UnknownProviderError),
     /// Storage backend initialization failed.
     #[error("storage initialization failed: {0}")]
     StorageInit(String),
@@ -159,8 +180,22 @@ mod tests {
     }
 
     #[test]
-    fn test_state_defaults() {
+    fn test_state_defaults_to_keyless_local_provider() {
         let state = AppState::new_test();
+        assert_eq!(state.llm_provider, Provider::OpenAiCompatible);
+        assert_eq!(
+            state.llm_base_url.as_deref(),
+            Some("http://localhost:11434/v1")
+        );
+        assert!(state.api_key.is_none());
+        assert_eq!(&*state.model, "qwen2.5:7b");
+    }
+
+    #[test]
+    fn test_state_anthropic_has_key_and_claude_model() {
+        let state = AppState::new_test_anthropic();
+        assert_eq!(state.llm_provider, Provider::Anthropic);
+        assert!(state.llm_base_url.is_none());
         assert_eq!(state.api_key.as_deref(), Some("test-key"));
         assert_eq!(&*state.model, "claude-sonnet-4-6");
     }

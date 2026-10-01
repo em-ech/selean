@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::http::{HeaderValue, Method, header};
+use selean_server::provider::Provider;
+use selean_server::provider::settings::ANTHROPIC_API_KEY_VAR;
 use selean_server::{
     AppState, AuthConfig, CollabState, create_router_with_options, load_snapshots_into,
     start_snapshot_task,
@@ -57,13 +59,39 @@ fn init_state() -> AppState {
         }
     };
 
-    if state.api_key.is_none() {
-        tracing::warn!(
-            "ANTHROPIC_API_KEY not set; AI chat is disabled (set it in .env or the environment)"
-        );
-    }
+    log_chat_provider(&state);
 
     state
+}
+
+/// Logs which chat provider is in use, and warns about settings that leave
+/// chat disabled or that are being ignored. Never logs a key.
+fn log_chat_provider(state: &AppState) {
+    match state.llm_provider {
+        Provider::OpenAiCompatible => {
+            tracing::info!(
+                base_url = state.llm_base_url.as_deref().unwrap_or_default(),
+                model = &*state.model,
+                "AI chat uses an OpenAI-compatible server"
+            );
+            let has_anthropic_key =
+                std::env::var_os(ANTHROPIC_API_KEY_VAR).is_some_and(|value| !value.is_empty());
+            if has_anthropic_key {
+                tracing::warn!(
+                    "ANTHROPIC_API_KEY is set but not used: set LLM_PROVIDER=anthropic to chat \
+                     with Claude"
+                );
+            }
+        }
+        Provider::Anthropic => {
+            tracing::info!(model = &*state.model, "AI chat uses the Claude API");
+            if state.api_key.is_none() {
+                tracing::warn!(
+                    "LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set; AI chat is disabled"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::main]

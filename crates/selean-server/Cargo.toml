@@ -1,7 +1,7 @@
 [package]
 name = "selean-server"
 version = "0.1.0"
-description = "HTTP server for the Selean design platform (Claude API proxy, file upload, SSE)"
+description = "HTTP server for the Selean design platform (LLM chat proxy, file upload, SSE)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

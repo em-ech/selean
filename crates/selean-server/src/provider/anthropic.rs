@@ -9,12 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use super::anthropic_stream::StreamParser;
 use super::sse::EventParser;
-use super::{ChatProvider, MAX_OUTPUT_TOKENS};
+use super::{ChatProvider, Failure, MAX_OUTPUT_TOKENS};
 use crate::chat::{ChatError, ChatEvent, ChatMessage};
 use crate::state::AppState;
 
 const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
+
+/// Claude model used when `ANTHROPIC_MODEL` is not set.
+pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 
 /// The Claude API provider.
 pub struct Anthropic;
@@ -45,6 +48,11 @@ impl ChatProvider for Anthropic {
 
     fn stream_parser(&self) -> Box<dyn EventParser> {
         Box::new(StreamParser::new())
+    }
+
+    /// Claude API errors are passed through as they are.
+    fn explain_failure(&self, _state: &AppState, _failure: &Failure) -> Option<String> {
+        None
     }
 }
 
@@ -164,7 +172,7 @@ mod tests {
 
     #[test]
     fn request_targets_the_messages_api_with_key_and_version_headers() {
-        let state = AppState::new_test();
+        let state = AppState::new_test_anthropic();
         let request = Anthropic
             .request(&state, "system", &[user_message("hi")], false)
             .expect("key is configured")
