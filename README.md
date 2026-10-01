@@ -20,9 +20,9 @@ A design tool that combines the capabilities of Canva, Figma, and Adobe InDesign
 |                           |      |     (Axum)        |
 |  SeleanEditor (WASM)      |      |                   |
 |  EditorState (native)     |      |  POST /api/chat   |
-|  Code generation          |      |  POST /api/import |
-+-----------+---------------+      |  POST /api/export |
-            |                      |  WS   /ws/collab  |
+|  Code generation          |      |  /api/import/*    |
++-----------+---------------+      |  /api/export/*    |
+            |                      |  WS   /api/ws     |
             | CommandDescriptor    |  /api/github/*    |
             v       (JSON)         |  /api/auth/*      |
 +-----------+---------------+      +--------+----------+
@@ -43,6 +43,8 @@ A design tool that combines the capabilities of Canva, Figma, and Adobe InDesign
     +----------------+
 ```
 
+Server routes: `POST /api/chat` (SSE), `POST /api/import/{pptx,idml,indd,figma}`, `POST /api/export/{pptx,idml,figma}`, WebSocket `/api/ws` (collaboration), `GET /api/auth/status`, plus `/api/auth/*`, `/api/github/*`, `/api/documents`, `/api/workspaces`, `/api/assets` and `/api/fonts/{family}`.
+
 ### Mutation Pipeline
 
 All mutation sources converge on a single wire format:
@@ -54,7 +56,7 @@ All mutation sources converge on a single wire format:
 [Collab ops]      --/
 ```
 
-`CommandDescriptor` is a `#[serde(tag = "type")]` enum with 29 variants mirroring every `Command` type. Adding a new command requires: (1) engine `Command` impl, (2) descriptor variant. Nothing else changes in LLM/import/export/collab.
+`CommandDescriptor` is a `#[serde(tag = "type")]` enum with 31 variants mirroring every `Command` type. Adding a new command requires: (1) engine `Command` impl, (2) descriptor variant. Nothing else changes in LLM/import/export/collab.
 
 ### Render Pipeline
 
@@ -176,7 +178,7 @@ web/
                        useChatEngine, useResizablePanel, useTheme
       auth/            AuthContext, LoginPage, ProtectedRoute, api
       collab/          WsClient, OperationBuffer, CollabContext
-      wasm/            TypeScript type stubs for WASM bindings
+      wasm/            TypeScript types for the WASM bindings; pkg/ is wasm-pack output (generated, not checked in)
       types/           Shared types (ToolType)
       utils/           Camera transforms, color conversions, clipboard
       theme.ts         Shared design tokens (light/dark palettes, spacing, radii, shadows)
@@ -189,59 +191,101 @@ figma-plugin/          Figma plugin for importing Selean interchange format
 ### Prerequisites
 
 - Rust 1.85+ (edition 2024)
-- Node.js 18+
-- PostgreSQL 16 (optional, for SaaS features)
-- GPU with Vulkan, Metal, DX12, or WebGPU support
-- Chrome 113+ or Edge 113+ (WebGPU required)
+- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) (`brew install wasm-pack` or `cargo install wasm-pack`); it adds the `wasm32-unknown-unknown` Rust target on first use
+- Node.js 20+
+- Chrome 113+ or Edge 113+ (WebGPU is required; the editor does not start without it)
+- An Anthropic API key (optional, only for AI chat)
+- PostgreSQL 16 (optional, only for accounts and workspaces)
 
-### Development
+### Run locally
+
+Three steps: build the WASM engine, start the API server, start the frontend.
 
 ```bash
-# Backend
-cargo build --workspace
-cargo test --workspace
-
-# Frontend
+# 1. Build the WASM engine into web/selean-app/src/wasm/pkg/.
+#    Re-run this after changing any Rust crate.
 cd web/selean-app
 npm install
-npm run dev
+npm run wasm:build
 
-# Lint
-cargo fmt --all
-RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
+# 2. In a second terminal, from the repository root: start the API server
+#    on http://localhost:8080.
+cp .env.example .env        # optional: set ANTHROPIC_API_KEY for AI chat
+cargo run -p selean-server
+
+# 3. Back in web/selean-app: start the frontend on http://localhost:3000.
+npm run dev
 ```
+
+Open http://localhost:3000 in Chrome or Edge. The Vite dev server proxies `/api` to the server on port 8080.
+
+- `npm run dev` and `npm run build` stop with a message if the WASM bundle has not been built.
+- The server reads `.env` from the directory it is started in (or a parent directory). Variables already set in the shell take precedence over `.env`.
+- Without `ANTHROPIC_API_KEY` the server still starts and everything except AI chat works; the chat panel shows an error saying chat is disabled.
+- Documents auto-save to the browser's `localStorage` every 5 seconds and are restored on reload.
+
+To run from a single process instead, build the frontend and let the server serve it:
+
+```bash
+cd web/selean-app && npm run wasm:build && npm run build
+cd ../.. && cargo run -p selean-server      # serves web/selean-app/dist on http://localhost:8080
+```
+
+### Guest mode and auth mode
+
+The server decides, and the frontend asks it through `GET /api/auth/status`.
+
+- **Guest mode (default).** With neither `JWT_SECRET` nor `SELEAN_AUTH_SECRET` set, the server accepts every request and the app opens straight into the editor with no login. There are no accounts or workspaces in this mode. If the server is not running, the app cannot tell that auth is off and shows the login screen.
+- **Auth mode.** Set `JWT_SECRET` and `DATABASE_URL` (PostgreSQL; migrations run at startup). The app shows the login screen, with signup and login backed by the database. `JWT_SECRET` without a database enables the login screen, but signup and login return 503.
+- `SELEAN_AUTH_SECRET` is a shared bearer token for API clients. The web app cannot send it, so it is not a way to protect the browser app.
 
 ### Docker
 
 ```bash
-cp .env.example .env
-# Edit .env with your configuration
-docker compose up
+cp .env.example .env        # set ANTHROPIC_API_KEY for AI chat
+docker compose up --build
 ```
+
+This builds the server, the WASM engine and the frontend into one image and starts it with PostgreSQL and MinIO on http://localhost:8080. Compose sets `DATABASE_URL` and a default `JWT_SECRET`, so this path runs in auth mode: sign up on the login screen first. Change `JWT_SECRET` for anything other than local use. Assets are stored on the local volume unless the `S3_*` variables are set.
 
 ### Environment Variables
 
-| Variable               | Required               | Description                     |
-| ---------------------- | ---------------------- | ------------------------------- |
-| `DATABASE_URL`         | For SaaS features      | PostgreSQL connection string    |
-| `JWT_SECRET`           | For auth               | Secret for JWT signing          |
-| `ANTHROPIC_API_KEY`    | For AI chat            | Anthropic API key               |
-| `GITHUB_CLIENT_ID`     | For GitHub integration | GitHub OAuth App client ID      |
-| `GITHUB_CLIENT_SECRET` | For GitHub integration | GitHub OAuth App client secret  |
-| `S3_BUCKET`            | For cloud storage      | S3/R2/MinIO bucket name         |
-| `FIGMA_ACCESS_TOKEN`   | For Figma import       | Figma personal access token     |
-| `INDESIGN_SERVER_URL`  | For .indd import       | InDesign Server URL             |
-| `ALLOWED_ORIGINS`      | For CORS               | Comma-separated allowed origins |
+| Variable               | Required for                | Description                                                        |
+| ---------------------- | --------------------------- | ------------------------------------------------------------------ |
+| `ANTHROPIC_API_KEY`    | AI chat                     | Anthropic API key. Without it the server runs with chat disabled   |
+| `ANTHROPIC_MODEL`      | --                          | Claude model for chat (default `claude-sonnet-4-6`)                |
+| `JWT_SECRET`           | Auth mode                   | Secret for JWT signing; enables the login screen                   |
+| `DATABASE_URL`         | Auth mode, workspaces       | PostgreSQL connection string                                       |
+| `SELEAN_AUTH_SECRET`   | --                          | Shared bearer token for API clients (not usable from the web app)  |
+| `PORT`                 | --                          | Server port (default `8080`)                                       |
+| `STATIC_DIR`           | --                          | Built frontend to serve (default `web/selean-app/dist`)            |
+| `ALLOWED_ORIGINS`      | CORS                        | Comma-separated allowed origins (default `http://localhost:3000`)  |
+| `GITHUB_CLIENT_ID`     | GitHub integration          | GitHub OAuth App client ID                                         |
+| `GITHUB_CLIENT_SECRET` | GitHub integration          | GitHub OAuth App client secret                                     |
+| `S3_BUCKET`            | S3/R2/MinIO asset storage   | Bucket name; with `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
+| `FIGMA_ACCESS_TOKEN`   | Figma import                | Figma personal access token                                        |
+| `INDESIGN_SERVER_URL`  | .indd import                | URL of an Adobe InDesign Server; without it .indd import returns 501 |
 
 See [.env.example](.env.example) for the full list.
+
+### Development checks
+
+```bash
+cargo fmt --all
+RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
+cargo test --workspace
+cd web/selean-app && npx tsc --noEmit && npx vitest run
+```
+
+The TypeScript check and the Vitest suite do not need the WASM bundle.
 
 ## Testing
 
 ```bash
-# Rust (1832 tests across 11 crates)
+# Rust (1848 tests across 11 crates)
 cargo test --workspace
 
-# Frontend (474 tests via Vitest)
+# Frontend (461 tests via Vitest)
 cd web/selean-app && npx vitest run
 
 # Benchmarks (18 groups)

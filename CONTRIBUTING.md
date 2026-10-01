@@ -3,8 +3,10 @@
 ## Prerequisites
 
 - Rust 1.85+ (edition 2024)
-- Node.js 18+
-- PostgreSQL 16 (optional, for SaaS features)
+- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) (`brew install wasm-pack` or `cargo install wasm-pack`)
+- Node.js 20+
+- Chrome 113+ or Edge 113+ (WebGPU)
+- PostgreSQL 16 (optional, for accounts and workspaces)
 
 ## Development Setup
 
@@ -13,11 +15,19 @@
 cargo build --workspace
 cargo test --workspace
 
-# Frontend
+# Build the WASM engine (re-run after changing any Rust crate)
 cd web/selean-app
 npm install
+npm run wasm:build
+
+# API server on http://localhost:8080 (second terminal, from the repository root)
+cargo run -p selean-server
+
+# Frontend on http://localhost:3000 (in web/selean-app)
 npm run dev
 ```
+
+The server loads `.env` from the directory it is started in; `ANTHROPIC_API_KEY` is only needed for AI chat. With no `JWT_SECRET` the app runs in guest mode with no login. See the README for auth mode and Docker.
 
 ## Before Submitting a PR
 
@@ -27,14 +37,17 @@ All of these must pass (CI enforces them):
 cargo fmt --all
 RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
 cargo test --workspace
-cd web/selean-app && npx vitest run
+cargo audit
+cd web/selean-app && npx tsc --noEmit && npx vitest run && npm audit --omit=dev
 ```
+
+CI runs clippy with the latest stable toolchain, so run `rustup update stable` before concluding clippy is clean. Advisories that cannot be fixed by upgrading are listed, with the reason, in `.cargo/audit.toml`.
 
 ## Pull Request Process
 
 1. Fork the repository and create a branch from `main`
 2. Make your changes with tests
-3. Ensure CI passes (format, clippy, build, test, frontend tests)
+3. Ensure CI passes (format, clippy, build, test, security audit, frontend type-check, tests and audit, Docker build)
 4. Open a PR against `main`
 5. One approval required before merge
 
