@@ -11,7 +11,9 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use selean_common::types::NodeId;
-use selean_common::xml::{append_empty_tag, append_end_tag, append_start_tag, local_name};
+use selean_common::xml::{
+    append_empty_tag, append_end_tag, append_general_ref, append_start_tag, local_name,
+};
 use selean_engine::scene::{BoundingBox, Color, FontStyle, SceneNode, SceneNodeKind, TextAlign};
 
 use super::text::ParsedStory;
@@ -110,6 +112,11 @@ pub fn parse_page_items(
                     element_xml.push_str(&String::from_utf8_lossy(e.as_ref()));
                 }
             }
+            Ok(Event::GeneralRef(ref e)) => {
+                if in_element {
+                    append_general_ref(&mut element_xml, e);
+                }
+            }
             Ok(Event::Eof) => break,
             Err(e) => {
                 tracing::warn!("XML parse error in IDML shape import: {e}");
@@ -183,7 +190,7 @@ fn parse_single_element(
             }
             Ok(Event::Text(ref e)) => {
                 if in_fill_color || in_stroke_color {
-                    if let Ok(text) = e.unescape() {
+                    if let Ok(text) = e.decode() {
                         let trimmed = text.trim();
                         if let Some(c) = try_parse_color_value_list(trimmed) {
                             if in_fill_color {

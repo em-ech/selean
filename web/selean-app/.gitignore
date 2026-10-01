@@ -1,6 +1,4 @@
 node_modules/
 dist/
-src/wasm/pkg/*.js
-src/wasm/pkg/*.wasm
-src/wasm/pkg/*.ts
-!src/wasm/pkg/selean_wasm.d.ts
+# wasm-pack output (npm run wasm:build)
+src/wasm/pkg/

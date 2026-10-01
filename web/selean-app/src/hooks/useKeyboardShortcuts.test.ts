@@ -11,8 +11,8 @@ function createMockEditor() {
     execute_tool_call: vi.fn().mockReturnValue("{}"),
     get_node_json: vi.fn().mockReturnValue("null"),
     clear_selection: vi.fn(),
-    begin_command_group: vi.fn(),
-    end_command_group: vi.fn(),
+    begin_group: vi.fn(),
+    end_group: vi.fn(),
     align_nodes: vi.fn(),
     zoom_by: vi.fn(),
     zoom_to: vi.fn(),
@@ -131,7 +131,7 @@ describe("useKeyboardShortcuts", () => {
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
 
-    expect(mockEditor.begin_command_group).toHaveBeenCalled();
+    expect(mockEditor.begin_group).toHaveBeenCalledWith("Nudge");
     expect(mockEditor.execute_tool_call).toHaveBeenCalledWith(
       "set_bounds",
       JSON.stringify({
@@ -142,7 +142,7 @@ describe("useKeyboardShortcuts", () => {
         height: 50,
       }),
     );
-    expect(mockEditor.end_command_group).toHaveBeenCalled();
+    expect(mockEditor.end_group).toHaveBeenCalledTimes(1);
     expect(onSceneChanged).toHaveBeenCalled();
   });
 });

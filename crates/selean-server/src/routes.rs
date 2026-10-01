@@ -48,6 +48,7 @@ pub fn create_router_with_options(
         config: auth_config,
         jwt: state.jwt.clone(),
     };
+    let auth_enabled = auth_state.is_enabled();
 
     let collab_routes = Router::new()
         .route("/api/ws", get(ws_handler))
@@ -73,6 +74,10 @@ pub fn create_router_with_options(
     let json_routes = Router::new()
         .route("/api/health", get(health))
         .route("/api/health/ready", get(health_ready))
+        .route(
+            "/api/auth/status",
+            get(move || async move { auth_status(auth_enabled) }),
+        )
         .route("/api/tools", get(list_tools))
         .route("/api/chat", post(chat_handler))
         .route("/api/export/pptx", post(export_pptx_handler))
@@ -154,12 +159,21 @@ async fn health_ready(State(state): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, Json(checks)).into_response()
 }
 
+/// Reports whether the server requires authentication.
+///
+/// Public (under `/api/auth/`). The frontend uses it to skip the login
+/// screen and run as a guest when auth is disabled.
+fn auth_status(auth_enabled: bool) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "auth_enabled": auth_enabled }))
+}
+
 /// Lists all available LLM tools.
 async fn list_tools() -> Json<Vec<selean_llm::ToolDefinition>> {
     Json(selean_llm::all_tools())
 }
 
-/// Handles chat requests. Sends to Claude API and streams response as SSE.
+/// Handles chat requests. Sends to the configured LLM provider and streams
+/// the response as SSE.
 async fn chat_handler(
     State(state): State<AppState>,
     Json(request): Json<ChatRequest>,
@@ -181,6 +195,7 @@ fn error_response(status: StatusCode, message: &str) -> axum::response::Response
 }
 
 /// Reads the "file" field from a multipart upload.
+#[allow(clippy::result_large_err)]
 async fn read_multipart_file(
     multipart: &mut Multipart,
 ) -> Result<axum::body::Bytes, axum::response::Response> {
@@ -716,6 +731,46 @@ mod tests {
 
         // Should be 404, but importantly the route itself matches (not 405).
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    async fn auth_status_of(app: Router) -> serde_json::Value {
+        // No Authorization header: the endpoint must be public in every mode.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn auth_status_reports_disabled_without_secrets() {
+        let status = auth_status_of(create_router(test_state())).await;
+        assert_eq!(status, serde_json::json!({ "auth_enabled": false }));
+    }
+
+    #[tokio::test]
+    async fn auth_status_reports_enabled_with_legacy_secret() {
+        let auth = AuthConfig::with_secret("s3cret");
+        let app = create_router_with_options(test_state(), CollabState::new(), auth);
+        let status = auth_status_of(app).await;
+        assert_eq!(status, serde_json::json!({ "auth_enabled": true }));
+    }
+
+    #[tokio::test]
+    async fn auth_status_reports_enabled_with_jwt() {
+        let mut state = test_state();
+        state.jwt = Some(crate::auth::jwt::JwtConfig::new("test-secret"));
+        let status = auth_status_of(create_router(state)).await;
+        assert_eq!(status, serde_json::json!({ "auth_enabled": true }));
     }
 
     #[tokio::test]

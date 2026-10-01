@@ -554,6 +554,7 @@ fn bench_text_full_pipeline(c: &mut Criterion) {
                                         bearing_y: sdf.bearing_y,
                                         glyph_width_funits: sdf.glyph_width_funits,
                                         glyph_height_funits: sdf.glyph_height_funits,
+                                        sdf_scale: sdf.scale,
                                     },
                                 );
                             }
@@ -1283,6 +1284,7 @@ fn build_bench_cache(font: &FontData, runs: &[&ShapedRun]) -> GlyphCache {
                         bearing_y: sdf.bearing_y,
                         glyph_width_funits: sdf.glyph_width_funits,
                         glyph_height_funits: sdf.glyph_height_funits,
+                        sdf_scale: sdf.scale,
                     },
                 );
             }

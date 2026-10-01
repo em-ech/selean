@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::http::{HeaderValue, Method, header};
+use selean_server::provider::Provider;
+use selean_server::provider::settings::ANTHROPIC_API_KEY_VAR;
 use selean_server::{
     AppState, AuthConfig, CollabState, create_router_with_options, load_snapshots_into,
     start_snapshot_task,
@@ -36,8 +38,68 @@ fn build_cors_layer() -> CorsLayer {
         .allow_credentials(true)
 }
 
+/// Logs whether a `.env` file was loaded. Never logs its contents.
+fn log_dotenv_result(result: dotenvy::Result<PathBuf>) {
+    match result {
+        Ok(path) => tracing::info!("loaded environment from {}", path.display()),
+        Err(e) if e.not_found() => {
+            tracing::info!("no .env file found; using process environment");
+        }
+        Err(e) => tracing::warn!("ignoring .env file: {e}"),
+    }
+}
+
+/// Builds the app state from the environment, exiting if it cannot be created.
+fn init_state() -> AppState {
+    let state = match AppState::from_env() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to initialize: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    log_chat_provider(&state);
+
+    state
+}
+
+/// Logs which chat provider is in use, and warns about settings that leave
+/// chat disabled or that are being ignored. Never logs a key.
+fn log_chat_provider(state: &AppState) {
+    match state.llm_provider {
+        Provider::OpenAiCompatible => {
+            tracing::info!(
+                base_url = state.llm_base_url.as_deref().unwrap_or_default(),
+                model = &*state.model,
+                "AI chat uses an OpenAI-compatible server"
+            );
+            let has_anthropic_key =
+                std::env::var_os(ANTHROPIC_API_KEY_VAR).is_some_and(|value| !value.is_empty());
+            if has_anthropic_key {
+                tracing::warn!(
+                    "ANTHROPIC_API_KEY is set but not used: set LLM_PROVIDER=anthropic to chat \
+                     with Claude"
+                );
+            }
+        }
+        Provider::Anthropic => {
+            tracing::info!(model = &*state.model, "AI chat uses the Claude API");
+            if state.api_key.is_none() {
+                tracing::warn!(
+                    "LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set; AI chat is disabled"
+                );
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    // Load `.env` from the working directory (or a parent) before anything
+    // reads the environment. Variables already set in the process win.
+    let dotenv_result = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -45,14 +107,9 @@ async fn main() {
         )
         .init();
 
-    let mut state = match AppState::from_env() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to initialize: {e}");
-            eprintln!("Set the ANTHROPIC_API_KEY environment variable and try again.");
-            std::process::exit(1);
-        }
-    };
+    log_dotenv_result(dotenv_result);
+
+    let mut state = init_state();
 
     // Connect to database if DATABASE_URL is set.
     if let Ok(db_config) = selean_db::DbConfig::from_env() {

@@ -107,9 +107,32 @@ describe("LeftSidebar", () => {
     fireEvent.click(screen.getByText("Rectangle"));
     expect(editorRef.current.execute_tool_call).toHaveBeenCalledWith(
       "create_node",
-      expect.stringContaining('"kind":"Rect"'),
+      expect.stringContaining('"kind":"Frame"'),
+    );
+    expect(editorRef.current.execute_tool_call).toHaveBeenCalledWith(
+      "create_node",
+      expect.stringContaining('"fill_r":0.85'),
     );
     expect(onSceneChanged).toHaveBeenCalled();
+  });
+
+  it("does not report a scene change when the editor rejects the element", () => {
+    (
+      editorRef.current.execute_tool_call as ReturnType<typeof vi.fn>
+    ).mockReturnValueOnce('{"success":false,"error":"unknown node kind"}');
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <LeftSidebar
+        editorRef={editorRef}
+        onSceneChanged={onSceneChanged}
+        isOpen={true}
+        onToggle={onToggle}
+      />,
+    );
+    fireEvent.click(screen.getByText("Rectangle"));
+    expect(editorRef.current.execute_tool_call).toHaveBeenCalledTimes(1);
+    expect(onSceneChanged).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 
   it("creates text on click", () => {

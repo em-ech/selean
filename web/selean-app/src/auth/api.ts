@@ -96,6 +96,23 @@ export async function getMe(accessToken: string): Promise<AuthUser> {
   return response.json();
 }
 
+/**
+ * Asks the server whether authentication is enabled.
+ *
+ * Fails closed: if the server cannot be reached or answers unexpectedly,
+ * auth is assumed to be on and the login screen is shown.
+ */
+export async function fetchAuthEnabled(): Promise<boolean> {
+  try {
+    const response = await fetch("/api/auth/status");
+    if (!response.ok) return true;
+    const body: { auth_enabled?: unknown } = await response.json();
+    return body.auth_enabled !== false;
+  } catch {
+    return true;
+  }
+}
+
 export async function githubAuthorizeUrl(): Promise<string> {
   const resp = await fetch("/api/github/authorize");
   const data = await resp.json();

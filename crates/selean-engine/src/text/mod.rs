@@ -405,6 +405,7 @@ impl TextSystem {
                         bearing_y: sdf_bmp.bearing_y,
                         glyph_width_funits: sdf_bmp.glyph_width_funits,
                         glyph_height_funits: sdf_bmp.glyph_height_funits,
+                        sdf_scale: sdf_bmp.scale,
                     },
                 );
 

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use super::sse::{EventParser, SseDataLines};
 use crate::chat::ChatEvent;
 
 /// Tracks the type of content block currently being accumulated.
@@ -74,7 +75,7 @@ enum ClaudeStreamEvent {
 /// receive [`ChatEvent`] values as they become available.
 pub struct StreamParser {
     active_blocks: HashMap<usize, ActiveBlock>,
-    line_buffer: String,
+    lines: SseDataLines,
 }
 
 impl Default for StreamParser {
@@ -88,7 +89,7 @@ impl StreamParser {
     pub fn new() -> Self {
         Self {
             active_blocks: HashMap::new(),
-            line_buffer: String::new(),
+            lines: SseDataLines::new(),
         }
     }
 
@@ -96,26 +97,10 @@ impl StreamParser {
     /// any [`ChatEvent`] values that can be emitted from the data received
     /// so far.
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<ChatEvent> {
-        let text = String::from_utf8_lossy(chunk);
-        self.line_buffer.push_str(&text);
-
         let mut events = Vec::new();
-        loop {
-            let Some(newline_pos) = self.line_buffer.find('\n') else {
-                break;
-            };
-            let line = self.line_buffer[..newline_pos].to_string();
-            self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
-
-            if let Some(data) = line.strip_prefix("data: ") {
-                let data = data.trim();
-                if data.is_empty() {
-                    continue;
-                }
-                self.process_data(data, &mut events);
-            }
+        for data in self.lines.feed(chunk) {
+            self.process_data(&data, &mut events);
         }
-
         events
     }
 
@@ -178,6 +163,17 @@ impl StreamParser {
 
             ClaudeStreamEvent::Other => {}
         }
+    }
+}
+
+impl EventParser for StreamParser {
+    fn feed(&mut self, chunk: &[u8]) -> Vec<ChatEvent> {
+        StreamParser::feed(self, chunk)
+    }
+
+    /// Claude ends every turn with a `message_delta`, so nothing is pending.
+    fn finish(&mut self) -> Vec<ChatEvent> {
+        Vec::new()
     }
 }
 

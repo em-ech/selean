@@ -168,7 +168,7 @@ fn text_tag(node: &SceneNode) -> &'static str {
 /// Returns an empty string if no inline style is needed.
 fn build_style_attr(node: &SceneNode) -> String {
     if let Some(style) = tailwind::gradient_style(node) {
-        format!(" style={{{{\"{style}\"}}}}",)
+        format!(" style={{{{\"{style}\"}}}}")
     } else {
         String::new()
     }

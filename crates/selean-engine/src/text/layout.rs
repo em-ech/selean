@@ -139,25 +139,18 @@ fn position_glyph(
     baseline_y: f32,
     scale: f32,
 ) -> PositionedGlyph {
-    // Precompute glyph font-unit dimensions as f32, clamped to avoid division by zero.
-    let funits_w = f32::from(cached.glyph_width_funits).max(1.0);
-    let funits_h = f32::from(cached.glyph_height_funits).max(1.0);
-
-    // The glyph's world-space dimensions (font units → pixels).
-    let glyph_w = funits_w * scale;
-    let glyph_h = funits_h * scale;
-
     // SDF bitmap dimensions (includes spread padding on each side).
     #[allow(clippy::cast_precision_loss)]
     let sdf_w = cached.atlas_region.width as f32;
     #[allow(clippy::cast_precision_loss)]
     let sdf_h = cached.atlas_region.height as f32;
 
-    // Scale SDF bitmap to world space: sdf_pixels * (world_size / font_units).
-    let scale_w = glyph_w / funits_w;
-    let scale_h = glyph_h / funits_h;
-    let quad_w = sdf_w * scale_w;
-    let quad_h = sdf_h * scale_h;
+    // World units per SDF pixel. `scale` is world units per font unit and the
+    // bitmap was rasterized at `sdf_scale` pixels per font unit (each glyph is
+    // fitted to the SDF cell, so this differs from glyph to glyph).
+    let px_to_world = scale / cached.sdf_scale.max(f32::EPSILON);
+    let quad_w = sdf_w * px_to_world;
+    let quad_h = sdf_h * px_to_world;
 
     // Position: pen position + shaping offsets + bearing adjustments.
     #[allow(clippy::cast_precision_loss)]
@@ -166,9 +159,9 @@ fn position_glyph(
     let y_offset = shaped.y_offset as f32 * scale;
 
     // bearing_x/bearing_y are in SDF pixel space; scale to world space.
-    let quad_x = pen_x + x_offset + cached.bearing_x * scale_w;
+    let quad_x = pen_x + x_offset + cached.bearing_x * px_to_world;
     // bearing_y is from baseline to top of SDF bitmap.
-    let quad_y = baseline_y - y_offset - cached.bearing_y * scale_w;
+    let quad_y = baseline_y - y_offset - cached.bearing_y * px_to_world;
 
     PositionedGlyph {
         glyph_id: shaped.glyph_id,
@@ -211,6 +204,8 @@ mod tests {
             bearing_y: 36.0,
             glyph_width_funits: 600,
             glyph_height_funits: 800,
+            // 48 px cell, 6 px spread: 36 usable px for the 800-unit height.
+            sdf_scale: 0.045,
         };
         (key, glyph)
     }
@@ -272,6 +267,57 @@ mod tests {
         assert_eq!(g.glyph_id, 42);
         assert!(g.width > 0.0, "glyph should have positive width");
         assert!(g.height > 0.0, "glyph should have positive height");
+    }
+
+    #[test]
+    fn glyph_quad_is_sized_in_world_units() {
+        let run = make_shaped_run(vec![ShapedGlyph {
+            glyph_id: 42,
+            x_offset: 0,
+            y_offset: 0,
+            x_advance: 600,
+            cluster: 0,
+        }]);
+
+        let mut cache = GlyphCache::new();
+        let (key, cached) = make_cached_glyph(42);
+        cache.insert(key, cached);
+
+        // 1000 units per em at 20 px: 0.02 world units per font unit.
+        let layout = layout_text(
+            &run,
+            &cache,
+            800,
+            100.0,
+            200.0,
+            20.0,
+            48,
+            400.0,
+            TextAlign::Left,
+            1.2,
+            400,
+            0,
+        );
+        let g = &layout.glyphs[0];
+
+        // The 48 px SDF cell covers 48 / 0.045 font units = 21.33 world units.
+        let px_to_world = 0.02 / 0.045;
+        assert!((g.width - 48.0 * px_to_world).abs() < 1e-3, "{}", g.width);
+        assert!((g.height - 48.0 * px_to_world).abs() < 1e-3, "{}", g.height);
+
+        // Without the 6 px spread on each side, the ink is the glyph's
+        // 800-unit height at 20 px: 16 world units.
+        let ink_h = g.height - 12.0 * px_to_world;
+        assert!((ink_h - 16.0).abs() < 1e-3, "{ink_h}");
+
+        // The quad starts bearing_x (-3 px) left of the pen and bearing_y
+        // (36 px) above the baseline (ascender 800 units = 16 world units).
+        assert!((g.x - (100.0 - 3.0 * px_to_world)).abs() < 1e-3, "{}", g.x);
+        assert!(
+            (g.y - (200.0 + 16.0 - 36.0 * px_to_world)).abs() < 1e-3,
+            "{}",
+            g.y
+        );
     }
 
     #[test]

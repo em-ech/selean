@@ -611,13 +611,12 @@ impl Room {
 fn current_timestamp_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| {
+        .map_or(0, |d| {
             // Millis won't exceed u64 for astronomical amounts of time.
             #[allow(clippy::cast_possible_truncation)]
             let ms = d.as_millis() as u64;
             ms
         })
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

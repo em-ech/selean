@@ -27,11 +27,14 @@ pub struct S3Config {
 impl S3Config {
     /// Reads S3 configuration from environment variables.
     ///
-    /// Returns `None` if `S3_BUCKET` is not set.
+    /// Returns `None` if `S3_BUCKET` is not set or empty. Docker Compose
+    /// passes unset variables through as empty strings, so empty values are
+    /// treated as unset.
     pub fn from_env() -> Option<Self> {
-        let bucket_name = std::env::var("S3_BUCKET").ok()?;
-        let region = std::env::var("S3_REGION").unwrap_or_else(|_| "auto".to_string());
-        let endpoint = std::env::var("S3_ENDPOINT").ok();
+        let bucket_name = non_empty(std::env::var("S3_BUCKET").ok())?;
+        let region =
+            non_empty(std::env::var("S3_REGION").ok()).unwrap_or_else(|| "auto".to_string());
+        let endpoint = non_empty(std::env::var("S3_ENDPOINT").ok());
         let access_key = std::env::var("S3_ACCESS_KEY").unwrap_or_default();
         let secret_key = std::env::var("S3_SECRET_KEY").unwrap_or_default();
         Some(Self {
@@ -42,6 +45,11 @@ impl S3Config {
             secret_key,
         })
     }
+}
+
+/// Maps an empty string to `None`.
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.is_empty())
 }
 
 /// S3-compatible storage backend.
@@ -157,6 +165,16 @@ impl StorageBackend for S3Storage {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_empty_treats_empty_string_as_unset() {
+        assert_eq!(non_empty(None), None);
+        assert_eq!(non_empty(Some(String::new())), None);
+        assert_eq!(
+            non_empty(Some("selean-assets".to_string())).as_deref(),
+            Some("selean-assets")
+        );
+    }
 
     #[test]
     fn s3_config_from_env_returns_none_without_bucket() {

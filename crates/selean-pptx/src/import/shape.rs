@@ -4,7 +4,9 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use selean_common::types::NodeId;
-use selean_common::xml::{append_empty_tag, append_end_tag, append_start_tag, local_name};
+use selean_common::xml::{
+    append_empty_tag, append_end_tag, append_general_ref, append_start_tag, local_name,
+};
 use selean_engine::scene::{
     BoundingBox, Color, Effect, Gradient, GradientStop, SceneNode, SceneNodeKind,
 };
@@ -59,6 +61,11 @@ pub fn parse_shapes(slide_xml: &str) -> Vec<SceneNode> {
             Ok(Event::Text(ref e)) => {
                 if in_sp {
                     shape_xml.push_str(&String::from_utf8_lossy(e.as_ref()));
+                }
+            }
+            Ok(Event::GeneralRef(ref e)) => {
+                if in_sp {
+                    append_general_ref(&mut shape_xml, e);
                 }
             }
             Ok(Event::Eof) => break,
@@ -503,6 +510,32 @@ mod tests {
         assert!(matches!(nodes[0].kind, SceneNodeKind::Text { .. }));
         if let SceneNodeKind::Text { ref content, .. } = nodes[0].kind {
             assert_eq!(content, "Hello");
+        }
+    }
+
+    #[test]
+    fn parse_shape_text_keeps_entity_references() {
+        let xml = r#"
+        <p:spTree>
+            <p:sp>
+                <p:nvSpPr><p:cNvPr id="2" name="Title"/></p:nvSpPr>
+                <p:spPr>
+                    <a:xfrm>
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="914400" cy="457200"/>
+                    </a:xfrm>
+                </p:spPr>
+                <p:txBody>
+                    <a:p><a:r><a:t>R&amp;D &lt;caf&#233;&gt;</a:t></a:r></a:p>
+                </p:txBody>
+            </p:sp>
+        </p:spTree>"#;
+        let nodes = parse_shapes(xml);
+        assert_eq!(nodes.len(), 1);
+        if let SceneNodeKind::Text { ref content, .. } = nodes[0].kind {
+            assert_eq!(content, "R&D <caf\u{e9}>");
+        } else {
+            panic!("expected Text node");
         }
     }
 

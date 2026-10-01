@@ -60,8 +60,6 @@ export function createMockEditor(
     on_pointer_up: vi.fn().mockReturnValue([]),
     on_scroll: vi.fn().mockReturnValue([]),
     execute_command: vi.fn().mockReturnValue(true),
-    begin_command_group: vi.fn(),
-    end_command_group: vi.fn(),
     undo: vi.fn().mockReturnValue(true),
     redo: vi.fn().mockReturnValue(true),
     get_node_json: vi.fn().mockReturnValue("null"),

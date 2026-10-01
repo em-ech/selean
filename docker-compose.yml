@@ -33,9 +33,18 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    # Lets the container reach an Ollama server on the host (needed on Linux).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PORT: "8080"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      # AI chat: by default an Ollama server running on the host, no key.
+      LLM_PROVIDER: "${LLM_PROVIDER:-}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-http://host.docker.internal:11434/v1}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-}"
       JWT_SECRET: "${JWT_SECRET:-dev-secret-change-in-production}"
       DATABASE_URL: "postgres://selean:selean@postgres:5432/selean"
       RUST_LOG: "info,selean_server=debug"

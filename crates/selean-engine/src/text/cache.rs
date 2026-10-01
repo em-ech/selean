@@ -36,6 +36,8 @@ pub struct CachedGlyph {
     pub glyph_width_funits: u16,
     /// Glyph bounding box height in font units.
     pub glyph_height_funits: u16,
+    /// SDF pixels per font unit (each glyph is rasterized at its own scale).
+    pub sdf_scale: f32,
 }
 
 /// Default maximum number of entries in a `GlyphCache`.
@@ -156,6 +158,7 @@ mod tests {
             bearing_y: 40.0,
             glyph_width_funits: 600,
             glyph_height_funits: 800,
+            sdf_scale: 0.045,
         }
     }
 

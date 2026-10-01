@@ -64,15 +64,15 @@ function AppContent() {
   const lastClickNodeIdRef = useRef<string | null>(null);
   const lastClickTimeRef = useRef(0);
 
-  // Panel toggle state
+  // Panel toggle state (sidebar and layers hidden by default)
   const [showLeftSidebar, setShowLeftSidebar] = useState(
-    () => localStorage.getItem("selean-panel-sidebar") !== "false",
+    () => localStorage.getItem("selean-panel-sidebar") === "true",
   );
   const [showChat, setShowChat] = useState(
     () => localStorage.getItem("selean-panel-chat") !== "false",
   );
   const [showLayers, setShowLayers] = useState(
-    () => localStorage.getItem("selean-panel-layers") !== "false",
+    () => localStorage.getItem("selean-panel-layers") === "true",
   );
 
   // Persist panel states.
