@@ -14,12 +14,12 @@ pub mod collab;
 pub mod documents;
 pub mod github;
 pub mod indesign_bridge;
+pub mod provider;
 pub mod rbac;
 pub mod routes;
 pub mod services;
 pub mod state;
 pub mod storage;
-pub mod stream;
 pub mod workspaces;
 
 pub use auth::AuthConfig;

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use sqlx::PgPool;
 
 use crate::auth::jwt::JwtConfig;
+use crate::provider::Provider;
 use crate::storage::StorageBackend;
 
 /// Shared application state for the Axum server.
@@ -15,7 +16,9 @@ pub struct AppState {
     pub api_key: Option<Arc<str>>,
     /// Claude model to use (e.g. `claude-sonnet-4-6`).
     pub model: Arc<str>,
-    /// HTTP client for Claude API requests.
+    /// LLM provider that serves the AI chat.
+    pub llm_provider: Provider,
+    /// HTTP client for LLM provider requests.
     pub http_client: reqwest::Client,
     /// Figma personal access token. Read from `FIGMA_ACCESS_TOKEN` env var.
     pub figma_access_token: Option<Arc<str>>,
@@ -75,6 +78,7 @@ impl AppState {
         Ok(Self {
             api_key,
             model: Arc::from(model),
+            llm_provider: Provider::Anthropic,
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .build()
@@ -117,6 +121,7 @@ impl AppState {
         Self {
             api_key: Some(Arc::from("test-key")),
             model: Arc::from("claude-sonnet-4-6"),
+            llm_provider: Provider::Anthropic,
             http_client: reqwest::Client::new(),
             figma_access_token: None,
             indesign_server_url: None,
