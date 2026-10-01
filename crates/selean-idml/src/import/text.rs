@@ -8,7 +8,7 @@
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use selean_common::xml::local_name;
+use selean_common::xml::{local_name, resolve_general_ref};
 use selean_engine::scene::{Color, FontStyle, TextAlign};
 
 use crate::coord::{parse_idml_color, parse_idml_font_size};
@@ -107,9 +107,15 @@ pub fn parse_story(xml: &str) -> (String, ParsedStory) {
             }
             Ok(Event::Text(ref e)) => {
                 if in_content {
-                    if let Ok(text) = e.unescape() {
+                    if let Ok(text) = e.decode() {
                         result.content.push_str(&text);
                     }
+                }
+            }
+            // Entity and character references arrive as separate events.
+            Ok(Event::GeneralRef(ref e)) if in_content => {
+                if let Some(text) = resolve_general_ref(e) {
+                    result.content.push_str(&text);
                 }
             }
             Ok(Event::Eof) => break,
@@ -240,6 +246,19 @@ mod tests {
         let (id, story) = parse_story(xml);
         assert_eq!(id, "story_1");
         assert_eq!(story.content, "Hello World");
+    }
+
+    #[test]
+    fn parse_story_resolves_entities_and_char_refs() {
+        let xml = r#"<Story Self="s_ent">
+            <ParagraphStyleRange>
+                <CharacterStyleRange>
+                    <Content>R&amp;D &lt;caf&#233;&gt; &#x41;</Content>
+                </CharacterStyleRange>
+            </ParagraphStyleRange>
+        </Story>"#;
+        let (_, story) = parse_story(xml);
+        assert_eq!(story.content, "R&D <caf\u{e9}> A");
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use selean_common::xml::local_name;
+use selean_common::xml::{local_name, resolve_general_ref};
 use selean_engine::scene::{Color, FontStyle, TextAlign};
 
 use crate::coord::{ooxml_font_size_to_px, parse_ooxml_color};
@@ -100,7 +100,13 @@ pub fn parse_text_body(xml: &str) -> ParsedText {
                 }
             }
             Ok(Event::Text(ref e)) if in_text => {
-                if let Ok(text) = e.unescape() {
+                if let Ok(text) = e.decode() {
+                    result.content.push_str(&text);
+                }
+            }
+            // Entity and character references arrive as separate events.
+            Ok(Event::GeneralRef(ref e)) if in_text => {
+                if let Some(text) = resolve_general_ref(e) {
                     result.content.push_str(&text);
                 }
             }
@@ -178,6 +184,20 @@ mod tests {
         let xml = r"<a:txBody><a:p><a:r><a:t>Hello World</a:t></a:r></a:p></a:txBody>";
         let result = parse_text_body(xml);
         assert_eq!(result.content, "Hello World");
+    }
+
+    #[test]
+    fn parse_text_resolves_entities_and_char_refs() {
+        let xml = r"<a:txBody><a:p><a:r><a:t>R&amp;D &lt;caf&#233;&gt; &#x41;</a:t></a:r></a:p></a:txBody>";
+        let result = parse_text_body(xml);
+        assert_eq!(result.content, "R&D <caf\u{e9}> A");
+    }
+
+    #[test]
+    fn parse_text_ignores_references_outside_text_runs() {
+        let xml = r"<a:txBody><a:p>&amp;<a:r><a:t>Hi</a:t></a:r></a:p></a:txBody>";
+        let result = parse_text_body(xml);
+        assert_eq!(result.content, "Hi");
     }
 
     #[test]
