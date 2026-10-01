@@ -34,7 +34,7 @@ pub struct ChatRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum ChatEvent {
-    /// Text chunk from Claude.
+    /// Text chunk from the model.
     #[serde(rename = "text")]
     Text {
         /// The text content.
@@ -53,7 +53,7 @@ pub enum ChatEvent {
     /// Chat turn complete.
     #[serde(rename = "done")]
     Done {
-        /// Stop reason from Claude.
+        /// Stop reason, in Claude's vocabulary (`end_turn`, `tool_use`, ...).
         stop_reason: String,
     },
     /// Error occurred.

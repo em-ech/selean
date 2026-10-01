@@ -91,7 +91,8 @@ crates/
   selean-idml/             # InDesign IDML import/export
   selean-figma/            # Figma REST API import, interchange export
   selean-collab/           # Collaborative editing protocol, OpLog, operation inverses
-  selean-server/           # Axum HTTP server (auth, GitHub OAuth, routes, storage, WebSocket)
+  selean-server/           # Axum HTTP server (auth, GitHub OAuth, routes, storage, WebSocket,
+                           # chat providers: OpenAI-compatible and Anthropic)
   selean-db/               # PostgreSQL database (sqlx, migrations, models, queries)
 
 web/
@@ -135,7 +136,8 @@ cargo audit
 cd web/selean-app && npx tsc --noEmit && npx vitest run && npm audit --omit=dev
 ```
 
-- The server starts without `ANTHROPIC_API_KEY`; chat then reports that it is disabled.
+- AI chat needs no key: by default it calls a local Ollama server (`http://localhost:11434/v1`, model `qwen2.5:7b`) through the OpenAI-compatible provider. `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY` and `LLM_MODEL` select another host or model; Claude is opt-in with `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`. The server starts either way; if the model server is not reachable, chat returns an error that says how to fix it.
+- Chat providers live in `crates/selean-server/src/provider/` (one module per provider behind the `ChatProvider` trait); `chat.rs` owns the HTTP round trip.
 - With neither `JWT_SECRET` nor `SELEAN_AUTH_SECRET` set, auth is off: `GET /api/auth/status` returns `{"auth_enabled": false}` and the frontend runs as a guest with no login screen.
 - `tsc` and Vitest do not need the WASM bundle (Vitest aliases it to `src/test/wasm-stub.ts`).
 

@@ -27,7 +27,7 @@ cargo run -p selean-server
 npm run dev
 ```
 
-The server loads `.env` from the directory it is started in; `ANTHROPIC_API_KEY` is only needed for AI chat. With no `JWT_SECRET` the app runs in guest mode with no login. See the README for auth mode and Docker.
+The server loads `.env` from the directory it is started in; AI chat needs no key: it uses a local Ollama server by default (see "AI chat" in the README). With no `JWT_SECRET` the app runs in guest mode with no login. See the README for auth mode and Docker.
 
 ## Before Submitting a PR
 
