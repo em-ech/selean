@@ -1113,8 +1113,7 @@ mod wasm {
             };
             surface.configure(&renderer.gpu().device, &surface_config);
 
-            let mut state = EditorState::new();
-            state.setup_demo_scene();
+            let state = EditorState::new();
 
             Ok(Self {
                 state,
