@@ -334,7 +334,7 @@ export function useKeyboardShortcuts({
           if (e.key === "ArrowUp") dy = -step;
           if (e.key === "ArrowDown") dy = step;
 
-          editor.begin_command_group();
+          editor.begin_group("Nudge");
           for (const id of ids) {
             const json = editor.get_node_json(id);
             if (json === "null") continue;
@@ -350,7 +350,7 @@ export function useKeyboardShortcuts({
               }),
             );
           }
-          editor.end_command_group();
+          editor.end_group();
           onSceneChanged();
         } catch (err) {
           console.warn("shortcut:nudge failed", err);

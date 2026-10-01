@@ -49,8 +49,6 @@ export interface SeleanEditor {
     meta: boolean,
   ): InteractionEvent[];
   execute_command(json: string): boolean;
-  begin_command_group(): void;
-  end_command_group(): void;
   undo(): boolean;
   redo(): boolean;
   get_node_json(nodeId: string): string;
