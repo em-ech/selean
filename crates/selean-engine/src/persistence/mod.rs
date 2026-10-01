@@ -11,6 +11,7 @@ pub mod document;
 pub mod format;
 pub mod page;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use selean_common::types::PageId;
@@ -42,6 +43,26 @@ pub enum PersistenceError {
     Json(#[from] serde_json::Error),
 }
 
+/// Seconds since the Unix epoch, for the `saved_at` field.
+#[cfg(not(target_arch = "wasm32"))]
+fn unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Seconds since the Unix epoch, for the `saved_at` field.
+///
+/// `std::time::SystemTime::now()` panics on `wasm32-unknown-unknown`, so in
+/// the browser the clock is read from JavaScript.
+#[cfg(target_arch = "wasm32")]
+fn unix_timestamp_secs() -> u64 {
+    // `Date.now()` is a non-negative millisecond count far below `u64::MAX`.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let secs = (js_sys::Date::now() / 1000.0) as u64;
+    secs
+}
+
 /// Serializes a scene graph to a JSON string.
 ///
 /// The graph is wrapped in a single-page v2 document for forward compatibility.
@@ -53,9 +74,7 @@ pub enum PersistenceError {
 ///
 /// Returns `PersistenceError::Json` if serialization fails.
 pub fn save(graph: &SceneGraph) -> Result<String, PersistenceError> {
-    let saved_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let saved_at = unix_timestamp_secs();
 
     let doc = DocumentFormat {
         version: FORMAT_VERSION,
@@ -79,9 +98,7 @@ pub fn save(graph: &SceneGraph) -> Result<String, PersistenceError> {
 ///
 /// Returns `PersistenceError::Json` if serialization fails.
 pub fn save_pretty(graph: &SceneGraph) -> Result<String, PersistenceError> {
-    let saved_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let saved_at = unix_timestamp_secs();
 
     let doc = DocumentFormat {
         version: FORMAT_VERSION,
@@ -120,9 +137,7 @@ pub fn load(json: &str) -> Result<SceneGraph, PersistenceError> {
 ///
 /// Returns `PersistenceError::Json` if serialization fails.
 pub fn save_document(doc: &Document) -> Result<String, PersistenceError> {
-    let saved_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let saved_at = unix_timestamp_secs();
 
     let pages: Vec<PageData> = doc.pages().iter().map(PageData::from_page).collect();
 

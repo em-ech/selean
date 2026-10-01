@@ -2942,6 +2942,7 @@ dependencies = [
  "bytemuck",
  "criterion",
  "image",
+ "js-sys",
  "pollster",
  "proptest",
  "rand 0.8.5",
