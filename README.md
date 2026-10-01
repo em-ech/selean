@@ -282,7 +282,7 @@ The TypeScript check and the Vitest suite do not need the WASM bundle.
 ## Testing
 
 ```bash
-# Rust (1848 tests across 11 crates)
+# Rust (1849 tests across 11 crates)
 cargo test --workspace
 
 # Frontend (461 tests via Vitest)
