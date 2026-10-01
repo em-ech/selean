@@ -166,25 +166,31 @@ export function useChatEngine({
           const data = line.slice(6).trim();
           if (!data) continue;
 
+          let event: ChatEvent;
           try {
-            const event: ChatEvent = JSON.parse(data);
-            events.push(event);
-
-            if (event.type === "text") {
-              rawBlocks.push({ type: "text", text: event.text });
-              onTextDelta?.(event.text);
-            } else if (event.type === "tool_use") {
-              rawBlocks.push({
-                type: "tool_use",
-                id: event.id,
-                name: event.name,
-                input: event.input,
-              });
-            } else if (event.type === "done") {
-              stopReason = event.stop_reason;
-            }
+            event = JSON.parse(data);
           } catch (e) {
             console.warn("chat:sse-parse failed", e);
+            continue;
+          }
+          events.push(event);
+
+          if (event.type === "text") {
+            rawBlocks.push({ type: "text", text: event.text });
+            onTextDelta?.(event.text);
+          } else if (event.type === "tool_use") {
+            rawBlocks.push({
+              type: "tool_use",
+              id: event.id,
+              name: event.name,
+              input: event.input,
+            });
+          } else if (event.type === "done") {
+            stopReason = event.stop_reason;
+          } else if (event.type === "error") {
+            // The server streams failures (missing API key, Claude API
+            // errors) as an error event; surface it in the chat.
+            throw new Error(event.message);
           }
         }
       }

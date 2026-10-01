@@ -199,6 +199,36 @@ describe("useChatEngine", () => {
     expect(result.current.loading).toBe(false);
   });
 
+  it("shows the message of a streamed error event", async () => {
+    mockAuthFetch.mockResolvedValueOnce(
+      makeSseResponse([
+        {
+          type: "error",
+          message:
+            "AI chat is disabled: ANTHROPIC_API_KEY is not set on the server",
+        },
+      ]),
+    );
+
+    const { result } = renderHook(() =>
+      useChatEngine({ editorRef, onSceneChanged }),
+    );
+    act(() => {
+      result.current.setInput("Hi");
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(result.current.displayMessages).toHaveLength(2);
+    expect(result.current.displayMessages[1]).toEqual({
+      role: "assistant",
+      text: "Error: AI chat is disabled: ANTHROPIC_API_KEY is not set on the server",
+    });
+    expect(result.current.loading).toBe(false);
+    expect(mockAuthFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("clears history", async () => {
     mockAuthFetch.mockResolvedValueOnce(
       makeSseResponse([
