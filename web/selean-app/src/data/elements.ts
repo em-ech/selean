@@ -13,10 +13,13 @@ export interface TextElement {
   defaults: Record<string, unknown>;
 }
 
+/** Default grey fill for new shapes (same as the frame creation tool). */
+const SHAPE_FILL = { fill_r: 0.85, fill_g: 0.85, fill_b: 0.85, fill_a: 1 };
+
 export const SHAPE_ELEMENTS: ShapeElement[] = [
   {
     label: "Rectangle",
-    kind: "Rect",
+    kind: "Frame",
     icon: React.createElement(
       "svg",
       {
@@ -29,11 +32,11 @@ export const SHAPE_ELEMENTS: ShapeElement[] = [
       },
       React.createElement("rect", { x: 3, y: 3, width: 18, height: 18, rx: 2 }),
     ),
-    defaults: { width: 200, height: 150 },
+    defaults: { width: 200, height: 150, ...SHAPE_FILL },
   },
   {
     label: "Square",
-    kind: "Rect",
+    kind: "Frame",
     icon: React.createElement(
       "svg",
       {
@@ -46,11 +49,11 @@ export const SHAPE_ELEMENTS: ShapeElement[] = [
       },
       React.createElement("rect", { x: 4, y: 4, width: 16, height: 16 }),
     ),
-    defaults: { width: 150, height: 150 },
+    defaults: { width: 150, height: 150, ...SHAPE_FILL },
   },
   {
     label: "Frame",
-    kind: "Rect",
+    kind: "Frame",
     icon: React.createElement(
       "svg",
       {
@@ -64,7 +67,7 @@ export const SHAPE_ELEMENTS: ShapeElement[] = [
       React.createElement("rect", { x: 2, y: 2, width: 20, height: 20, rx: 0 }),
       React.createElement("line", { x1: 2, y1: 8, x2: 22, y2: 8 }),
     ),
-    defaults: { width: 400, height: 300 },
+    defaults: { width: 400, height: 300, ...SHAPE_FILL },
   },
 ];
 

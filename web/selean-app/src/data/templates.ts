@@ -24,7 +24,7 @@ export const TEMPLATES: TemplateCard[] = [
     height: 1080,
     elements: [
       {
-        kind: "Rect",
+        kind: "Frame",
         name: "Background",
         x: 0,
         y: 0,
@@ -63,7 +63,7 @@ export const TEMPLATES: TemplateCard[] = [
     height: 1080,
     elements: [
       {
-        kind: "Rect",
+        kind: "Frame",
         name: "Background",
         x: 0,
         y: 0,
@@ -102,7 +102,7 @@ export const TEMPLATES: TemplateCard[] = [
     height: 600,
     elements: [
       {
-        kind: "Rect",
+        kind: "Frame",
         name: "Background",
         x: 0,
         y: 0,
@@ -151,7 +151,7 @@ export const TEMPLATES: TemplateCard[] = [
     height: 2160,
     elements: [
       {
-        kind: "Rect",
+        kind: "Frame",
         name: "Background",
         x: 0,
         y: 0,
@@ -190,7 +190,7 @@ export const TEMPLATES: TemplateCard[] = [
     height: 1650,
     elements: [
       {
-        kind: "Rect",
+        kind: "Frame",
         name: "Background",
         x: 0,
         y: 0,
@@ -230,7 +230,7 @@ export const TEMPLATES: TemplateCard[] = [
     height: 1650,
     elements: [
       {
-        kind: "Rect",
+        kind: "Frame",
         name: "Background",
         x: 0,
         y: 0,
@@ -259,7 +259,7 @@ export const TEMPLATES: TemplateCard[] = [
         font_size: 14,
       },
       {
-        kind: "Rect",
+        kind: "Frame",
         name: "Divider",
         x: 100,
         y: 200,

@@ -17,6 +17,18 @@ interface LeftSidebarProps {
   width?: number;
 }
 
+/**
+ * `execute_tool_call` reports a rejected call in its JSON result
+ * (`{ "success": false, "error": ... }`) instead of throwing.
+ */
+function toolCallFailed(resultJson: string): boolean {
+  try {
+    return JSON.parse(resultJson).success === false;
+  } catch {
+    return true;
+  }
+}
+
 /** Proportional thumbnail preview for template cards. */
 function TemplateThumbnail({
   width,
@@ -103,7 +115,12 @@ export function LeftSidebar({
           y,
           ...defaults,
         });
-        editor.execute_tool_call("create_node", args);
+        const result = editor.execute_tool_call("create_node", args);
+        if (toolCallFailed(result)) {
+          console.error("placeElement rejected:", result);
+          showError("Failed to create element");
+          return;
+        }
         onSceneChanged();
       } catch (err) {
         console.error("placeElement failed:", err);
@@ -131,8 +148,19 @@ export function LeftSidebar({
       editor.set_active_page(pageId);
 
       // Create all template elements.
+      let failed = 0;
       for (const el of template.elements) {
-        editor.execute_tool_call("create_node", JSON.stringify(el));
+        const result = editor.execute_tool_call(
+          "create_node",
+          JSON.stringify(el),
+        );
+        if (toolCallFailed(result)) {
+          console.error("applyTemplate element rejected:", result);
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        showError(`Failed to create ${failed} template element(s)`);
       }
 
       onSceneChanged();
