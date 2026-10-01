@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/check-wasm.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/check-wasm.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "wasm:build": "wasm-pack build ../../crates/selean-wasm --target web --out-dir ../../web/selean-app/src/wasm/pkg",
