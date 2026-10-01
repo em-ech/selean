@@ -3055,6 +3055,7 @@ dependencies = [
  "argon2",
  "axum",
  "chrono",
+ "dotenvy",
  "futures-util",
  "hex",
  "jsonwebtoken",

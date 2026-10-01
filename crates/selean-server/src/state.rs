@@ -10,8 +10,9 @@ use crate::storage::StorageBackend;
 /// Shared application state for the Axum server.
 #[derive(Clone)]
 pub struct AppState {
-    /// Claude API key. Read from `ANTHROPIC_API_KEY` env var.
-    pub api_key: Arc<str>,
+    /// Claude API key. Read from `ANTHROPIC_API_KEY` env var. When `None`,
+    /// the server still runs and `/api/chat` reports that AI chat is disabled.
+    pub api_key: Option<Arc<str>>,
     /// Claude model to use (e.g. `claude-sonnet-4-6`).
     pub model: Arc<str>,
     /// HTTP client for Claude API requests.
@@ -39,10 +40,12 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns an error if `ANTHROPIC_API_KEY` is not set.
+    /// Returns an error if the configured storage backend cannot be initialized.
     pub fn from_env() -> Result<Self, AppStateError> {
-        let api_key =
-            std::env::var("ANTHROPIC_API_KEY").map_err(|_| AppStateError::MissingApiKey)?;
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(Arc::from);
 
         let model =
             std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
@@ -70,7 +73,7 @@ impl AppState {
             };
 
         Ok(Self {
-            api_key: Arc::from(api_key),
+            api_key,
             model: Arc::from(model),
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
@@ -112,7 +115,7 @@ impl AppState {
     #[cfg(test)]
     pub fn new_test() -> Self {
         Self {
-            api_key: Arc::from("test-key"),
+            api_key: Some(Arc::from("test-key")),
             model: Arc::from("claude-sonnet-4-6"),
             http_client: reqwest::Client::new(),
             figma_access_token: None,
@@ -131,9 +134,6 @@ impl AppState {
 /// Errors from app state initialization.
 #[derive(Debug, thiserror::Error)]
 pub enum AppStateError {
-    /// The `ANTHROPIC_API_KEY` environment variable is not set.
-    #[error("ANTHROPIC_API_KEY environment variable not set")]
-    MissingApiKey,
     /// Database pool was requested but `DATABASE_URL` was not configured.
     #[error("DATABASE_URL not configured; database features are unavailable")]
     NoDatabaseConfigured,
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn test_state_defaults() {
         let state = AppState::new_test();
-        assert_eq!(&*state.api_key, "test-key");
+        assert_eq!(state.api_key.as_deref(), Some("test-key"));
         assert_eq!(&*state.model, "claude-sonnet-4-6");
     }
 
@@ -184,15 +184,6 @@ mod tests {
         let state = AppState::new_test();
         assert!(state.db.is_none());
         assert!(state.require_db().is_err());
-    }
-
-    #[test]
-    fn from_env_missing_key_errors() {
-        // Verify the error type is constructed correctly.
-        // We can't safely unset env vars in Rust 2024 edition,
-        // so we test the error type directly.
-        let err = AppStateError::MissingApiKey;
-        assert!(err.to_string().contains("ANTHROPIC_API_KEY"));
     }
 
     #[test]

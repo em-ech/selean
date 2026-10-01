@@ -36,8 +36,42 @@ fn build_cors_layer() -> CorsLayer {
         .allow_credentials(true)
 }
 
+/// Logs whether a `.env` file was loaded. Never logs its contents.
+fn log_dotenv_result(result: dotenvy::Result<PathBuf>) {
+    match result {
+        Ok(path) => tracing::info!("loaded environment from {}", path.display()),
+        Err(e) if e.not_found() => {
+            tracing::info!("no .env file found; using process environment");
+        }
+        Err(e) => tracing::warn!("ignoring .env file: {e}"),
+    }
+}
+
+/// Builds the app state from the environment, exiting if it cannot be created.
+fn init_state() -> AppState {
+    let state = match AppState::from_env() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to initialize: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if state.api_key.is_none() {
+        tracing::warn!(
+            "ANTHROPIC_API_KEY not set; AI chat is disabled (set it in .env or the environment)"
+        );
+    }
+
+    state
+}
+
 #[tokio::main]
 async fn main() {
+    // Load `.env` from the working directory (or a parent) before anything
+    // reads the environment. Variables already set in the process win.
+    let dotenv_result = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -45,14 +79,9 @@ async fn main() {
         )
         .init();
 
-    let mut state = match AppState::from_env() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to initialize: {e}");
-            eprintln!("Set the ANTHROPIC_API_KEY environment variable and try again.");
-            std::process::exit(1);
-        }
-    };
+    log_dotenv_result(dotenv_result);
+
+    let mut state = init_state();
 
     // Connect to database if DATABASE_URL is set.
     if let Ok(db_config) = selean_db::DbConfig::from_env() {

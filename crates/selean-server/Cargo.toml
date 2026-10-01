@@ -38,6 +38,7 @@ sha2.workspace = true
 hex.workspace = true
 rand.workspace = true
 rust-s3 = { workspace = true }
+dotenvy = "0.15"
 tokio-stream = "0.1"
 futures-util = "0.3"
 

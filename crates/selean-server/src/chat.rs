@@ -132,17 +132,19 @@ pub fn build_claude_request(state: &AppState, request: &ChatRequest) -> serde_js
 ///
 /// # Errors
 ///
-/// Returns an error if the HTTP request fails or Claude returns an error.
+/// Returns an error if no API key is configured, the HTTP request fails, or
+/// Claude returns an error.
 pub async fn send_chat_request(
     state: &AppState,
     request: &ChatRequest,
 ) -> Result<ClaudeResponse, ChatError> {
+    let api_key = state.api_key.as_deref().ok_or(ChatError::MissingApiKey)?;
     let body = build_claude_request(state, request);
 
     let response = state
         .http_client
         .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &*state.api_key)
+        .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
         .json(&body)
@@ -198,7 +200,8 @@ pub fn response_to_events(response: &ClaudeResponse) -> Vec<ChatEvent> {
 ///
 /// Spawns a background tokio task that reads the byte stream from Claude,
 /// parses SSE events via [`crate::stream::StreamParser`], and forwards
-/// parsed events through an `mpsc` channel.
+/// parsed events through an `mpsc` channel. Without an API key the receiver
+/// yields a single error event and no request is made.
 pub fn send_chat_request_streaming(
     state: &AppState,
     request: &ChatRequest,
@@ -210,8 +213,15 @@ pub fn send_chat_request_streaming(
     }
 
     let client = state.http_client.clone();
-    let api_key = state.api_key.clone();
     let (tx, rx) = tokio::sync::mpsc::channel(64);
+
+    let Some(api_key) = state.api_key.clone() else {
+        // The channel was just created with spare capacity, so this cannot fail.
+        let _ = tx.try_send(ChatEvent::Error {
+            message: ChatError::MissingApiKey.to_string(),
+        });
+        return rx;
+    };
 
     tokio::spawn(async move {
         let response = client
@@ -277,6 +287,9 @@ pub fn send_chat_request_streaming(
 /// Errors from chat operations.
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
+    /// The server has no `ANTHROPIC_API_KEY`, so AI chat is disabled.
+    #[error("AI chat is disabled: ANTHROPIC_API_KEY is not set on the server")]
+    MissingApiKey,
     /// HTTP request failed.
     #[error("HTTP error: {0}")]
     HttpError(String),
@@ -297,6 +310,43 @@ pub enum ChatError {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn hello_request() -> ChatRequest {
+        ChatRequest {
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("hello"),
+            }],
+            scene_summary: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_without_api_key_yields_single_error_event() {
+        let mut state = AppState::new_test();
+        state.api_key = None;
+
+        let mut rx = send_chat_request_streaming(&state, &hello_request());
+
+        match rx.recv().await {
+            Some(ChatEvent::Error { message }) => {
+                assert!(message.contains("ANTHROPIC_API_KEY"), "got: {message}");
+            }
+            other => panic!("expected an error event, got {other:?}"),
+        }
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn non_streaming_without_api_key_errors() {
+        let mut state = AppState::new_test();
+        state.api_key = None;
+
+        let err = send_chat_request(&state, &hello_request())
+            .await
+            .expect_err("missing key must fail");
+        assert!(matches!(err, ChatError::MissingApiKey));
+    }
 
     #[test]
     fn build_claude_request_includes_tools() {
