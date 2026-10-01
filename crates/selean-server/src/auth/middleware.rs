@@ -28,6 +28,14 @@ pub struct AuthState {
     pub jwt: Option<JwtConfig>,
 }
 
+impl AuthState {
+    /// Returns `true` if any auth mode (legacy secret or JWT) is configured.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.config.is_enabled() || self.jwt.is_some()
+    }
+}
+
 /// Paths that bypass auth even when enabled.
 const PUBLIC_PATHS: &[&str] = &["/api/health", "/api/health/ready"];
 
@@ -58,7 +66,7 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Response {
     // Auth fully disabled: pass through.
-    if !state.config.is_enabled() && state.jwt.is_none() {
+    if !state.is_enabled() {
         return next.run(request).await;
     }
 
