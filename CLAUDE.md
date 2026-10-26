@@ -8,7 +8,7 @@ Selean is a design tool that combines the capabilities of Canva, Figma, and Adob
 
 1. **AI Chat-Prompted Design**: Users start designs via chat prompts. The LLM generates scene graph operations (add nodes, set properties, arrange layouts) to produce complete designs.
 
-2. **Import/Export Interoperability**: Bidirectional support for PowerPoint (.pptx), Adobe InDesign (.indd/.idml), Figma (REST API), and native Selean format.
+2. **Import/Export Interoperability**: PowerPoint (.pptx) and InDesign IDML (.idml) import and export, Figma REST import plus an interchange JSON export (the Figma plugin is source only), and native Selean format. .indd is read only through an external conversion server (`INDESIGN_SERVER_URL`).
 
 3. **AI-Assisted Editing**: Users prompt modifications to existing designs ("make the heading larger", "change the color scheme to dark mode") and the LLM applies targeted changes via the command system.
 
