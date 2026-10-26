@@ -258,7 +258,7 @@ impl BlurResources {
         }
 
         // Final upsample: half -> target
-        let last_view = if (iterations.saturating_sub(1)) % 2 == 0 {
+        let last_view = if iterations.saturating_sub(1).is_multiple_of(2) {
             &self.view_a
         } else {
             &self.view_b

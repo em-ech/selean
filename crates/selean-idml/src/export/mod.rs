@@ -220,7 +220,7 @@ mod tests {
     fn export_empty_document() {
         let doc = Document::new();
         let bytes = export_idml(&doc).unwrap();
-        assert!(!bytes.is_empty());
+        assert_ne!(bytes, Vec::<u8>::new());
 
         let cursor = Cursor::new(bytes);
         let archive = zip::ZipArchive::new(cursor).unwrap();
@@ -260,7 +260,7 @@ mod tests {
 
         let cursor = Cursor::new(bytes);
         let archive = zip::ZipArchive::new(cursor).unwrap();
-        assert_eq!(archive.name_for_index(0).unwrap(), "mimetype");
+        assert_eq!(archive.name_for_index(0).unwrap().unwrap(), "mimetype");
     }
 
     #[test]
@@ -324,11 +324,11 @@ mod tests {
         // Should have a story file
         let mut found_story = false;
         for i in 0..archive.len() {
-            if let Ok(file) = archive.by_index(i) {
-                if file.name().starts_with("Stories/") {
-                    found_story = true;
-                    break;
-                }
+            if let Ok(file) = archive.by_index(i)
+                && file.name().unwrap().starts_with("Stories/")
+            {
+                found_story = true;
+                break;
             }
         }
         assert!(found_story, "expected a Story file in the archive");
@@ -357,6 +357,6 @@ mod tests {
         let (xml, stories) = build_spread_xml(&page, 1);
         assert!(xml.contains("idPkg:Spread"));
         assert!(xml.contains("Page Self"));
-        assert!(stories.is_empty());
+        assert_eq!(stories, []);
     }
 }

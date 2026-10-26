@@ -265,7 +265,7 @@ mod tests {
     fn build_story_xml_for_non_text_returns_empty() {
         let node = make_frame("Box", 0.0, 0.0, 100.0, 100.0);
         let xml = build_story_xml(&node, "story_x");
-        assert!(xml.is_empty());
+        assert_eq!(xml, "");
     }
 
     #[test]

@@ -94,7 +94,7 @@ mod tests {
     fn extract_tokens_on_empty_doc() {
         let doc = Document::new();
         let tokens = extract_tokens(&doc);
-        assert!(tokens.colors.is_empty());
-        assert!(tokens.fonts.is_empty());
+        assert_eq!(tokens.colors, []);
+        assert_eq!(tokens.fonts, []);
     }
 }

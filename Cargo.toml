@@ -4,7 +4,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/em-ech/selean"
 
@@ -54,7 +54,7 @@ hex = "0.4"
 rust-s3 = "0.37"
 
 # PPTX import/export
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = "0.41"
 
 # Testing & Benchmarking

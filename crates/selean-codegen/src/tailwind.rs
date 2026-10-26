@@ -69,10 +69,10 @@ fn append_position_classes(classes: &mut Vec<String>, node: &SceneNode) {
 /// Appends fill/background classes. Gradients use inline style (not classes).
 fn append_fill_classes(classes: &mut Vec<String>, node: &SceneNode) {
     // Solid fill only when no gradient is present.
-    if node.fill_gradient.is_none() {
-        if let Some(ref fill) = node.fill {
-            classes.push(format!("bg-{}", color_to_tailwind_style(fill)));
-        }
+    if node.fill_gradient.is_none()
+        && let Some(ref fill) = node.fill
+    {
+        classes.push(format!("bg-{}", color_to_tailwind_style(fill)));
     }
 }
 

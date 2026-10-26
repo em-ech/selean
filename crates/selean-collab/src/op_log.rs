@@ -219,7 +219,10 @@ mod tests {
     #[test]
     fn user_page_seqs_empty_for_unknown() {
         let log = OpLog::new();
-        assert!(log.user_page_seqs(UserId::new(), PageId::new()).is_empty());
+        assert_eq!(
+            log.user_page_seqs(UserId::new(), PageId::new()),
+            Vec::<SeqNum>::new()
+        );
     }
 
     #[test]

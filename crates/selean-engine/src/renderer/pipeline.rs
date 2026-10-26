@@ -524,19 +524,19 @@ impl Renderer {
         let resolved = self.clip_stack.resolve();
         match &node.kind {
             SceneNodeKind::Frame { .. } | SceneNodeKind::Group => {
-                if !node.bounds.is_empty() {
-                    if let Some(mut inst) = RectInstance::from_scene_node(node) {
-                        inst.clip_rect = resolved.shader_clip_rect.to_array();
-                        #[allow(clippy::cast_possible_truncation)]
-                        let start = self.rect_batch.ordered_len() as u32;
-                        self.rect_batch.push_ordered(inst);
-                        self.render_order.push(RenderOrderEntry::Rect {
-                            instance_start: start,
-                            instance_count: 1,
-                            blend: blend_mode,
-                            stencil_test: resolved.stencil_ref > 0,
-                        });
-                    }
+                if !node.bounds.is_empty()
+                    && let Some(mut inst) = RectInstance::from_scene_node(node)
+                {
+                    inst.clip_rect = resolved.shader_clip_rect.to_array();
+                    #[allow(clippy::cast_possible_truncation)]
+                    let start = self.rect_batch.ordered_len() as u32;
+                    self.rect_batch.push_ordered(inst);
+                    self.render_order.push(RenderOrderEntry::Rect {
+                        instance_start: start,
+                        instance_count: 1,
+                        blend: blend_mode,
+                        stencil_test: resolved.stencil_ref > 0,
+                    });
                 }
             }
             SceneNodeKind::Text {
@@ -640,22 +640,22 @@ impl Renderer {
                 }
                 ClipMode::Stencil => {
                     // Create decrement instance (same shape as write).
-                    if let Some(node) = scene.get(node_id) {
-                        if let Some(inst) = create_stencil_rect_instance(
+                    if let Some(node) = scene.get(node_id)
+                        && let Some(inst) = create_stencil_rect_instance(
                             node,
                             self.clip_stack.current_shader_rect(),
-                        ) {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let dec_start = self.rect_batch.ordered_len() as u32;
-                            self.rect_batch.push_ordered(inst);
-                            self.clip_stack.pop_stencil();
-                            let restored_ref = self.clip_stack.stencil_ref();
-                            self.render_order.push(RenderOrderEntry::PopStencil {
-                                decrement_instance_start: dec_start,
-                                decrement_instance_count: 1,
-                                restored_stencil_ref: restored_ref,
-                            });
-                        }
+                        )
+                    {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let dec_start = self.rect_batch.ordered_len() as u32;
+                        self.rect_batch.push_ordered(inst);
+                        self.clip_stack.pop_stencil();
+                        let restored_ref = self.clip_stack.stencil_ref();
+                        self.render_order.push(RenderOrderEntry::PopStencil {
+                            decrement_instance_start: dec_start,
+                            decrement_instance_count: 1,
+                            restored_stencil_ref: restored_ref,
+                        });
                     }
                 }
                 ClipMode::ShaderRect => {
@@ -1588,7 +1588,7 @@ mod tests {
     fn dfs_empty_scene() {
         let scene = SceneGraph::new();
         let order = dfs_traversal_order(&scene);
-        assert!(order.is_empty());
+        assert_eq!(order, []);
     }
 
     #[test]

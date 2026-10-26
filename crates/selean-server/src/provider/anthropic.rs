@@ -157,7 +157,7 @@ mod tests {
             false,
         );
         assert!(body["tools"].is_array());
-        assert!(!body["tools"].as_array().unwrap().is_empty());
+        assert_ne!(body["tools"], serde_json::json!([]));
         assert_eq!(body["model"], "claude-sonnet-4-6");
         assert_eq!(body["system"], "be helpful");
         assert_eq!(body["messages"][0]["content"], "Make it red");

@@ -68,10 +68,10 @@ pub fn parse_story(xml: &str) -> (String, ParsedStory) {
                 match local {
                     b"Story" => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"Self" {
-                                if let Ok(v) = std::str::from_utf8(&attr.value) {
-                                    story_id = v.to_string();
-                                }
+                            if attr.key.as_ref() == b"Self"
+                                && let Ok(v) = std::str::from_utf8(&attr.value)
+                            {
+                                story_id = v.to_string();
                             }
                         }
                     }
@@ -106,10 +106,8 @@ pub fn parse_story(xml: &str) -> (String, ParsedStory) {
                 }
             }
             Ok(Event::Text(ref e)) => {
-                if in_content {
-                    if let Ok(text) = e.decode() {
-                        result.content.push_str(&text);
-                    }
+                if in_content && let Ok(text) = e.decode() {
+                    result.content.push_str(&text);
                 }
             }
             // Entity and character references arrive as separate events.
@@ -133,15 +131,15 @@ pub fn parse_story(xml: &str) -> (String, ParsedStory) {
 
 fn parse_paragraph_attrs(e: &quick_xml::events::BytesStart<'_>, result: &mut ParsedStory) {
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"Justification" {
-            if let Ok(val) = std::str::from_utf8(&attr.value) {
-                result.text_align = match val {
-                    "CenterAlign" | "CenterJustified" => TextAlign::Center,
-                    "RightAlign" | "RightJustified" => TextAlign::Right,
-                    "FullyJustified" => TextAlign::Justify,
-                    _ => TextAlign::Left,
-                };
-            }
+        if attr.key.as_ref() == b"Justification"
+            && let Ok(val) = std::str::from_utf8(&attr.value)
+        {
+            result.text_align = match val {
+                "CenterAlign" | "CenterJustified" => TextAlign::Center,
+                "RightAlign" | "RightJustified" => TextAlign::Right,
+                "FullyJustified" => TextAlign::Justify,
+                _ => TextAlign::Left,
+            };
         }
     }
 }
@@ -218,10 +216,10 @@ fn parse_inline_element(
                 idx += 1;
             }
         }
-        if !r_str.is_empty() {
-            if let Some(c) = parse_idml_color(&r_str, &g_str, &b_str) {
-                result.text_color = Some(c);
-            }
+        if !r_str.is_empty()
+            && let Some(c) = parse_idml_color(&r_str, &g_str, &b_str)
+        {
+            result.text_color = Some(c);
         }
     }
 }
@@ -386,7 +384,7 @@ mod tests {
     #[test]
     fn default_parsed_story() {
         let result = ParsedStory::default();
-        assert!(result.content.is_empty());
+        assert_eq!(result.content, "");
         assert_eq!(result.font_size, 16.0);
         assert_eq!(result.font_family, "Inter");
         assert_eq!(result.font_weight, 400);
@@ -407,7 +405,7 @@ mod tests {
             </ParagraphStyleRange>
         </Story>";
         let (id, story) = parse_story(xml);
-        assert!(id.is_empty());
+        assert_eq!(id, "");
         assert_eq!(story.content, "Text");
     }
 
@@ -415,8 +413,8 @@ mod tests {
     fn parse_story_empty_xml_returns_defaults() {
         let xml = "";
         let (id, story) = parse_story(xml);
-        assert!(id.is_empty());
-        assert!(story.content.is_empty());
+        assert_eq!(id, "");
+        assert_eq!(story.content, "");
         assert_eq!(story.font_size, 16.0);
     }
 
@@ -449,7 +447,7 @@ mod tests {
             </ParagraphStyleRange>
         </Story>"#;
         let (_, story) = parse_story(xml);
-        assert!(story.content.is_empty());
+        assert_eq!(story.content, "");
         assert!((story.font_size - 32.0).abs() < 0.01);
     }
 }

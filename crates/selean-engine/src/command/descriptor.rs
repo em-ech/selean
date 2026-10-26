@@ -989,10 +989,10 @@ mod tests {
         };
         let mut cmd = desc.into_command();
         cmd.execute(&mut scene);
-        assert!(!scene.get(id).expect("exists").effects.is_empty());
+        assert_ne!(scene.get(id).expect("exists").effects, []);
 
         cmd.undo(&mut scene);
-        assert!(scene.get(id).expect("exists").effects.is_empty());
+        assert_eq!(scene.get(id).expect("exists").effects, []);
     }
 
     #[test]

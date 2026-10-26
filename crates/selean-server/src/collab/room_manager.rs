@@ -447,10 +447,10 @@ impl Room {
                 self.document.remove_page(page_id);
             }
             PageOpType::Rename => {
-                if let Some(new_name) = &name {
-                    if let Some(page) = self.document.page_mut(page_id) {
-                        page.name.clone_from(new_name);
-                    }
+                if let Some(new_name) = &name
+                    && let Some(page) = self.document.page_mut(page_id)
+                {
+                    page.name.clone_from(new_name);
                 }
             }
         }
@@ -702,7 +702,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(session_id, sid);
-                assert!(participants.is_empty()); // no one else yet
+                assert_eq!(participants, []); // no one else yet
             }
             _ => panic!("expected RoomJoined"),
         }
@@ -891,7 +891,7 @@ mod tests {
         room.join(sid, uid, name, tx).unwrap();
 
         let seqs = room.submit_op_group(vec![], "Empty".to_string());
-        assert!(seqs.is_empty());
+        assert_eq!(seqs, Vec::<SeqNum>::new());
     }
 
     #[test]

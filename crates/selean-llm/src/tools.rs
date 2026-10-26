@@ -1394,7 +1394,7 @@ mod tests {
         for name in &["get_scene_summary", "get_node", "query_nodes"] {
             let result = map_tool_call(name, &serde_json::json!({}));
             assert!(result.is_ok());
-            assert!(result.unwrap().is_empty());
+            assert_eq!(result.unwrap(), []);
         }
     }
 
@@ -1402,7 +1402,7 @@ mod tests {
     fn page_tool_definitions_have_correct_params() {
         let tools = all_tools();
         let get_pages = tools.iter().find(|t| t.name == "get_pages").unwrap();
-        assert!(get_pages.input_schema.required.is_empty());
+        assert_eq!(get_pages.input_schema.required, Vec::<String>::new());
 
         let add_page = tools.iter().find(|t| t.name == "add_page").unwrap();
         assert!(add_page.input_schema.required.contains(&"name".to_string()));
@@ -2326,7 +2326,7 @@ mod tests {
         match &cmds[0] {
             CommandDescriptor::SetEffects { node_id, effects } => {
                 assert_eq!(*node_id, id);
-                assert!(effects.is_empty());
+                assert_eq!(*effects, Vec::<Effect>::new());
             }
             _ => panic!("expected SetEffects"),
         }

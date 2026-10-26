@@ -508,14 +508,14 @@ mod tests {
         index.insert(entry(id, 500.0, 500.0, 10.0, 10.0));
 
         let results = index.query_viewport(0.0, 0.0, 100.0, 100.0);
-        assert!(results.is_empty());
+        assert_eq!(results, []);
     }
 
     #[test]
     fn query_viewport_empty_index() {
         let index = SpatialIndex::new();
         let results = index.query_viewport(0.0, 0.0, 1000.0, 1000.0);
-        assert!(results.is_empty());
+        assert_eq!(results, []);
     }
 
     // --- Point queries (hit testing) ---
@@ -552,7 +552,7 @@ mod tests {
         index.insert(entry_at(10.0, 10.0, 50.0, 50.0));
 
         let results = index.query_point(0.0, 0.0); // Outside the node.
-        assert!(results.is_empty());
+        assert_eq!(results, []);
     }
 
     #[test]
@@ -589,7 +589,7 @@ mod tests {
 
         // Query elsewhere should miss.
         let results = index.query_point(50.1, 50.0);
-        assert!(results.is_empty());
+        assert_eq!(results, []);
     }
 
     // --- Region queries ---
@@ -619,7 +619,7 @@ mod tests {
         index.insert(entry_at(0.0, 0.0, 10.0, 10.0));
 
         let results = index.query_region(100.0, 100.0, 200.0, 200.0);
-        assert!(results.is_empty());
+        assert_eq!(results, []);
     }
 
     #[test]

@@ -120,13 +120,13 @@ fn parse_designmap_xml(xml: &str) -> (Vec<String>, Vec<String>) {
                 let local = local_name(qname.as_ref());
                 if local == b"Spread" || local == b"Story" {
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"src" {
-                            if let Ok(src) = std::str::from_utf8(&attr.value) {
-                                if local == b"Spread" {
-                                    spread_paths.push(src.to_string());
-                                } else {
-                                    story_paths.push(src.to_string());
-                                }
+                        if attr.key.as_ref() == b"src"
+                            && let Ok(src) = std::str::from_utf8(&attr.value)
+                        {
+                            if local == b"Spread" {
+                                spread_paths.push(src.to_string());
+                            } else {
+                                story_paths.push(src.to_string());
                             }
                         }
                     }
@@ -182,8 +182,8 @@ mod tests {
     fn parse_designmap_empty() {
         let xml = r"<Document></Document>";
         let (spreads, stories) = parse_designmap_xml(xml);
-        assert!(spreads.is_empty());
-        assert!(stories.is_empty());
+        assert_eq!(spreads, Vec::<String>::new());
+        assert_eq!(stories, Vec::<String>::new());
     }
 
     #[test]
@@ -312,8 +312,8 @@ mod tests {
     fn parse_designmap_malformed_xml_returns_empty() {
         let xml = r"<bad<<>>broken";
         let (spreads, stories) = parse_designmap_xml(xml);
-        assert!(spreads.is_empty());
-        assert!(stories.is_empty());
+        assert_eq!(spreads, Vec::<String>::new());
+        assert_eq!(stories, Vec::<String>::new());
     }
 
     #[test]
@@ -323,8 +323,8 @@ mod tests {
             <idPkg:Story/>
         </Document>";
         let (spreads, stories) = parse_designmap_xml(xml);
-        assert!(spreads.is_empty());
-        assert!(stories.is_empty());
+        assert_eq!(spreads, Vec::<String>::new());
+        assert_eq!(stories, Vec::<String>::new());
     }
 
     #[test]

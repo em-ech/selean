@@ -69,15 +69,15 @@ pub fn rasterize_path(
     }
 
     // Stroke the path.
-    if let Some(stroke_color) = stroke {
-        if stroke_width > 0.0 {
-            let paint = color_to_paint(stroke_color);
-            let stroke_opts = tiny_skia::Stroke {
-                width: stroke_width * scale,
-                ..tiny_skia::Stroke::default()
-            };
-            pixmap.stroke_path(path, &paint, &stroke_opts, transform, None);
-        }
+    if let Some(stroke_color) = stroke
+        && stroke_width > 0.0
+    {
+        let paint = color_to_paint(stroke_color);
+        let stroke_opts = tiny_skia::Stroke {
+            width: stroke_width * scale,
+            ..tiny_skia::Stroke::default()
+        };
+        pixmap.stroke_path(path, &paint, &stroke_opts, transform, None);
     }
 
     Ok(RasterizedVector {

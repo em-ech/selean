@@ -520,7 +520,7 @@ mod tests {
 
         assert!(cmd.undo(&mut scene));
         assert_eq!(scene.len(), 1);
-        assert!(scene.children(parent_id).unwrap().is_empty());
+        assert_eq!(scene.children(parent_id).unwrap(), []);
         assert!(!scene.contains(child_id));
     }
 
@@ -679,13 +679,13 @@ mod tests {
 
         assert!(cmd.execute(&mut scene));
         assert_eq!(scene.parent(child_id), Some(b_id));
-        assert!(scene.children(a_id).unwrap().is_empty());
+        assert_eq!(scene.children(a_id).unwrap(), []);
         assert_eq!(scene.children(b_id).unwrap(), &[child_id]);
 
         assert!(cmd.undo(&mut scene));
         assert_eq!(scene.parent(child_id), Some(a_id));
         assert_eq!(scene.children(a_id).unwrap(), &[child_id]);
-        assert!(scene.children(b_id).unwrap().is_empty());
+        assert_eq!(scene.children(b_id).unwrap(), []);
     }
 
     // --- ReparentToRootCommand ---
@@ -705,7 +705,7 @@ mod tests {
         // Child should now be a root with no parent.
         assert_eq!(scene.parent(child_id), None);
         assert!(scene.roots().contains(&child_id));
-        assert!(scene.children(parent_id).unwrap().is_empty());
+        assert_eq!(scene.children(parent_id).unwrap(), []);
 
         // Undo should restore the child back under parent.
         assert!(cmd.undo(&mut scene));

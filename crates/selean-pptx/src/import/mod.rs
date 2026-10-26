@@ -32,8 +32,11 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Document, PptxError> {
     // Find all slide files
     let mut slide_paths: Vec<String> = Vec::new();
     for i in 0..archive.len() {
-        if let Ok(file) = archive.by_index(i) {
-            let name = file.name().to_string();
+        // Entries that cannot be read, or whose names cannot be decoded, are skipped.
+        if let Ok(file) = archive.by_index(i)
+            && let Ok(name) = file.name()
+        {
+            let name = name.into_owned();
             if name.starts_with("ppt/slides/slide")
                 && std::path::Path::new(&name)
                     .extension()
@@ -111,17 +114,17 @@ fn parse_slide_size(xml: &str) -> (f32, f32) {
                     for attr in e.attributes().flatten() {
                         match attr.key.as_ref() {
                             b"cx" => {
-                                if let Ok(v) = std::str::from_utf8(&attr.value) {
-                                    if let Ok(emu) = v.parse::<i64>() {
-                                        width = crate::coord::emu_to_px(emu);
-                                    }
+                                if let Ok(v) = std::str::from_utf8(&attr.value)
+                                    && let Ok(emu) = v.parse::<i64>()
+                                {
+                                    width = crate::coord::emu_to_px(emu);
                                 }
                             }
                             b"cy" => {
-                                if let Ok(v) = std::str::from_utf8(&attr.value) {
-                                    if let Ok(emu) = v.parse::<i64>() {
-                                        height = crate::coord::emu_to_px(emu);
-                                    }
+                                if let Ok(v) = std::str::from_utf8(&attr.value)
+                                    && let Ok(emu) = v.parse::<i64>()
+                                {
+                                    height = crate::coord::emu_to_px(emu);
                                 }
                             }
                             _ => {}

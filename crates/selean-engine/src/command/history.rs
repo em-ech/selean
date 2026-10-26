@@ -136,12 +136,12 @@ impl CommandHistory {
     ///
     /// No-op if no group is active. Empty groups are discarded.
     pub fn end_group(&mut self) {
-        if let Some(group) = self.active_group.take() {
-            if !group.is_empty() {
-                self.redo_stack.clear();
-                self.undo_stack.push(Box::new(group));
-                self.enforce_size_limit();
-            }
+        if let Some(group) = self.active_group.take()
+            && !group.is_empty()
+        {
+            self.redo_stack.clear();
+            self.undo_stack.push(Box::new(group));
+            self.enforce_size_limit();
         }
     }
 

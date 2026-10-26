@@ -144,10 +144,10 @@ async fn handle_socket(socket: WebSocket, state: CollabState) {
 
     let writer_handle = tokio::spawn(async move {
         while let Some(msg) = msg_rx.recv().await {
-            if let Ok(json) = serde_json::to_string(&msg) {
-                if ws_tx.send(Message::Text(json.into())).await.is_err() {
-                    break;
-                }
+            if let Ok(json) = serde_json::to_string(&msg)
+                && ws_tx.send(Message::Text(json.into())).await.is_err()
+            {
+                break;
             }
         }
     });
@@ -209,10 +209,8 @@ async fn handle_socket(socket: WebSocket, state: CollabState) {
                 false
             }
         };
-        if empty {
-            if let Ok(mut mgr) = state.room_manager.write() {
-                mgr.remove_room(&rid);
-            }
+        if empty && let Ok(mut mgr) = state.room_manager.write() {
+            mgr.remove_room(&rid);
         }
     }
 

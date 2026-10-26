@@ -1072,7 +1072,7 @@ mod tests {
         };
 
         let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
-        assert!(sn.effects.is_empty());
+        assert_eq!(sn.effects, []);
     }
 
     #[test]
@@ -1283,7 +1283,7 @@ mod tests {
         let sn = figma_node_to_scene_node(&node, (0.0, 0.0)).unwrap();
         match &sn.kind {
             SceneNodeKind::Vector { path_data } => {
-                assert!(path_data.is_empty());
+                assert_eq!(path_data, "");
             }
             _ => panic!("expected Vector kind"),
         }

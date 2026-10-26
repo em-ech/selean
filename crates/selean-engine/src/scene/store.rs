@@ -1046,7 +1046,7 @@ mod tests {
         let graph = SceneGraph::new();
         assert!(graph.is_empty());
         assert_eq!(graph.len(), 0);
-        assert!(graph.roots().is_empty());
+        assert_eq!(graph.roots(), []);
     }
 
     // --- Adding nodes ---
@@ -1124,8 +1124,8 @@ mod tests {
 
         assert!(graph.remove(id));
         assert!(graph.is_empty());
-        assert!(graph.roots().is_empty());
-        assert!(graph.spatial().query_point(50.0, 50.0).is_empty());
+        assert_eq!(graph.roots(), []);
+        assert_eq!(graph.spatial().query_point(50.0, 50.0), []);
     }
 
     #[test]
@@ -1307,7 +1307,7 @@ mod tests {
         assert!(graph.set_bounds(id, BoundingBox::new(1000.0, 1000.0, 50.0, 50.0)));
 
         // Old position should miss.
-        assert!(graph.spatial().query_point(25.0, 25.0).is_empty());
+        assert_eq!(graph.spatial().query_point(25.0, 25.0), []);
         // New position should hit.
         assert_eq!(graph.spatial().query_point(1025.0, 1025.0), vec![id]);
     }
@@ -1429,7 +1429,7 @@ mod tests {
         assert_eq!(graph.get(id).expect("exists").effects.len(), 1);
 
         assert!(graph.set_effects(id, Vec::new()));
-        assert!(graph.get(id).expect("exists").effects.is_empty());
+        assert_eq!(graph.get(id).expect("exists").effects, []);
     }
 
     #[test]
@@ -2022,7 +2022,7 @@ mod tests {
 
         assert_eq!(graph.ancestors(gc_id), vec![child_id, root_id]);
         assert_eq!(graph.ancestors(child_id), vec![root_id]);
-        assert!(graph.ancestors(root_id).is_empty());
+        assert_eq!(graph.ancestors(root_id), []);
     }
 
     #[test]
@@ -2314,7 +2314,7 @@ mod tests {
 
         // Miss outside.
         let hits = graph.hit_test(200.0, 200.0);
-        assert!(hits.is_empty());
+        assert_eq!(hits, []);
     }
 
     #[test]
@@ -2328,7 +2328,7 @@ mod tests {
 
         // Original location should miss.
         let hits = graph.hit_test(25.0, 25.0);
-        assert!(hits.is_empty());
+        assert_eq!(hits, []);
 
         // Translated location should hit.
         let hits = graph.hit_test(125.0, 125.0);
@@ -2360,7 +2360,7 @@ mod tests {
         graph.recompute_world_transforms();
 
         let hits = graph.hit_test(50.0, 50.0);
-        assert!(hits.is_empty());
+        assert_eq!(hits, []);
     }
 
     #[test]
@@ -2373,7 +2373,7 @@ mod tests {
         graph.recompute_world_transforms();
 
         let hits = graph.hit_test(50.0, 50.0);
-        assert!(hits.is_empty());
+        assert_eq!(hits, []);
     }
 
     #[test]

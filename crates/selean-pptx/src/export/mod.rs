@@ -129,7 +129,7 @@ mod tests {
     fn export_empty_document() {
         let doc = Document::new();
         let bytes = export_pptx(&doc).unwrap();
-        assert!(!bytes.is_empty());
+        assert_ne!(bytes, Vec::<u8>::new());
 
         // Verify it's a valid ZIP
         let cursor = Cursor::new(bytes);

@@ -171,8 +171,8 @@ mod tests {
     fn empty_document_yields_empty_tokens() {
         let doc = Document::new();
         let tokens = extract_tokens(&doc);
-        assert!(tokens.colors.is_empty());
-        assert!(tokens.fonts.is_empty());
+        assert_eq!(tokens.colors, []);
+        assert_eq!(tokens.fonts, []);
     }
 
     #[test]

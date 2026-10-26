@@ -144,7 +144,7 @@ mod tests {
     fn parse_response_empty_object_uses_defaults() {
         // An empty JSON object should deserialize with all defaults.
         let result = parse_response(200, "{}").unwrap();
-        assert!(result.name.is_empty());
+        assert_eq!(result.name, "");
         assert_eq!(result.document.node_type, FigmaNodeType::Unknown);
     }
 
