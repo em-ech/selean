@@ -1,6 +1,6 @@
 # Selean
 
-A design tool that combines the capabilities of Canva, Figma, and Adobe InDesign into a single platform with AI-native design workflows and design-to-code generation.
+A browser design tool that borrows from Canva, Figma, and Adobe InDesign: a GPU-rendered canvas with layers and pages, an AI chat that edits the design through the same commands as manual editing, PowerPoint, IDML and Figma import and export, and design-to-code generation. See "Roadmap / not yet supported" for what is partial.
 
 ## Architecture
 
@@ -52,9 +52,10 @@ All mutation sources converge on a single wire format:
 ```
 [React UI edits]  --\
 [LLM tool calls]  ----> CommandDescriptor (JSON) --> Box<dyn Command> --> CommandHistory --> SceneGraph
-[File imports]    --/
 [Collab ops]      --/
 ```
+
+Remote collaboration ops use the same `CommandDescriptor` format but are applied straight to the scene graph, bypassing the local `CommandHistory`. File imports do not go through commands: an importer returns a whole `Document`, which replaces the open one and starts a fresh undo history.
 
 `CommandDescriptor` is a `#[serde(tag = "type")]` enum with 31 variants mirroring every `Command` type. Adding a new command requires: (1) engine `Command` impl, (2) descriptor variant. Nothing else changes in LLM/import/export/collab.
 
@@ -82,7 +83,7 @@ The `SceneGraph` owns all `SceneNode` instances in a `HashMap<NodeId, SceneNode>
 ### Visual Design Editor
 
 - GPU-accelerated 2D rendering engine (wgpu, 60fps target)
-- SDF text rendering with multi-font support and variable weight
+- SDF text rendering in Inter with variable weight (other font families are not loaded yet; see "Roadmap / not yet supported")
 - 13 blend modes (Normal, Add, Multiply, Screen, Overlay, etc. via multi-pass GPU shaders)
 - Visual effects (drop shadow, Gaussian blur via Dual Kawase pipeline)
 - Linear and radial gradients with arbitrary color stops
@@ -94,6 +95,7 @@ The `SceneGraph` owns all `SceneNode` instances in a `HashMap<NodeId, SceneNode>
 - Layer panel with search filter, inline rename, expand/collapse
 - 6 starter templates (social post, presentation, business card, poster, flyer, resume)
 - Light theme with dark mode toggle
+- Image upload (PNG, JPEG, WebP) onto the canvas. Image data lives only in the browser session: it is not uploaded to the server or saved with the document, so images are lost on reload, Save/Open and export
 
 ### AI Chat-Prompted Design
 
@@ -105,13 +107,17 @@ The `SceneGraph` owns all `SceneNode` instances in a `HashMap<NodeId, SceneNode>
 
 ### Import/Export
 
-| Format             | Import                    | Export                   |
-| ------------------ | ------------------------- | ------------------------ |
-| PowerPoint (.pptx) | Yes                       | Yes                      |
-| InDesign (.idml)   | Yes                       | Yes                      |
-| InDesign (.indd)   | Yes (via InDesign Server) | --                       |
-| Figma (REST API)   | Yes                       | Yes (interchange format) |
-| Native Selean      | Yes                       | Yes                      |
+| Format             | Import                                  | Export                       |
+| ------------------ | --------------------------------------- | ---------------------------- |
+| PowerPoint (.pptx) | Yes                                     | Yes                          |
+| InDesign (.idml)   | Yes                                     | Yes                          |
+| InDesign (.indd)   | Only with an external conversion server | --                           |
+| Figma (REST API)   | Yes (needs `FIGMA_ACCESS_TOKEN`)        | Interchange JSON file only   |
+| Native Selean      | Yes (Open)                              | Yes (Save, `document.selean`) |
+
+- **.indd**: Selean cannot read .indd files itself. With `INDESIGN_SERVER_URL` set, the server posts the file to `{INDESIGN_SERVER_URL}/convert/idml` and imports the IDML that comes back. That path is a conversion service you provide in front of Adobe InDesign Server; it has not been tested against a real one. Without the variable the request returns 501 and the app asks you to export IDML from InDesign instead.
+- **Figma export** writes a `.selean-figma.json` interchange file. Getting it into Figma needs the plugin in `figma-plugin/`, which is TypeScript source only: there is no build script, so `code.ts` must be compiled to the `code.js` that `manifest.json` loads before the plugin can run. The plugin has no tests.
+- There is no PNG, SVG or PDF export of a design. PNG, JPEG and WebP can be placed on the canvas as images (see above).
 
 ### Design-to-Code
 
@@ -135,19 +141,37 @@ Live code generation panel (similar to Figma dev mode / Lovable):
 
 ### Real-Time Collaboration
 
-- WebSocket-based collaborative editing with server-authoritative sequencing
-- Presence overlay (cursors, selections)
-- Offline operation buffering with automatic sync on reconnect
-- Per-user undo/redo stacks
+Partial. The protocol and server are further along than the app's use of them.
+
+- WebSocket collaboration with server-authoritative sequencing. Every client that clicks Connect joins one shared room (`default-room`) and receives the current document on join.
+- What syncs between connected clients: object moves, resizes and rotations, and the floating toolbar's solid fill, stroke, opacity and font controls.
+- What does not sync yet: creating or deleting objects, AI chat edits, gradients, layer renames, keyboard and context-menu actions, and undo/redo. Remote changes bypass the local undo history.
+- Works in guest mode only. In auth mode (`JWT_SECRET` set, which includes the Docker setup) the WebSocket is rejected, because the app sends the token as a URL query parameter and the server only reads the `Authorization` header.
+- The presence overlay draws remote cursors and selections it receives, but the app never sends its own, so nothing appears yet.
+- The server and protocol implement per-user undo/redo; the app does not call it.
+- Changes made while disconnected are not sent: unacknowledged ops are dropped on reconnect and the client reloads the server's copy.
 
 ### SaaS Infrastructure
 
+These are server features. The app uses auth, workspaces and members; it does not yet use document or asset storage.
+
 - JWT authentication with token refresh (email/password + GitHub OAuth)
 - Workspace-based multi-tenancy with RBAC (Viewer/Editor/Admin/Owner)
-- Billing tiers (Free/Pro/Team/Enterprise) with quota enforcement
-- Asset storage (S3/R2/MinIO + local filesystem fallback)
+- Billing tiers (Free/Pro/Team/Enterprise) with quota enforcement on the server
+- Document storage in PostgreSQL (`/api/documents`). The app does not call it; documents are saved in `localStorage` and through Save/Open
+- Asset storage (S3/R2/MinIO + local filesystem fallback) behind `/api/assets`. The app does not upload to it yet
 - Docker deployment with PostgreSQL, MinIO, and health checks
 - Environment-driven CORS, graceful shutdown, CI/CD to ghcr.io
+
+### Roadmap / not yet supported
+
+- Full collaboration: syncing object creation, deletion and AI edits; presence; shared undo; auth-mode WebSocket; offline edits replayed on reconnect
+- Loading font families other than Inter. The engine can register fonts and the server has `/api/fonts/{family}`, but the app's font loader is not wired in and the server ships only `inter.ttf`, so the font family field does not change how text renders
+- Persisting images (upload to asset storage and save with the document)
+- Saving documents to the server from the app
+- PNG, SVG and PDF export
+- A build for the Figma plugin
+- Native .indd reading
 
 ## Workspace Structure
 
@@ -184,7 +208,7 @@ web/
       utils/           Camera transforms, color conversions, clipboard
       theme.ts         Shared design tokens (light/dark palettes, spacing, radii, shadows)
 
-figma-plugin/          Figma plugin for importing Selean interchange format
+figma-plugin/          Figma plugin source (TypeScript, no build script) for importing Selean interchange format
 ```
 
 ## Getting Started
@@ -223,7 +247,7 @@ Open http://localhost:3000 in Chrome or Edge. The Vite dev server proxies `/api`
 - `npm run dev` and `npm run build` stop with a message if the WASM bundle has not been built.
 - The server reads `.env` from the directory it is started in (or a parent directory). Variables already set in the shell take precedence over `.env`.
 - AI chat uses a local Ollama server and no API key; see "AI chat" below. Without Ollama the server still starts and everything except AI chat works; the chat panel shows an error saying how to start it.
-- Documents auto-save to the browser's `localStorage` every 5 seconds and are restored on reload.
+- Documents auto-save to the browser's `localStorage` every 5 seconds and are restored on reload. Uploaded images are not part of the saved document.
 
 To run from a single process instead, build the frontend and let the server serve it:
 
@@ -385,10 +409,10 @@ The TypeScript check and the Vitest suite do not need the WASM bundle.
 ## Testing
 
 ```bash
-# Rust (1920 tests across 11 crates)
+# Rust (1,900+ tests across 11 crates)
 cargo test --workspace
 
-# Frontend (461 tests via Vitest)
+# Frontend (450+ tests via Vitest)
 cd web/selean-app && npx vitest run
 
 # Benchmarks (18 groups)

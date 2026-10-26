@@ -78,4 +78,4 @@ See `CLAUDE.md` for crate structure, design decisions, and the mutation/render p
 
 - All mutations go through `CommandDescriptor` (JSON wire format)
 - Adding a command requires only an engine `Command` impl + descriptor variant
-- AI chat, manual editing, file imports, and collab all share the same undo stack
+- AI chat and manual editing share the same per-page undo stack; file imports replace the document and its history, and remote collab ops bypass it
