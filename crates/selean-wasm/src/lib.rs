@@ -281,11 +281,11 @@ impl EditorState {
             }
             "remove" => self.remove_page(page_id),
             "rename" => {
-                if let Some(new_name) = name {
-                    if let Some(page) = self.document.page_mut(target) {
-                        page.name = new_name.to_string();
-                        return true;
-                    }
+                if let Some(new_name) = name
+                    && let Some(page) = self.document.page_mut(target)
+                {
+                    page.name = new_name.to_string();
+                    return true;
                 }
                 false
             }
@@ -1856,7 +1856,7 @@ mod tests {
     fn add_page_increases_count() {
         let mut state = EditorState::new();
         let id_str = state.add_page("Page 2", 800.0, 600.0);
-        assert!(!id_str.is_empty());
+        assert_ne!(id_str, "");
         let pages: Vec<serde_json::Value> = serde_json::from_str(&state.get_pages_json()).unwrap();
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1]["name"], "Page 2");

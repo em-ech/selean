@@ -117,10 +117,10 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
                 match local {
                     b"cNvPr" => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"name" {
-                                if let Ok(n) = std::str::from_utf8(&attr.value) {
-                                    name = n.to_string();
-                                }
+                            if attr.key.as_ref() == b"name"
+                                && let Ok(n) = std::str::from_utf8(&attr.value)
+                            {
+                                name = n.to_string();
                             }
                         }
                     }
@@ -169,22 +169,22 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
                     b"gs" if in_grad_fill => {
                         current_gs_pos = None;
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"pos" {
-                                if let Ok(v) = std::str::from_utf8(&attr.value) {
-                                    // OOXML pos is in 1/1000 percent (0-100000)
-                                    let raw: f32 = v.parse().unwrap_or(0.0);
-                                    current_gs_pos = Some(raw / 100_000.0);
-                                }
+                            if attr.key.as_ref() == b"pos"
+                                && let Ok(v) = std::str::from_utf8(&attr.value)
+                            {
+                                // OOXML pos is in 1/1000 percent (0-100000)
+                                let raw: f32 = v.parse().unwrap_or(0.0);
+                                current_gs_pos = Some(raw / 100_000.0);
                             }
                         }
                     }
                     _ => {
                         if in_outer_shdw && local == b"srgbClr" {
                             for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"val" {
-                                    if let Ok(hex) = std::str::from_utf8(&attr.value) {
-                                        shdw_color = parse_ooxml_color(hex);
-                                    }
+                                if attr.key.as_ref() == b"val"
+                                    && let Ok(hex) = std::str::from_utf8(&attr.value)
+                                {
+                                    shdw_color = parse_ooxml_color(hex);
                                 }
                             }
                         } else if in_grad_fill {
@@ -210,29 +210,29 @@ fn parse_single_shape(shape_xml: &str) -> SceneNode {
                 match local {
                     b"cNvPr" => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"name" {
-                                if let Ok(n) = std::str::from_utf8(&attr.value) {
-                                    name = n.to_string();
-                                }
+                            if attr.key.as_ref() == b"name"
+                                && let Ok(n) = std::str::from_utf8(&attr.value)
+                            {
+                                name = n.to_string();
                             }
                         }
                     }
                     b"lin" if in_grad_fill => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"ang" {
-                                if let Ok(v) = std::str::from_utf8(&attr.value) {
-                                    grad_angle = v.parse::<f32>().unwrap_or(0.0);
-                                }
+                            if attr.key.as_ref() == b"ang"
+                                && let Ok(v) = std::str::from_utf8(&attr.value)
+                            {
+                                grad_angle = v.parse::<f32>().unwrap_or(0.0);
                             }
                         }
                     }
                     _ => {
                         if in_outer_shdw && local == b"srgbClr" {
                             for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"val" {
-                                    if let Ok(hex) = std::str::from_utf8(&attr.value) {
-                                        shdw_color = parse_ooxml_color(hex);
-                                    }
+                                if attr.key.as_ref() == b"val"
+                                    && let Ok(hex) = std::str::from_utf8(&attr.value)
+                                {
+                                    shdw_color = parse_ooxml_color(hex);
                                 }
                             }
                         } else if in_grad_fill {
@@ -381,10 +381,10 @@ fn parse_geometry_and_fill(
         }
         b"srgbClr" if in_sppr && !in_txbody => {
             for attr in e.attributes().flatten() {
-                if attr.key.as_ref() == b"val" {
-                    if let Ok(hex) = std::str::from_utf8(&attr.value) {
-                        *fill_color = parse_ooxml_color(hex);
-                    }
+                if attr.key.as_ref() == b"val"
+                    && let Ok(hex) = std::str::from_utf8(&attr.value)
+                {
+                    *fill_color = parse_ooxml_color(hex);
                 }
             }
         }
@@ -399,19 +399,18 @@ fn parse_gradient_color(
     stops: &mut Vec<GradientStop>,
     current_pos: &mut Option<f32>,
 ) {
-    if local == b"srgbClr" {
-        if let Some(pos) = current_pos.take() {
-            for attr in e.attributes().flatten() {
-                if attr.key.as_ref() == b"val" {
-                    if let Ok(hex) = std::str::from_utf8(&attr.value) {
-                        if let Some(color) = parse_ooxml_color(hex) {
-                            stops.push(GradientStop {
-                                position: pos,
-                                color,
-                            });
-                        }
-                    }
-                }
+    if local == b"srgbClr"
+        && let Some(pos) = current_pos.take()
+    {
+        for attr in e.attributes().flatten() {
+            if attr.key.as_ref() == b"val"
+                && let Ok(hex) = std::str::from_utf8(&attr.value)
+                && let Some(color) = parse_ooxml_color(hex)
+            {
+                stops.push(GradientStop {
+                    position: pos,
+                    color,
+                });
             }
         }
     }
@@ -439,7 +438,7 @@ mod tests {
     fn parse_empty_slide() {
         let xml = r"<p:sld><p:cSld><p:spTree></p:spTree></p:cSld></p:sld>";
         let nodes = parse_shapes(xml);
-        assert!(nodes.is_empty());
+        assert_eq!(nodes, []);
     }
 
     #[test]
@@ -739,7 +738,7 @@ mod tests {
             </p:sp>
         </p:spTree>"#;
         let nodes = parse_shapes(xml);
-        assert!(nodes[0].effects.is_empty());
+        assert_eq!(nodes[0].effects, []);
     }
 
     #[test]
@@ -835,7 +834,7 @@ mod tests {
         // A slide with an empty spTree; should produce zero nodes.
         let xml = r"<p:sld><p:cSld><p:spTree/></p:cSld></p:sld>";
         let nodes = parse_shapes(xml);
-        assert!(nodes.is_empty());
+        assert_eq!(nodes, []);
     }
 
     #[test]
@@ -924,7 +923,7 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert!(matches!(nodes[0].kind, SceneNodeKind::Text { .. }));
         if let SceneNodeKind::Text { ref content, .. } = nodes[0].kind {
-            assert!(content.is_empty());
+            assert_eq!(content, "");
         }
     }
 

@@ -189,15 +189,15 @@ fn parse_single_element(
                 }
             }
             Ok(Event::Text(ref e)) => {
-                if in_fill_color || in_stroke_color {
-                    if let Ok(text) = e.decode() {
-                        let trimmed = text.trim();
-                        if let Some(c) = try_parse_color_value_list(trimmed) {
-                            if in_fill_color {
-                                fill_color = Some(c);
-                            } else {
-                                stroke_color = Some(c);
-                            }
+                if (in_fill_color || in_stroke_color)
+                    && let Ok(text) = e.decode()
+                {
+                    let trimmed = text.trim();
+                    if let Some(c) = try_parse_color_value_list(trimmed) {
+                        if in_fill_color {
+                            fill_color = Some(c);
+                        } else {
+                            stroke_color = Some(c);
                         }
                     }
                 }
@@ -546,7 +546,7 @@ mod tests {
         let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
         assert_eq!(nodes.len(), 1);
         if let SceneNodeKind::Text { ref content, .. } = nodes[0].kind {
-            assert!(content.is_empty());
+            assert_eq!(content, "");
         } else {
             panic!("expected Text node");
         }
@@ -691,7 +691,7 @@ mod tests {
     fn parse_empty_spread() {
         let xml = r"<Spread></Spread>";
         let nodes = parse_page_items(xml, &empty_stories(), 306.0, 396.0);
-        assert!(nodes.is_empty());
+        assert_eq!(nodes, []);
     }
 
     #[test]
@@ -804,7 +804,7 @@ mod tests {
             ..
         } = nodes[0].kind
         {
-            assert!(content.is_empty());
+            assert_eq!(content, "");
             assert!((font_size - 16.0).abs() < f32::EPSILON);
         } else {
             panic!("expected Text node kind");
@@ -873,6 +873,6 @@ mod tests {
     #[test]
     fn path_points_to_svg_path_empty_returns_empty() {
         let path = path_points_to_svg_path(&[], 0.0, 0.0);
-        assert!(path.is_empty());
+        assert_eq!(path, "");
     }
 }

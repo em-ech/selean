@@ -530,23 +530,22 @@ async fn find_or_create_user(
     }
 
     // 2. Try to find by email (if GitHub provides one).
-    if let Some(ref email) = gh_user.email {
-        if let Some(user) = selean_db::queries::users::find_user_by_email(pool, email)
+    if let Some(ref email) = gh_user.email
+        && let Some(user) = selean_db::queries::users::find_user_by_email(pool, email)
             .await
             .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
-        {
-            // Link GitHub to existing email account.
-            selean_db::queries::users::link_github(
-                pool,
-                user.id,
-                gh_user.id,
-                &gh_user.login,
-                github_token,
-            )
-            .await
-            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-            return Ok(user);
-        }
+    {
+        // Link GitHub to existing email account.
+        selean_db::queries::users::link_github(
+            pool,
+            user.id,
+            gh_user.id,
+            &gh_user.login,
+            github_token,
+        )
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        return Ok(user);
     }
 
     // 3. Create a new user.

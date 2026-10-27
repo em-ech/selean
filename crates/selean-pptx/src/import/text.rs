@@ -69,21 +69,20 @@ pub fn parse_text_body(xml: &str) -> ParsedText {
                     }
                     b"latin" | b"cs" | b"ea" if in_run => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"typeface" {
-                                if let Ok(face) = std::str::from_utf8(&attr.value) {
-                                    result.font_family = face.to_string();
-                                }
+                            if attr.key.as_ref() == b"typeface"
+                                && let Ok(face) = std::str::from_utf8(&attr.value)
+                            {
+                                result.font_family = face.to_string();
                             }
                         }
                     }
                     b"srgbClr" if in_run => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
-                                if let Ok(hex) = std::str::from_utf8(&attr.value) {
-                                    if let Some(c) = parse_ooxml_color(hex) {
-                                        result.text_color = Some(c);
-                                    }
-                                }
+                            if attr.key.as_ref() == b"val"
+                                && let Ok(hex) = std::str::from_utf8(&attr.value)
+                                && let Some(c) = parse_ooxml_color(hex)
+                            {
+                                result.text_color = Some(c);
                             }
                         }
                     }
@@ -131,27 +130,26 @@ fn parse_run_properties(
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"sz" => {
-                if !*font_size_set {
-                    if let Ok(val) = std::str::from_utf8(&attr.value) {
-                        if let Ok(hundredths) = val.parse::<i32>() {
-                            result.font_size = ooxml_font_size_to_px(hundredths);
-                            *font_size_set = true;
-                        }
-                    }
+                if !*font_size_set
+                    && let Ok(val) = std::str::from_utf8(&attr.value)
+                    && let Ok(hundredths) = val.parse::<i32>()
+                {
+                    result.font_size = ooxml_font_size_to_px(hundredths);
+                    *font_size_set = true;
                 }
             }
             b"b" => {
-                if let Ok(val) = std::str::from_utf8(&attr.value) {
-                    if val == "1" || val == "true" {
-                        result.font_weight = 700;
-                    }
+                if let Ok(val) = std::str::from_utf8(&attr.value)
+                    && (val == "1" || val == "true")
+                {
+                    result.font_weight = 700;
                 }
             }
             b"i" => {
-                if let Ok(val) = std::str::from_utf8(&attr.value) {
-                    if val == "1" || val == "true" {
-                        result.font_style = FontStyle::Italic;
-                    }
+                if let Ok(val) = std::str::from_utf8(&attr.value)
+                    && (val == "1" || val == "true")
+                {
+                    result.font_style = FontStyle::Italic;
                 }
             }
             _ => {}
@@ -161,15 +159,15 @@ fn parse_run_properties(
 
 fn parse_paragraph_properties(e: &quick_xml::events::BytesStart<'_>, result: &mut ParsedText) {
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"algn" {
-            if let Ok(val) = std::str::from_utf8(&attr.value) {
-                result.text_align = match val {
-                    "ctr" => TextAlign::Center,
-                    "r" => TextAlign::Right,
-                    "just" => TextAlign::Justify,
-                    _ => TextAlign::Left,
-                };
-            }
+        if attr.key.as_ref() == b"algn"
+            && let Ok(val) = std::str::from_utf8(&attr.value)
+        {
+            result.text_align = match val {
+                "ctr" => TextAlign::Center,
+                "r" => TextAlign::Right,
+                "just" => TextAlign::Justify,
+                _ => TextAlign::Left,
+            };
         }
     }
 }
@@ -265,14 +263,14 @@ mod tests {
     fn empty_text_body() {
         let xml = r"<a:txBody><a:p/></a:txBody>";
         let result = parse_text_body(xml);
-        assert!(result.content.is_empty());
+        assert_eq!(result.content, "");
         assert_eq!(result.font_size, 16.0);
     }
 
     #[test]
     fn default_parsed_text() {
         let result = ParsedText::default();
-        assert!(result.content.is_empty());
+        assert_eq!(result.content, "");
         assert_eq!(result.font_size, 16.0);
         assert_eq!(result.font_family, "Inter");
         assert_eq!(result.font_weight, 400);

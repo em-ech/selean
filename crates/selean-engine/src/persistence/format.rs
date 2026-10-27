@@ -179,13 +179,13 @@ impl SceneGraphData {
 
         // 4. Root nodes must have parent == None.
         for &root_id in &self.roots {
-            if let Some(node) = self.nodes.get(&root_id) {
-                if node.parent.is_some() {
-                    return Err(format!(
-                        "root {root_id} has parent {:?}, expected None",
-                        node.parent
-                    ));
-                }
+            if let Some(node) = self.nodes.get(&root_id)
+                && node.parent.is_some()
+            {
+                return Err(format!(
+                    "root {root_id} has parent {:?}, expected None",
+                    node.parent
+                ));
             }
         }
 
@@ -312,7 +312,7 @@ mod tests {
         assert!(data.validate().is_ok());
         let restored = data.into_graph();
         assert!(restored.is_empty());
-        assert!(restored.roots().is_empty());
+        assert_eq!(restored.roots(), []);
     }
 
     #[test]

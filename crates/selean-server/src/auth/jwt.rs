@@ -235,8 +235,8 @@ mod tests {
         let user_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
         let pair = create_token_pair(&config, user_id, session_id).expect("create pair");
-        assert!(!pair.access_token.is_empty());
-        assert!(!pair.refresh_token.is_empty());
+        assert_ne!(pair.access_token, "");
+        assert_ne!(pair.refresh_token, "");
         assert_eq!(pair.expires_in, 900); // 15 minutes
     }
 

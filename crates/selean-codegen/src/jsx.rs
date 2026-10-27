@@ -33,10 +33,10 @@ pub fn render_scene(scene: &SceneGraph, page_name: &str, width: f32, height: f32
 fn render_root_nodes(scene: &SceneGraph, base_indent: usize) -> String {
     let mut out = String::new();
     for &root_id in scene.roots() {
-        if let Some(node) = scene.get(root_id) {
-            if node.visible {
-                out.push_str(&render_node(node, scene, base_indent + 1));
-            }
+        if let Some(node) = scene.get(root_id)
+            && node.visible
+        {
+            out.push_str(&render_node(node, scene, base_indent + 1));
         }
     }
     out
@@ -137,10 +137,10 @@ fn render_group_node(node: &SceneNode, scene: &SceneGraph, indent: usize) -> Str
 fn render_children(parent: &SceneNode, scene: &SceneGraph, indent: usize) -> String {
     let mut out = String::new();
     for &child_id in &parent.children {
-        if let Some(child) = scene.get(child_id) {
-            if child.visible {
-                out.push_str(&render_node(child, scene, indent));
-            }
+        if let Some(child) = scene.get(child_id)
+            && child.visible
+        {
+            out.push_str(&render_node(child, scene, indent));
         }
     }
     out
@@ -499,6 +499,6 @@ mod tests {
         node.visible = false;
         scene.add_root(node);
         let ids = visible_root_ids(&scene);
-        assert!(ids.is_empty());
+        assert_eq!(ids, []);
     }
 }

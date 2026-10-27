@@ -1177,7 +1177,7 @@ mod tests {
             },
             BoundingBox::new(0.0, 0.0, 100.0, 100.0),
         );
-        assert!(node.effects.is_empty());
+        assert_eq!(node.effects, []);
     }
 
     #[test]
@@ -1229,6 +1229,6 @@ mod tests {
         // Simulate old JSON without effects field.
         let json = r#"{"id":"00000000-0000-0000-0000-000000000001","name":"Old","kind":{"Frame":{"corner_radius":[0,0,0,0]}},"bounds":{"x":0,"y":0,"width":100,"height":100},"fill":null,"stroke":null,"stroke_width":0,"opacity":1,"visible":true,"local_transform":[1,0,0,1,0,0],"blend_mode":"Normal","clip_mode":"None","scroll_offset":[0,0],"children":[],"parent":null}"#;
         let node: SceneNode = serde_json::from_str(json).unwrap();
-        assert!(node.effects.is_empty());
+        assert_eq!(node.effects, []);
     }
 }

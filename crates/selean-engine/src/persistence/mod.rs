@@ -234,7 +234,7 @@ mod tests {
         let json = save(&graph).expect("save");
         let restored = load(&json).expect("load");
         assert!(restored.is_empty());
-        assert!(restored.roots().is_empty());
+        assert_eq!(restored.roots(), []);
     }
 
     #[test]

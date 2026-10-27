@@ -358,15 +358,15 @@ pub fn query_nodes_json(
         .nodes()
         .values()
         .filter(|node| {
-            if let Some(ref pat) = pattern_lower {
-                if !node.name.to_lowercase().contains(pat) {
-                    return false;
-                }
+            if let Some(ref pat) = pattern_lower
+                && !node.name.to_lowercase().contains(pat)
+            {
+                return false;
             }
-            if let Some(k) = &kind {
-                if !node.kind.kind_tag().eq_ignore_ascii_case(k) {
-                    return false;
-                }
+            if let Some(k) = &kind
+                && !node.kind.kind_tag().eq_ignore_ascii_case(k)
+            {
+                return false;
             }
             true
         })
@@ -672,7 +672,7 @@ mod tests {
         let parsed: SceneInfo = serde_json::from_str(&json).expect("valid json");
         assert_eq!(parsed.node_count, 0);
         assert!(parsed.nodes.is_empty());
-        assert!(parsed.roots.is_empty());
+        assert_eq!(parsed.roots, Vec::<String>::new());
     }
 
     #[test]

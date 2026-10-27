@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn holds_a_partial_line_until_its_newline_arrives() {
         let mut lines = SseDataLines::new();
-        assert!(lines.feed(b"data: hel").is_empty());
+        assert_eq!(lines.feed(b"data: hel"), Vec::<String>::new());
         assert_eq!(lines.feed(b"lo\n"), vec!["hello".to_string()]);
     }
 
@@ -85,14 +85,14 @@ mod tests {
         let bytes = "data: caf\u{e9}\n".as_bytes();
         let split = bytes.len() - 2; // inside the two-byte "é"
         let mut lines = SseDataLines::new();
-        assert!(lines.feed(&bytes[..split]).is_empty());
+        assert_eq!(lines.feed(&bytes[..split]), Vec::<String>::new());
         assert_eq!(lines.feed(&bytes[split..]), vec!["caf\u{e9}".to_string()]);
     }
 
     #[test]
     fn finish_returns_an_unterminated_final_line() {
         let mut lines = SseDataLines::new();
-        assert!(lines.feed(b"data: [DONE]").is_empty());
+        assert_eq!(lines.feed(b"data: [DONE]"), Vec::<String>::new());
         assert_eq!(lines.finish(), Some("[DONE]".to_string()));
         assert_eq!(lines.finish(), None);
     }
